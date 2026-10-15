@@ -246,8 +246,9 @@ struct ResumesView: View {
         defer { if owner == account { importing = false } }
         do {
             let templates = (try? await session.api.listResumeTemplates()) ?? []
-            // Web 导入默认使用生产保留的 classic-technical-cn 版式，不可用时回退到第一套可选模板
-            let template = templates.first { $0.key == "classic-technical-cn" } ?? templates.first
+            // 导入默认模板由管理端顺序决定：接口已按 sort_order、id 升序返回启用且有效的模板，
+            // 首项即管理端标记「导入默认模板」的那一套，与 Web 使用同一条规则。
+            let template = templates.first
             let upload = try ResumeImportUpload(file: file, templateID: template?.id)
             _ = try await session.api.importResume(upload)
             guard owner == account else { return }
