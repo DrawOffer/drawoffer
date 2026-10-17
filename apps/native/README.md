@@ -61,7 +61,7 @@ App 共享一个会话协调器。Mac 窗口共享该实例；两端 App 的进�
 
 Mac 测试脚本兼容 CLT 的 Testing 框架路径，并在 CLT 残留旧 PackageDescription 私有接口时只修正临时副本，不修改系统文件。Windows Core 可在 macOS 上用 .NET 10 测试；WinUI XAML 编译与 Credential Locker 实机测试需要 Windows。平台测试使用唯一虚构 scope，并在 finally 清理；Mac 真实 Keychain 测试需显式设置 `RUN_DESKTOP_KEYCHAIN_TESTS=1`，Windows 需 `RUN_DESKTOP_CREDENTIAL_TESTS=1`，未启用时跳过。
 
-`.github/workflows/native-desktop.yml` 配置 Mac 编译/Keychain、Windows Core/Credential Locker/App 构建以及隔离真实 Redis 验证。工作流配置存在不代表远端运行已通过，也不替代手机和桌面 GUI 验收。
+原生桌面的 Mac 编译/Keychain、Windows Core/Credential Locker/App 构建以及隔离真实 Redis 验证不再由 GitHub Actions 运行（仓库已移除 workflow），需要时在对应平台本地执行 `npm run test:mac`、`npm run test:windows-core` 等命令；它们也不替代手机和桌面 GUI 验收。
 
 实际微信扫码、手机取消与确认、重启恢复、休眠唤醒、双窗口、第二进程、凭据库拒绝访问仍需在对应系统和实际服务上验收。Mac 未签名/公证，Windows 未打签名 MSIX 包；小程序发布、后端部署和正式密钥分发属于独立发布操作。
 
