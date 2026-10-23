@@ -8,7 +8,7 @@ import config from "../dist/config.cjs";
 const require = createRequire(import.meta.url);
 const scriptRoot = dirname(fileURLToPath(import.meta.url));
 
-const devUrl = process.env.LINKRESUME_DESKTOP_DEV_URL ?? config.DEFAULT_DEV_URL;
+const devUrl = process.env.DRAWOFFER_DESKTOP_DEV_URL ?? config.DEFAULT_DEV_URL;
 
 function validateDevUrl(value) {
   try {
@@ -19,7 +19,7 @@ function validateDevUrl(value) {
   } catch {
     // 落入下方统一报错。
   }
-  console.error(`[linkresume-desktop] LINKRESUME_DESKTOP_DEV_URL 非法：${value}`);
+  console.error(`[linkresume-desktop] DRAWOFFER_DESKTOP_DEV_URL 非法：${value}`);
   process.exit(1);
 }
 
@@ -70,7 +70,7 @@ if (!binary) {
 
 const child = spawn(binary, ["."], {
   cwd: join(scriptRoot, ".."),
-  env: { ...process.env, LINKRESUME_DESKTOP_MODE: "dev", LINKRESUME_DESKTOP_DEV_URL: target },
+  env: { ...process.env, DRAWOFFER_DESKTOP_MODE: "dev", DRAWOFFER_DESKTOP_DEV_URL: target },
   stdio: "inherit",
 });
 child.on("exit", (code) => {

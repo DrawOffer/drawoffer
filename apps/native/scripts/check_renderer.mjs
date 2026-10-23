@@ -84,7 +84,7 @@ try {
     assert.ok(!await native.locator('img').evaluateAll(images => images.some(image => !image.complete || image.naturalWidth === 0)), `${template.key}: missing image`);
     console.log(`${template.key}: structure, colors, images passed`);
   }
-  if (process.env.LINKRESUME_RENDER_CASES) writeFileSync(process.env.LINKRESUME_RENDER_CASES, JSON.stringify(cases));
+  if (process.env.DRAWOFFER_RENDER_CASES) writeFileSync(process.env.DRAWOFFER_RENDER_CASES, JSON.stringify(cases));
   const base = cases[0].request;
   await native.evaluate(request => { window.__messages = []; window.linkresume.render({ ...request, layout_plan: null }); }, base);
   await native.waitForFunction(() => window.__messages.some(m => m.type === 'error'));

@@ -20,7 +20,7 @@ public partial class App : Application
     {
         try
         {
-            var origin = Environment.GetEnvironmentVariable("LINKRESUME_API_ORIGIN")
+            var origin = Environment.GetEnvironmentVariable("DRAWOFFER_API_ORIGIN")
                 ?? throw new InvalidOperationException("API origin missing");
             _instance = new Mutex(false, $"Local\\LinkResume.Desktop.{WindowsIdentity.GetCurrent().User?.Value}");
             var owned = false;
@@ -32,12 +32,12 @@ public partial class App : Application
                 return;
             }
             _transport = new DesktopTransport(new Uri(origin),
-                Environment.GetEnvironmentVariable("LINKRESUME_ALLOW_LOCAL_HTTP") == "1");
+                Environment.GetEnvironmentVariable("DRAWOFFER_ALLOW_LOCAL_HTTP") == "1");
             Session = new(new HttpApiClient(new SessionCoordinator(_transport, new CredentialLockerTokenStore())));
         }
         catch (Exception)
         {
-            ShowStartupError("API 地址未配置或无效。请设置 LINKRESUME_API_ORIGIN 后重新启动。");
+            ShowStartupError("API 地址未配置或无效。请设置 DRAWOFFER_API_ORIGIN 后重新启动。");
             return;
         }
         _window = new MainWindow();
