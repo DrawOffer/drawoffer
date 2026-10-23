@@ -22,12 +22,12 @@
 
 ## 配置与启动
 
-两端从进程环境读取 `LINKRESUME_API_ORIGIN`，值必须是受信任的 HTTPS origin，不能包含路径、查询、用户信息或 fragment。缺失或非法时显示配置错误，不回退 Mock。仅本机 HTTP 调试可另设 `LINKRESUME_ALLOW_LOCAL_HTTP=1`，且地址仅限 localhost、127.0.0.1 或 ::1；这不允许远程明文服务。
+两端从进程环境读取 `DRAWOFFER_API_ORIGIN`，值必须是受信任的 HTTPS origin，不能包含路径、查询、用户信息或 fragment。缺失或非法时显示配置错误，不回退 Mock。仅本机 HTTP 调试可另设 `DRAWOFFER_ALLOW_LOCAL_HTTP=1`，且地址仅限 localhost、127.0.0.1 或 ::1；这不允许远程明文服务。
 
 ```bash
 npm ci --prefix apps/web
 # 按实际本地后端端口配置；后端必须单独按明确的 Local/Development profile 启动。
-LINKRESUME_API_ORIGIN=http://127.0.0.1:8000 LINKRESUME_ALLOW_LOCAL_HTTP=1 npm run dev:mac
+DRAWOFFER_API_ORIGIN=http://127.0.0.1:8000 DRAWOFFER_ALLOW_LOCAL_HTTP=1 npm run dev:mac
 RUN_DESKTOP_KEYCHAIN_TESTS=1 npm run test:mac
 npm run test:windows-core
 ```
@@ -35,8 +35,8 @@ npm run test:windows-core
 Windows PowerShell：
 
 ```powershell
-$env:LINKRESUME_API_ORIGIN = "http://127.0.0.1:8000"
-$env:LINKRESUME_ALLOW_LOCAL_HTTP = "1"
+$env:DRAWOFFER_API_ORIGIN = "http://127.0.0.1:8000"
+$env:DRAWOFFER_ALLOW_LOCAL_HTTP = "1"
 $env:RUN_DESKTOP_CREDENTIAL_TESTS = "1"
 npm run test:windows-platform
 npm run build:native-renderer

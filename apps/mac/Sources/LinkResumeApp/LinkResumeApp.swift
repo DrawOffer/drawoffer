@@ -13,19 +13,19 @@ struct LinkResumeApp: App {
     init() {
         var instanceLease: DesktopInstanceLease?
         do {
-            guard let value = ProcessInfo.processInfo.environment["LINKRESUME_API_ORIGIN"],
+            guard let value = ProcessInfo.processInfo.environment["DRAWOFFER_API_ORIGIN"],
                   let origin = URL(string: value) else { throw APIError.invalidResponse }
             let directory = try FileManager.default.url(for: .applicationSupportDirectory,
                 in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("LinkResume")
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             instanceLease = try DesktopInstanceLease(fileURL: directory.appendingPathComponent("desktop-session.lock"))
             let api = try HTTPAPIClient(baseURL: origin, tokens: KeychainTokenStore(),
-                allowLocalHTTP: ProcessInfo.processInfo.environment["LINKRESUME_ALLOW_LOCAL_HTTP"] == "1")
+                allowLocalHTTP: ProcessInfo.processInfo.environment["DRAWOFFER_ALLOW_LOCAL_HTTP"] == "1")
             _session = State(initialValue: SessionStore(api: api))
         } catch APIError.server(status: 409, code: "DESKTOP_ALREADY_RUNNING") {
             _configurationError = State(initialValue: "LinkResume 已在运行，请使用已打开的窗口。")
         } catch {
-            _configurationError = State(initialValue: "API 地址未配置或无效。请设置 LINKRESUME_API_ORIGIN 后重新启动。")
+            _configurationError = State(initialValue: "API 地址未配置或无效。请设置 DRAWOFFER_API_ORIGIN 后重新启动。")
         }
         lease = instanceLease
     }

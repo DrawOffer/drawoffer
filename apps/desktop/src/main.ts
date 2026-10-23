@@ -19,7 +19,7 @@ function readBuiltInEnv(): BuiltInDesktopEnv | null {
 }
 
 const target = resolveDesktopTarget(
-  process.env.LINKRESUME_DESKTOP_MODE === "dev" ? "dev" : "package",
+  process.env.DRAWOFFER_DESKTOP_MODE === "dev" ? "dev" : "package",
   process.env,
   readBuiltInEnv(),
 );
