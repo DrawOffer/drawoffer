@@ -22,12 +22,12 @@
 
 ## 配置与启动
 
-两端从进程环境读取 `LINKRESUME_API_ORIGIN`，值必须是受信任的 HTTPS origin，不能包含路径、查询、用户信息或 fragment。缺失或非法时显示配置错误，不回退 Mock。仅本机 HTTP 调试可另设 `LINKRESUME_ALLOW_LOCAL_HTTP=1`，且地址仅限 localhost、127.0.0.1 或 ::1；这不允许远程明文服务。
+两端从进程环境读取 `DRAWOFFER_API_ORIGIN`，值必须是受信任的 HTTPS origin，不能包含路径、查询、用户信息或 fragment。缺失或非法时显示配置错误，不回退 Mock。仅本机 HTTP 调试可另设 `DRAWOFFER_ALLOW_LOCAL_HTTP=1`，且地址仅限 localhost、127.0.0.1 或 ::1；这不允许远程明文服务。
 
 ```bash
 npm ci --prefix apps/web
 # 按实际本地后端端口配置；后端必须单独按明确的 Local/Development profile 启动。
-LINKRESUME_API_ORIGIN=http://127.0.0.1:8000 LINKRESUME_ALLOW_LOCAL_HTTP=1 npm run dev:mac
+DRAWOFFER_API_ORIGIN=http://127.0.0.1:8000 DRAWOFFER_ALLOW_LOCAL_HTTP=1 npm run dev:mac
 RUN_DESKTOP_KEYCHAIN_TESTS=1 npm run test:mac
 npm run test:windows-core
 ```
@@ -35,8 +35,8 @@ npm run test:windows-core
 Windows PowerShell：
 
 ```powershell
-$env:LINKRESUME_API_ORIGIN = "http://127.0.0.1:8000"
-$env:LINKRESUME_ALLOW_LOCAL_HTTP = "1"
+$env:DRAWOFFER_API_ORIGIN = "http://127.0.0.1:8000"
+$env:DRAWOFFER_ALLOW_LOCAL_HTTP = "1"
 $env:RUN_DESKTOP_CREDENTIAL_TESTS = "1"
 npm run test:windows-platform
 npm run build:native-renderer
@@ -61,7 +61,7 @@ App 共享一个会话协调器。Mac 窗口共享该实例；两端 App 的进�
 
 Mac 测试脚本兼容 CLT 的 Testing 框架路径，并在 CLT 残留旧 PackageDescription 私有接口时只修正临时副本，不修改系统文件。Windows Core 可在 macOS 上用 .NET 10 测试；WinUI XAML 编译与 Credential Locker 实机测试需要 Windows。平台测试使用唯一虚构 scope，并在 finally 清理；Mac 真实 Keychain 测试需显式设置 `RUN_DESKTOP_KEYCHAIN_TESTS=1`，Windows 需 `RUN_DESKTOP_CREDENTIAL_TESTS=1`，未启用时跳过。
 
-`.github/workflows/native-desktop.yml` 配置 Mac 编译/Keychain、Windows Core/Credential Locker/App 构建以及隔离真实 Redis 验证。工作流配置存在不代表远端运行已通过，也不替代手机和桌面 GUI 验收。
+原生桌面的 Mac 编译/Keychain、Windows Core/Credential Locker/App 构建以及隔离真实 Redis 验证不再由 GitHub Actions 运行（仓库已移除 workflow），需要时在对应平台本地执行 `npm run test:mac`、`npm run test:windows-core` 等命令；它们也不替代手机和桌面 GUI 验收。
 
 实际微信扫码、手机取消与确认、重启恢复、休眠唤醒、双窗口、第二进程、凭据库拒绝访问仍需在对应系统和实际服务上验收。Mac 未签名/公证，Windows 未打签名 MSIX 包；小程序发布、后端部署和正式密钥分发属于独立发布操作。
 
@@ -110,7 +110,7 @@ Swift／C# 的纸面请求包含 `assets`。现有模板纸面入口在渲染前
 
 卡片菜单提供预览、重命名、复制为新简历、分享链接、导出 PDF 与删除；达到 10 份上限时禁用新建与复制，最终以后端 `RESUME_LIMIT_REACHED` 为准。重命名经 `PUT /api/resumes/{id}` 只提交 `title` 与 `base_lock_version`；复制提交固定 `client_request_id`，网络结果不确定时可原样重试而不重复复制；删除前确认分享失效与求职记录解除关联。分享弹窗对齐 Web `SharePanel`：未创建时选择公开/仅自己、7 天/30 天/永久与是否允许下载；已创建时显示 `{origin}/share/{token}` 并可复制、调整可见性/有效期/下载、重新生成（保留可见性与下载，已过期按原有效时长顺延，推算不出默认 7 天）和删除。模板页“创建简历”弹窗提交 `POST /api/resumes {title, template_id}`，成功后进入“我的简历”并打开新简历预览；该接口没有幂等标识，网络不确定时引导先查看列表，避免重复创建。
 
-导入简历通过系统打开面板选择 Markdown/DOCX/PDF（最多 10 MiB，客户端先校验扩展名、空文件与大小），以固定 `Idempotency-Key` 提交 `POST /api/resumes/import`，模板沿用 Web 规则优先 `classic-technical-cn`。导入任务卡读取 `GET /api/resume-overview` 的进行中与失败任务，进行中每 3 秒刷新，有任务结束即刷新列表；失败任务可经 `DELETE /api/resume-imports/{id}` 删除记录。新建按钮进入模板页。点击卡片或菜单“编辑”进入 `ResumeEditorView` 原生结构化编辑器（新建简历后也直接进入）：编辑姓名、一句话介绍、头像（上传 PNG/JPEG、调整 56–220px 尺寸、更换或移除）、联系方式，模块的类型与标题、条目字段（名称/单位/角色/学位/专业/地点/起止时间/链接）与内容块：段落（左/中/右对齐）、项目符号/编号列表（回车新增一项、可互换类型）、两栏/三栏/四栏信息行（两栏可调左栏宽度）与图片（上传、说明、10–100% 宽度、左/中/右/通栏）；支持增删与上下移动模块、条目和内容块。所有文字使用 `RichTextEditor.swift` 的原生富文本框，格式工具条对应 Web 选区工具：加粗（⌘B）、斜体（⌘I）、下划线（⌘U）、删除线、代码、6–48pt 字号、与 Web 相同色板的文字颜色和背景色、http(s) 链接、12 个图标与清除格式；格式真值保存在自定义文本属性中，显示样式由它重算，图标与行内图片以附件保留原始 JSON，粘贴一律按纯文本。段落里只输入“/”时显示斜杠插入条，可转为列表、分栏或图片。顶部工具栏：大纲跳转到模块，“顺序”弹窗拖动排序（双栏模板按侧栏/主栏分组、各栏内移动，可恢复 Web 默认语义顺序），“版式”弹层调整字体（思源宋体/霞鹜文楷/系统黑体）、正文字号 8–16pt、行距 1.1–1.8、上下 6–30mm 与左右 10–30mm 边距和智能一页（Core `ResumeTypeSettings` 移植 Web `styleToEditorSettings/editorSettingsToStyle`），“模板”弹窗按风格/场景筛选真实模板并以 `POST /api/resumes/{id}/apply-template` 切换（随请求提交当前正文与名称，未保存的版式设置在新模板上重新套用后待保存）。保存以 `PUT /api/resumes/{id}` 提交 `data`、`style`（与改名时的 `title`）和 `base_lock_version`；保存前按 Web `canonicalV1SourceDispositions` 重算来源处置，删除节点不留悬空引用，新节点使用随机 `node_` 标识。冲突（`RESUME_EDIT_CONFLICT`）时提示重新载入，不覆盖他处修改。右侧纸面停顿 0.4 秒后实时预览未保存内容：Core `ResumeLayout` 移植后端 `compile_layout_plan` 在本地生成版式计划（模板放不下某个模块类型时提示而不渲染），保存或切换模板后改用服务端返回的 layout_plan；纸面可在 40%–120% 间缩放。图片经 `POST /api/resumes/{id}/assets` 以 data URL 上传（单张 10 MiB，PNG/JPEG），返回地址写入简历。卡片菜单仍保留“在 Web 编辑器打开”，用默认浏览器打开 `{origin}/resumes/{id}/edit`（网页使用自己的登录态）。Web 画布内的所见即所得编辑在原生端以结构化表单加实时纸面替代。SwiftUI 部分尚未在 macOS 上编译和界面验收。
+导入简历通过系统打开面板选择 Markdown/DOCX/PDF（最多 10 MiB，客户端先校验扩展名、空文件与大小），以固定 `Idempotency-Key` 提交 `POST /api/resumes/import`，模板沿用 Web 规则：取模板列表首项（管理端顺序里的导入默认）作为 `template_id`。导入任务卡读取 `GET /api/resume-overview` 的进行中与失败任务，进行中每 3 秒刷新，有任务结束即刷新列表；失败任务可经 `DELETE /api/resume-imports/{id}` 删除记录。新建按钮进入模板页。点击卡片或菜单“编辑”进入 `ResumeEditorView` 原生结构化编辑器（新建简历后也直接进入）：编辑姓名、一句话介绍、头像（上传 PNG/JPEG、调整 56–220px 尺寸、更换或移除）、联系方式，模块的类型与标题、条目字段（名称/单位/角色/学位/专业/地点/起止时间/链接）与内容块：段落（左/中/右对齐）、项目符号/编号列表（回车新增一项、可互换类型）、两栏/三栏/四栏信息行（两栏可调左栏宽度）与图片（上传、说明、10–100% 宽度、左/中/右/通栏）；支持增删与上下移动模块、条目和内容块。所有文字使用 `RichTextEditor.swift` 的原生富文本框，格式工具条对应 Web 选区工具：加粗（⌘B）、斜体（⌘I）、下划线（⌘U）、删除线、代码、6–48pt 字号、与 Web 相同色板的文字颜色和背景色、http(s) 链接、12 个图标与清除格式；格式真值保存在自定义文本属性中，显示样式由它重算，图标与行内图片以附件保留原始 JSON，粘贴一律按纯文本。段落里只输入“/”时显示斜杠插入条，可转为列表、分栏或图片。顶部工具栏：大纲跳转到模块，“顺序”弹窗拖动排序（双栏模板按侧栏/主栏分组、各栏内移动，可恢复 Web 默认语义顺序），“版式”弹层调整字体（思源宋体/霞鹜文楷/系统黑体）、正文字号 8–16pt、行距 1.1–1.8、上下 6–30mm 与左右 10–30mm 边距和智能一页（Core `ResumeTypeSettings` 移植 Web `styleToEditorSettings/editorSettingsToStyle`），“模板”弹窗按风格/场景筛选真实模板并以 `POST /api/resumes/{id}/apply-template` 切换（随请求提交当前正文与名称，未保存的版式设置在新模板上重新套用后待保存）。保存以 `PUT /api/resumes/{id}` 提交 `data`、`style`（与改名时的 `title`）和 `base_lock_version`；保存前按 Web `canonicalV1SourceDispositions` 重算来源处置，删除节点不留悬空引用，新节点使用随机 `node_` 标识。冲突（`RESUME_EDIT_CONFLICT`）时提示重新载入，不覆盖他处修改。右侧纸面停顿 0.4 秒后实时预览未保存内容：Core `ResumeLayout` 移植后端 `compile_layout_plan` 在本地生成版式计划（模板放不下某个模块类型时提示而不渲染），保存或切换模板后改用服务端返回的 layout_plan；纸面可在 40%–120% 间缩放。图片经 `POST /api/resumes/{id}/assets` 以 data URL 上传（单张 10 MiB，PNG/JPEG），返回地址写入简历。卡片菜单仍保留“在 Web 编辑器打开”，用默认浏览器打开 `{origin}/resumes/{id}/edit`（网页使用自己的登录态）。Web 画布内的所见即所得编辑在原生端以结构化表单加实时纸面替代。SwiftUI 部分尚未在 macOS 上编译和界面验收。
 
 ## 原生岗位看板
 

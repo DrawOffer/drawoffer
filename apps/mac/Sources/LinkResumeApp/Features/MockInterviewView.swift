@@ -1312,11 +1312,11 @@ struct MockInterviewView: View {
                     ForEach(evaluation["signals"]?.items ?? [], id: \.self) { signal in
                         HStack(alignment: .top, spacing: 8) {
                             let verdict = signal.text("verdict")
-                            Text(["hit": "命中", "partial": "部分", "miss": "未命中"][verdict] ?? verdict).font(V3.sans(11)).foregroundStyle(verdict == "hit" ? Color(hex: 0x2F7D4A) : verdict == "partial" ? Color(hex: 0xB8691C) : Color(hex: 0xB3402E))
+                            Text(["hit": "命中", "partial": "部分", "miss": "未命中", "not_probed": "未考察"][verdict] ?? verdict).font(V3.sans(11)).foregroundStyle(verdict == "hit" ? Color(hex: 0x2F7D4A) : verdict == "partial" ? Color(hex: 0xB8691C) : verdict == "not_probed" ? V3.fnt : Color(hex: 0xB3402E))
                                 .padding(.horizontal, 7).frame(height: 17).background(V3.stage, in: RoundedRectangle(cornerRadius: 5))
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(signal.text("signal")).font(V3.sans(12.5, weight: .medium))
-                                Text(signal.text("evidence").isEmpty ? "回答中未涉及" : "“\(signal.text("evidence"))”").font(V3.sans(11.5)).foregroundStyle(V3.fnt)
+                                Text(verdict == "not_probed" ? "面试官没有问到，不计分" : signal.text("evidence").isEmpty ? "回答中未涉及" : "“\(signal.text("evidence"))”").font(V3.sans(11.5)).foregroundStyle(V3.fnt)
                             }
                         }
                     }
