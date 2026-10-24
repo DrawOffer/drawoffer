@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { app, BrowserWindow, shell } from "electron";
 import {
@@ -18,16 +18,23 @@ function readBuiltInEnv(): BuiltInDesktopEnv | null {
   }
 }
 
+// Before the DrawOffer rename the product name (and so the profile folder holding cookies and
+// local storage) was LinkResume; keep using that folder so existing users stay signed in.
+const legacyUserData = join(app.getPath("appData"), app.getName().replace(/^DrawOffer/, "LinkResume"));
+if (legacyUserData !== app.getPath("userData") && existsSync(legacyUserData)) {
+  app.setPath("userData", legacyUserData);
+}
+
 const target = resolveDesktopTarget(
   process.env.DRAWOFFER_DESKTOP_MODE === "dev" ? "dev" : "package",
   process.env,
   readBuiltInEnv(),
 );
 if (target.preset === "development") {
-  console.log(`[linkresume-desktop] 开发版客户端，连接 ${target.origin}`);
+  console.log(`[drawoffer-desktop] 开发版客户端，连接 ${target.origin}`);
 }
 for (const warning of target.warnings) {
-  console.warn(`[linkresume-desktop] ${warning}`);
+  console.warn(`[drawoffer-desktop] ${warning}`);
 }
 
 /** Electron 在导航被取代时上报的 errorCode（ABORTED），不是加载失败。 */
@@ -70,7 +77,7 @@ function createMainWindow(): void {
   const win = new BrowserWindow({
     width: 1280,
     height: 832,
-    title: "LinkResume",
+    title: "DrawOffer",
     autoHideMenuBar: true,
     titleBarStyle: "hiddenInset",
     webPreferences: {

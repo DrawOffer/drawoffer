@@ -19,7 +19,7 @@ function validateDevUrl(value) {
   } catch {
     // 落入下方统一报错。
   }
-  console.error(`[linkresume-desktop] DRAWOFFER_DESKTOP_DEV_URL 非法：${value}`);
+  console.error(`[drawoffer-desktop] DRAWOFFER_DESKTOP_DEV_URL 非法：${value}`);
   process.exit(1);
 }
 
@@ -39,13 +39,13 @@ async function reachable(url) {
 }
 
 async function waitForDevServer() {
-  process.stdout.write(`[linkresume-desktop] 等待开发服务器就绪：${target}\n`);
+  process.stdout.write(`[drawoffer-desktop] 等待开发服务器就绪：${target}\n`);
   while (Date.now() - startedAt < timeoutMs) {
     if (await reachable(target)) return;
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
   console.error(
-    "[linkresume-desktop] 等待超时。请先启动开发服务（npm run dev:local 或 npm run dev:development），再运行 npm run dev:desktop。",
+    "[drawoffer-desktop] 等待超时。请先启动开发服务（npm run dev:local 或 npm run dev:development），再运行 npm run dev:desktop。",
   );
   process.exit(1);
 }
@@ -64,7 +64,7 @@ await waitForDevServer();
 
 const binary = electronBinary();
 if (!binary) {
-  console.error("[linkresume-desktop] 未找到 electron，请先在 apps/desktop 执行 npm install。");
+  console.error("[drawoffer-desktop] 未找到 electron，请先在 apps/desktop 执行 npm install。");
   process.exit(1);
 }
 

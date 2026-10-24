@@ -1,5 +1,6 @@
+# Keep the pre-rename app ID so installs upgrade in place instead of appearing as a second app.
 appId: cn.linkresume.desktop
-productName: LinkResume
+productName: DrawOffer
 directories:
   output: release
 files:
