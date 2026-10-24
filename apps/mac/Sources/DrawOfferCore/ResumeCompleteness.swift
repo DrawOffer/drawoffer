@@ -37,7 +37,7 @@ public struct ResumeCompleteness: Equatable, Sendable {
                 let heading = ["name", "organization", "role"].lazy.compactMap { fields[$0] }.first
                 let headingValue = heading?.text("value") ?? ""
                 if !headingValue.isEmpty { lines += ["", "### " + headingValue] }
-                for key in ["organization", "role", "location", "start_date", "end_date", "degree", "major", "url"] {
+                for key in ["organization", "role", "location", "start_date", "end_date", "degree", "college", "major", "url"] {
                     let value = fields[key]?.text("value") ?? ""
                     if !value.isEmpty && value != headingValue { lines.append(value) }
                 }

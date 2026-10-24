@@ -55,6 +55,14 @@ private let document = """
     #expect(merged.count == 3 && merged[0].text("text") == "三三")
 }
 
+@Test func collegeIsAnEditableEntryField() throws {
+    #expect(ResumeDocument.entryFields.contains { $0.key == "college" && $0.label == "学院" })
+    let college = try #require(ResumeDocument.setTextRuns(nil, [ResumeDocument.textRun("计算机学院")]))
+    let changed = try #require(ResumeDocument.setTextRuns(college, [ResumeDocument.textRun("软件学院")]))
+    #expect(changed.text("value") == "软件学院")
+    #expect(changed.text("node_id") == college.text("node_id"))
+}
+
 @Test func sectionOrderRestoresCanonicalKinds() throws {
     let sections = try json(document)["sections"]?.items ?? []
     #expect(ResumeSectionOrder.restoreDefault(sections).map { $0.text("node_id") } == ["node_profile", "node_work", "node_skills"])
