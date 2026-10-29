@@ -5,7 +5,7 @@ import Foundation
 /// 分栏行、图片块与头像可编辑。保存前按 Web `canonicalV1SourceDispositions` 重算来源处置，删除的节点不留悬空引用。
 public enum ResumeDocument {
     public static let entryFields: [(key: String, label: String)] = [
-        ("name", "名称"), ("organization", "单位"), ("role", "角色/职位"), ("degree", "学位"), ("major", "专业"),
+        ("name", "名称"), ("organization", "单位"), ("role", "角色/职位"), ("degree", "学位"), ("college", "学院"), ("major", "专业"),
         ("location", "地点"), ("start_date", "开始时间"), ("end_date", "结束时间"), ("url", "链接"),
     ]
     public static let sectionKinds: [(key: String, label: String)] = [
