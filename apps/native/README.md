@@ -2,7 +2,7 @@
 
 `apps/mac` 是 SwiftUI 客户端，`apps/windows` 是 WinUI 3 客户端。界面使用系统控件，仅简历纸面嵌入离线网页视图，复用 Web 的 `renderResumePrintDocument`；`apps/desktop` 的 Electron 壳是独立线路。
 
-正式 App 注入 desktop Bearer HTTP 客户端，支持微信扫码、手机确认后的领取、启动恢复、续期与退出。Mac 与 Windows 均直接进入工作区首页：未登录或恢复失败时仍可浏览随包提供的 9 套精选模板与虚构示例，不请求账号资源，不显示未经查询的个人数量；后端模板接口要求登录，所以游客只能看到随包示例，不代表完整在线模板目录。Mac 登录后模板页改为读取 `GET /api/resume-templates` 的真实启用模板（过滤已退役 `blank-cn`，显示使用次数），游客“使用此模板”先登录，成功后回到模板页按模板 key 匹配真实模板并打开创建弹窗。Mac 简历管理与原生编辑器见下文“Mac 我的简历”；Windows 仍只读。退出后清理准备状态并返回游客首页。Mac 的首页卡片、我的简历、模板、岗位看板与岗位详情、面试排期、文字与语音模拟面试、资料库、账号设置与 AI 对话均已使用原生页面接入现有接口，简历编辑覆盖文字格式、版式与模板切换；桌面端不提供注销账号、密码与微信绑定。Windows 仍以看板、排期、模拟面试与资料库为主。Mock 只用于 Core 测试。协议与权限边界见 [桌面会话契约](../../docs/api/http-contracts.md#桌面-bearer-会话)。
+正式 App 注入 desktop Bearer HTTP 客户端，支持启动恢复、续期与退出。Mac 登录不再在客户端内扫码：点击登录打开浏览器 `/desktop-login`，在网页登录并点击“授权并打开客户端”后经 `drawoffer://auth/callback` 回到客户端完成领取（见[桌面会话契约](../../docs/api/http-contracts.md#桌面-bearer-会话)），Windows 仍为微信扫码。Mac 与 Windows 均直接进入工作区首页：未登录或恢复失败时仍可浏览随包提供的 9 套精选模板与虚构示例，不请求账号资源，不显示未经查询的个人数量；后端模板接口要求登录，所以游客只能看到随包示例，不代表完整在线模板目录。Mac 登录后模板页改为读取 `GET /api/resume-templates` 的真实启用模板（过滤已退役 `blank-cn`，显示使用次数），游客“使用此模板”先登录，成功后回到模板页按模板 key 匹配真实模板并打开创建弹窗。Mac 简历管理与原生编辑器见下文“Mac 我的简历”；Windows 仍只读。退出后清理准备状态并返回游客首页。Mac 的首页卡片、我的简历、模板、岗位看板与岗位详情、面试排期、文字与语音模拟面试、资料库、账号设置与 AI 对话均已使用原生页面接入现有接口，简历编辑覆盖文字格式、版式与模板切换；桌面端不提供注销账号、密码与微信绑定。Windows 仍以看板、排期、模拟面试与资料库为主。Mock 只用于 Core 测试。协议与权限边界见 [桌面会话契约](../../docs/api/http-contracts.md#桌面-bearer-会话)。
 
 ## 界面与 Web 对齐
 
@@ -23,6 +23,8 @@
 ## 配置与启动
 
 两端从进程环境读取 `DRAWOFFER_API_ORIGIN`，值必须是受信任的 HTTPS origin，不能包含路径、查询、用户信息或 fragment。缺失或非法时显示配置错误，不回退 Mock。仅本机 HTTP 调试可另设 `DRAWOFFER_ALLOW_LOCAL_HTTP=1`，且地址仅限 localhost、127.0.0.1 或 ::1；这不允许远程明文服务。
+
+Mac 本地运行 URL Scheme 回调需要已注册的 `.app`：`bash apps/mac/scripts/bundle.sh` 生成并注册 `apps/mac/.build/DrawOffer.app`；`apps/mac/scripts/snap.sh launch|shot|press|menu` 以 `DRAWOFFER_SNAPSHOT_DIR` 调试模式启动并导出窗口 PNG 与无障碍树、按标签按下控件，用于与 Web 逐项对照；`apps/mac/scripts/dev-login.sh` 用虚构 Dev 账号完成浏览器登录（仅 Local/Development 密码登录可用）。经系统拉起时没有自定义环境变量，App 回退到上次成功使用的 `DRAWOFFER_API_ORIGIN`。
 
 ```bash
 npm ci --prefix apps/web
