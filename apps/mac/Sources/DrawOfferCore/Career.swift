@@ -6,6 +6,7 @@ public enum CareerRequest {
         if MockInterviewRequest.allowed(path: path, method: method) { return true }
         if ResumeRequest.allowed(path: path, method: method) { return true }
         if AccountRequest.allowed(path: path, method: method) { return true }
+        if ParityRequest.allowed(path: path, method: method) { return true }
         if AgentRequest.allowed(path: path, method: method), !AgentRequest.streams(path: path, method: method) { return true }
         guard path.hasPrefix("/api/"), !path.contains("//"), !path.hasSuffix("/"), !path.contains("?"), !path.contains("#"), !path.contains("..") else { return false }
         let reads = ["/api/resumes", "/api/job-applications", "/api/interview-overview", "/api/interview-sessions", "/api/job-descriptions"]
@@ -26,7 +27,7 @@ public enum CareerRequest {
         if parts[1] == "interview-sessions", let stage = stageDetail(parts, method: method) { return stage }
         if parts.count == 4, parts[1] == "interview-assets", parts[3] == "content" { return method == "GET" }
         guard parts.count == 4, method == "POST" else { return false }
-        if parts[1] == "job-applications" { return ["stages", "terminate", "offer", "close", "archive", "restore", "interview-sessions"].contains(parts[3]) }
+        if parts[1] == "job-applications" { return ["stages", "terminate", "offer", "close", "archive", "restore", "reopen", "interview-sessions"].contains(parts[3]) }
         return parts[1] == "interview-sessions" && ["complete", "cancel", "reschedule"].contains(parts[3])
     }
 
@@ -38,7 +39,7 @@ public enum CareerRequest {
             switch parts[3] {
             case "assets": return ["GET", "POST"].contains(method)
             case "review-notes": return method == "PUT"
-            case "written-questions:extract", "review:generate", "prep-items:generate": return method == "POST"
+            case "written-questions:extract", "review:generate", "prep-items:generate", "record:structure": return method == "POST"
             default: return nil
             }
         }

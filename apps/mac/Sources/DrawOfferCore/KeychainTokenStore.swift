@@ -55,3 +55,34 @@ public struct KeychainTokenStore: TokenStore {
         }
     }
 }
+
+
+/// 仅本地对照调试用：凭据存进指定目录下权限 0600 的文件，不访问系统钥匙串。
+/// 每次本地重新构建的 ad-hoc 签名都不同，用钥匙串会让系统反复弹出授权框。正式 App 不使用它。
+public struct LocalFileTokenStore: TokenStore {
+    private let directory: URL
+
+    public init(directory: URL) { self.directory = directory }
+
+    private func file(_ scope: String) -> URL {
+        let name = scope.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) ? String($0) : "_" }.joined()
+        return directory.appendingPathComponent("credential-\(name).json")
+    }
+
+    public func load(scope: String) throws -> DesktopCredentialRecord? {
+        guard let data = try? Data(contentsOf: file(scope)) else { return nil }
+        return try JSONDecoder().decode(DesktopCredentialRecord.self, from: data)
+    }
+
+    public func save(_ record: DesktopCredentialRecord, scope: String) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let target = file(scope)
+        try JSONEncoder().encode(record).write(to: target, options: [.atomic])
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+    }
+
+    public func clear(scope: String) throws {
+        let target = file(scope)
+        if FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: target) }
+    }
+}

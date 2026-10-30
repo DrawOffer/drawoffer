@@ -5,7 +5,10 @@ struct NativeMarkdownView: View {
     private struct Block: Identifiable { let id:Int; let kind:String; let text:String; let rows:[[String]]; let level:Int }
     private let blocks:[Block]
     private let truncated:Bool
-    init(source:String) {
+    /// 正文字号与行高；对话回复用 Web `.assistant-message-content` 的 16 / 26。
+    private let size:CGFloat, line:CGFloat
+    init(source:String, size:CGFloat=13, line:CGFloat=0) {
+        self.size=size; self.line=line
         let limited=String(source.prefix(500_000)); let characterTruncated=limited.count<source.count
         let lines=limited.components(separatedBy:"\n"); var blocks:[Block]=[], index=0
         func cells(_ line:String)->[String] { var parts=line.split(separator:"|",omittingEmptySubsequences:false).map{String($0).trimmingCharacters(in:.whitespaces)};if parts.first=="" {parts.removeFirst()};if parts.last==""{parts.removeLast()};return Array(parts.prefix(20)) }
@@ -22,14 +25,14 @@ struct NativeMarkdownView: View {
         self.truncated=characterTruncated || index<lines.count
     }
     var body:some View {
-        VStack(alignment:.leading,spacing:12) {
+        VStack(alignment:.leading,spacing:line > 0 ? 10 : 12) {
             if truncated { Text("正文较长，预览显示前 50 万字符；完整内容请下载原文件查看。").foregroundStyle(.orange).font(.system(size:12)) }
             ForEach(blocks){block in
                 if block.kind=="heading" {Text(block.text).font(.system(size:max(14,25-Double(block.level)*2),weight:.semibold)).padding(.top,8)}
                 else if block.kind=="code" {VStack(alignment:.leading,spacing:8){if block.level==1 {Text("Mermaid 图表源码 · 原生预览暂不执行图表脚本").font(.system(size:11)).foregroundStyle(.secondary)};Text(block.text).font(.system(size:12,design:.monospaced)).textSelection(.enabled)}.frame(maxWidth:.infinity,alignment:.leading).padding(14).background(Color(hex:0xF6F6F3),in:RoundedRectangle(cornerRadius:8))}
                 else if block.kind=="table" {ScrollView(.horizontal){Grid(alignment:.leading,horizontalSpacing:16,verticalSpacing:10){ForEach(Array(block.rows.enumerated()),id:\.offset){row,values in GridRow{ForEach(Array(values.enumerated()),id:\.offset){_,value in Text(inline(value)).font(.system(size:12,weight:row==0 ? .semibold:.regular)).frame(minWidth:80,maxWidth:280,alignment:.leading)}}}}.padding(12).overlay(RoundedRectangle(cornerRadius:8).stroke(Color(hex:0xE4E4E0)))}}
                 else if block.kind=="image" {Label("文档图片请下载原文件查看",systemImage:"photo").font(.system(size:12)).foregroundStyle(.secondary)}
-                else {Text(inline(block.text)).font(.system(size:13)).textSelection(.enabled)}
+                else {Text(inline(block.text)).font(.system(size:size)).lineHeight(size, line > 0 ? line : size*1.2).textSelection(.enabled)}
             }
         }
     }

@@ -36,6 +36,15 @@ public struct DesktopLoginChallenge: Sendable {
     fileprivate let generation: UUID
 }
 
+/// 浏览器登录的一次挑战：verifier 只留在本进程内存，浏览器只拿到 S256 challenge 与随机 state。
+public struct BrowserLoginChallenge: Sendable {
+    public let authorizeURL: URL
+    public let state: String
+    fileprivate let verifier: String
+    fileprivate let requestID: String
+    fileprivate let generation: UUID
+}
+
 public actor SessionCoordinator {
     public nonisolated var origin: URL { transport.origin }
     private let transport: any DesktopRequesting
@@ -43,6 +52,7 @@ public actor SessionCoordinator {
     private let scope: String
     private var generation = UUID()
     private var disabled = false
+    private var browserChallenge: BrowserLoginChallenge?
     private var access: String?
     private var accessDeadline = Date.distantPast
     private var flight: (id: UUID, task: Task<DesktopTokens, Error>)?
@@ -119,6 +129,51 @@ public actor SessionCoordinator {
         return result.user
     }
 
+    /// 生成浏览器授权地址；新的挑战会先退出旧会话，并使之前的挑战失效。
+    public func beginBrowserLogin(clientVersion: String) async throws -> BrowserLoginChallenge {
+        let current = UUID()
+        try await signOut(generation: current)
+        guard generation == current else { throw APIError.unauthorized }
+        disabled = false
+        let verifier = try randomToken(32)
+        let state = try randomToken(24)
+        let challenge = base64url(Data(SHA256.hash(data: Data(verifier.utf8))))
+        var components = URLComponents(url: transport.origin.appendingPathComponent("desktop-login"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [
+            URLQueryItem(name: "challenge", value: challenge), URLQueryItem(name: "state", value: state),
+            URLQueryItem(name: "platform", value: "macos"), URLQueryItem(name: "client_version", value: clientVersion),
+        ]
+        guard let url = components.url else { throw APIError.invalidResponse }
+        browserChallenge = BrowserLoginChallenge(authorizeURL: url, state: state, verifier: verifier,
+                                                 requestID: UUID().uuidString, generation: current)
+        return browserChallenge!
+    }
+
+    /// 处理 `drawoffer://auth/callback?code&state`：state 必须与当前挑战一致，授权码只换取一次。
+    public func completeBrowserLogin(callback: URL) async throws -> User {
+        guard let challenge = browserChallenge, challenge.generation == generation, !disabled else { throw APIError.unauthorized }
+        let items = URLComponents(url: callback, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        guard callback.scheme == "drawoffer", callback.host == "auth", callback.path == "/callback",
+              let state = items.first(where: { $0.name == "state" })?.value, state == challenge.state,
+              let code = items.first(where: { $0.name == "code" })?.value, code.count <= 128 else {
+            throw APIError.server(status: 400, code: "LOGIN_CALLBACK_INVALID")
+        }
+        let result = try await transport.send(DesktopTokens.self, path: "/api/auth/desktop/browser/exchange", body: [
+            "code": code, "code_verifier": challenge.verifier, "request_id": challenge.requestID,
+        ])
+        try Task.checkCancellation()
+        guard challenge.generation == generation, !disabled, browserChallenge?.state == challenge.state else { throw APIError.unauthorized }
+        try persist(result, expectedAccount: nil)
+        browserChallenge = nil
+        return result.user
+    }
+
+    private func randomToken(_ count: Int) throws -> String {
+        var random = [UInt8](repeating: 0, count: count)
+        guard SecRandomCopyBytes(kSecRandomDefault, random.count, &random) == errSecSuccess else { throw APIError.invalidResponse }
+        return base64url(Data(random))
+    }
+
     public func restore() async throws -> User? {
         guard !disabled, try tokens.load(scope: scope) != nil else { return nil }
         let current = generation
@@ -141,6 +196,11 @@ public actor SessionCoordinator {
         return try await authorized { access in try await transport.career(path: path, method: method, query: query, body: body, access: access) }
     }
 
+    public func uploadAgentAttachment(_ upload: AgentAttachmentUpload) async throws -> JSONValue {
+        let transport = self.transport
+        return try await authorized { access in try await transport.uploadAgentAttachment(upload, access: access) }
+    }
+
     public func uploadDataset(_ upload: DatasetUpload) async throws -> JSONValue {
         let transport = self.transport
         return try await authorized { access in try await transport.uploadDataset(upload, access: access) }
@@ -153,12 +213,15 @@ public actor SessionCoordinator {
     }
 
     /// 本人简历列表；generation 拒绝退出或切换账号后的迟到结果。
-    public func listResumes() async throws -> [ResumeSummary] {
-        struct Envelope: Decodable, Sendable { let resumes: [ResumeSummary] }
+    public func listResumes() async throws -> [ResumeSummary] { try await listResumePage().resumes }
+
+    /// 简历列表与默认简历（`default_resume_id`，旧接口没有时为 nil）。
+    public func listResumePage() async throws -> (resumes: [ResumeSummary], defaultID: String?) {
+        struct Envelope: Decodable, Sendable { let resumes: [ResumeSummary]; let default_resume_id: String? }
         let current = generation
-        let result = try await request(Envelope.self, path: "/api/resumes").resumes
+        let result = try await request(Envelope.self, path: "/api/resumes")
         guard current == generation, !disabled else { throw APIError.unauthorized }
-        return result
+        return (result.resumes, result.default_resume_id)
     }
 
     /// 单份 PDF 最多 20 MiB，只保存在内存，由界面写到用户选择的位置。
@@ -178,6 +241,18 @@ public actor SessionCoordinator {
         let image = try await self.image(path: checked, limit: 4 * 1024 * 1024)
         guard current == generation, !disabled else { throw APIError.unauthorized }
         return image.data
+    }
+
+    /// 可编辑纸面里的简历图片（`/api/resumes/{id}/assets/...` 与本人 `/api/assets/users/{本人}/...`）：
+    /// 与纸面预览同一路径白名单，只接受 PNG/JPEG，单张最多 10 MiB，不缓存。
+    public func resumeImage(path: String) async throws -> (data: Data, contentType: String) {
+        guard !disabled, let account = try tokens.load(scope: scope)?.accountID else { throw APIError.unauthorized }
+        let checked = try PaperAssets.path(path, account: account)
+        let current = generation
+        let image = try await self.image(path: checked, limit: PaperAssets.maximumBytes)
+        guard current == generation, !disabled else { throw APIError.unauthorized }
+        _ = try PaperAssets.dataURL(image, limit: PaperAssets.maximumBytes)
+        return (image.data, image.contentType)
     }
 
     public func mockAudio(path: String, method: String, body: JSONValue?) async throws -> Data {

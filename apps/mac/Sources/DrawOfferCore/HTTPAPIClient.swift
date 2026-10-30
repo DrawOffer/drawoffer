@@ -9,6 +9,7 @@ private final class RedirectBlocker: NSObject, URLSessionTaskDelegate, Sendable 
 
 protocol DesktopRequesting: Sendable {
     func uploadDataset(_ upload: DatasetUpload, access: String?) async throws -> JSONValue
+    func uploadAgentAttachment(_ upload: AgentAttachmentUpload, access: String?) async throws -> JSONValue
     func downloadDataset(id: String, to: URL, limit: Int64, access: String?) async throws
     var origin: URL { get }
     func downloadImage(path: String, limit: Int, access: String?) async throws -> DesktopImage
@@ -23,6 +24,7 @@ protocol DesktopRequesting: Sendable {
 
 extension DesktopRequesting {
     func uploadDataset(_ upload: DatasetUpload, access: String?) async throws -> JSONValue { throw APIError.invalidResponse }
+    func uploadAgentAttachment(_ upload: AgentAttachmentUpload, access: String?) async throws -> JSONValue { throw APIError.invalidResponse }
     func downloadDataset(id: String, to: URL, limit: Int64, access: String?) async throws { throw APIError.invalidResponse }
     func career(path: String, method: String, query: [String: String], body: JSONValue?, access: String?) async throws -> JSONValue { throw APIError.invalidResponse }
     func downloadImage(path: String, limit: Int, access: String?) async throws -> DesktopImage { throw APIError.invalidResponse }
@@ -52,6 +54,8 @@ final class DesktopTransport: DesktopRequesting {
         configuration.httpShouldSetCookies = false
         configuration.httpCookieStorage = nil
         configuration.urlCache = nil
+        // 不带 If-None-Match：本地没有缓存体，304 会被当成失败（首页“暂时读不到”）。
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.protocolClasses = protocolClasses
         session = URLSession(configuration: configuration, delegate: RedirectBlocker(), delegateQueue: nil)
     }
@@ -309,7 +313,7 @@ final class DesktopTransport: DesktopRequesting {
 
     func send<T: Decodable & Sendable>(_ type: T.Type, path: String, body: [String: String]? = nil, access: String? = nil) async throws -> T {
         guard path.hasPrefix("/api/"), !path.contains(".."), !path.contains("?"), !path.contains("#") else { throw APIError.invalidResponse }
-        var request = URLRequest(url: origin.appending(path: path))
+        var request = URLRequest(url: origin.appending(path: path), cachePolicy: .reloadIgnoringLocalCacheData)
         request.httpMethod = body == nil ? "GET" : "POST"
         request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
         if let access { request.setValue("Bearer \(access)", forHTTPHeaderField: "Authorization") }
@@ -330,6 +334,7 @@ final class DesktopTransport: DesktopRequesting {
 
 public struct DesktopCapabilities: Decodable, Sendable {
     public let wechat_login_enabled: Bool
+    public let browser_login_enabled: Bool?
     public let session_protocol: Int
 }
 
@@ -362,10 +367,13 @@ public struct HTTPAPIClient: APIClient {
     public func uploadDataset(_ upload: DatasetUpload) async throws -> JSONValue { try await coordinator.uploadDataset(upload) }
     public func downloadDataset(id: String, limit: Int64) async throws -> DatasetFile { try await coordinator.downloadDataset(id: id, limit: limit) }
     public func careerRequest(path: String, method: String, query: [String: String], body: JSONValue?) async throws -> JSONValue { try await coordinator.careerRequest(path: path, method: method, query: query, body: body) }
+    public func uploadAgentAttachment(_ upload: AgentAttachmentUpload) async throws -> JSONValue { try await coordinator.uploadAgentAttachment(upload) }
     public func capabilities() async throws -> DesktopCapabilities { try await coordinator.capabilities() }
     public func beginLogin(clientVersion: String) async throws -> DesktopLoginChallenge { try await coordinator.beginLogin(clientVersion: clientVersion) }
     public func loginStatus(_ challenge: DesktopLoginChallenge) async throws -> String { try await coordinator.loginStatus(challenge) }
     public func completeLogin(_ challenge: DesktopLoginChallenge) async throws -> User { try await coordinator.completeLogin(challenge) }
+    public func beginBrowserLogin(clientVersion: String) async throws -> BrowserLoginChallenge { try await coordinator.beginBrowserLogin(clientVersion: clientVersion) }
+    public func completeBrowserLogin(callback: URL) async throws -> User { try await coordinator.completeBrowserLogin(callback: callback) }
     public func currentUser() async throws -> User? { try await coordinator.restore() }
     public func signIn(email: String, password: String) async throws -> User {
         throw APIError.server(status: 405, code: "DESKTOP_WECHAT_LOGIN_REQUIRED")
@@ -379,6 +387,7 @@ public struct HTTPAPIClient: APIClient {
     /// 站点 origin；分享链接 `{origin}/share/{token}` 使用。
     public var origin: URL { coordinator.origin }
     public func listResumes() async throws -> [ResumeSummary] { try await coordinator.listResumes() }
+    public func listResumePage() async throws -> (resumes: [ResumeSummary], defaultID: String?) { try await coordinator.listResumePage() }
     public func downloadResumePDF(id: String, lockVersion: Int) async throws -> Data { try await coordinator.downloadResumePDF(id: id, lockVersion: lockVersion) }
     public func streamAgent(path: String, method: String, body: JSONValue?, onEvent: @MainActor @Sendable (AgentEvent) async -> Void) async throws {
         try await coordinator.streamAgent(path: path, method: method, body: body, onEvent: onEvent)
@@ -389,4 +398,5 @@ public struct HTTPAPIClient: APIClient {
         try await coordinator.speechSocket(interviewID: interviewID, questionID: questionID, purpose: purpose)
     }
     public func accountAvatar(path: String) async throws -> Data { try await coordinator.accountAvatar(path: path) }
+    public func resumeImage(path: String) async throws -> (data: Data, contentType: String) { try await coordinator.resumeImage(path: path) }
 }

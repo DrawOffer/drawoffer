@@ -1,3 +1,4 @@
+import Foundation
 import Observation
 
 /// 登录态。整个 App 共享一个实例；工作区始终开放，`phase` 控制账号操作与登录弹窗。
@@ -22,7 +23,7 @@ public final class SessionStore {
     /// 账号页改昵称后同步侧栏；只更新同一账号，不改变登录状态。
     public func updateNickname(_ nickname: String) {
         guard case .signedIn(let user) = phase, !nickname.isEmpty else { return }
-        phase = .signedIn(User(id: user.id, email: user.email, nickname: nickname, isAdmin: user.isAdmin))
+        phase = .signedIn(User(id: user.id, email: user.email, nickname: nickname, isAdmin: user.isAdmin, avatarURL: user.avatarURL))
     }
 
     public func restore() async {
@@ -78,6 +79,48 @@ public final class SessionStore {
         guard current == operation else { throw APIError.unauthorized }
         errorMessage = nil
         phase = .signedIn(user)
+    }
+
+    /// 账号页换头像后同步侧栏。
+    public func updateAvatar(_ path: String?) {
+        guard case .signedIn(let user) = phase else { return }
+        phase = .signedIn(User(id: user.id, email: user.email, nickname: user.nickname, isAdmin: user.isAdmin, avatarURL: path))
+    }
+
+    /// 浏览器登录：打开授权页后等待 URL Scheme 回调；`browserLoginPending` 用于界面显示等待状态。
+    public private(set) var browserLoginPending = false
+
+    public func beginBrowserLogin(clientVersion: String) async throws -> URL {
+        guard let client = api as? HTTPAPIClient else { throw APIError.invalidResponse }
+        operation += 1
+        errorMessage = nil
+        let challenge = try await client.beginBrowserLogin(clientVersion: clientVersion)
+        phase = .signedOut
+        browserLoginPending = true
+        return challenge.authorizeURL
+    }
+
+    public func cancelBrowserLogin() { browserLoginPending = false }
+
+    public func completeBrowserLogin(callback: URL) async {
+        // 没有进行中的浏览器登录时忽略回调（例如重复点击了旧页面的“打开 DrawOffer”）。
+        guard browserLoginPending, let client = api as? HTTPAPIClient else { return }
+        let current = operation
+        do {
+            let user = try await client.completeBrowserLogin(callback: callback)
+            guard current == operation else { return }
+            errorMessage = nil
+            browserLoginPending = false
+            phase = .signedIn(user)
+        } catch {
+            guard current == operation else { return }
+            browserLoginPending = false
+            errorMessage = switch error {
+            case APIError.server(status: 410, code: _): "授权已过期，请重新登录。"
+            case APIError.server(status: 400, code: "LOGIN_CALLBACK_INVALID"), APIError.unauthorized: "登录回调与本次请求不匹配，请从客户端重新点击登录。"
+            default: "登录未完成，请检查网络后重新登录。"
+            }
+        }
     }
 
     public func reportAuthenticationFailure() {

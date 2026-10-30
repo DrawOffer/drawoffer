@@ -102,7 +102,7 @@ private actor SessionTransport: DesktopRequesting {
         if let failure { throw failure }
         if rejectBusiness && path == "/api/resume-templates" { throw APIError.unauthorized }
         let json: String
-        if path == "/api/auth/desktop/refresh" || path == "/api/auth/desktop/wechat/exchange" {
+        if path == "/api/auth/desktop/refresh" || path == "/api/auth/desktop/wechat/exchange" || path == "/api/auth/desktop/browser/exchange" {
             json = """
             {"user":{"id":"1","email":null,"nickname":"张三","is_admin":false},
              "access_token":"fixture-access","refresh_token":"fixture-session.new-secret","expires_in":600,"session_protocol":1}
@@ -421,4 +421,46 @@ private func imagePaper() -> ResumeRenderRequest {
     try await coordinator.signOut(); await transport.releaseRequest()
     await #expect(throws: APIError.unauthorized) { try await pending.value }
     #expect(!FileManager.default.fileExists(atPath:target.deletingLastPathComponent().path))
+}
+
+
+@Test func desktopBrowserLoginRequiresMatchingStateAndKeepsVerifierPrivate() async throws {
+    let store = CredentialStore()
+    try store.clear(scope: "fixture")
+    let transport = SessionTransport()
+    let coordinator = SessionCoordinator(transport: transport, tokens: store)
+    let challenge = try await coordinator.beginBrowserLogin(clientVersion: "1.0.0")
+    let query = Dictionary(uniqueKeysWithValues: (URLComponents(url: challenge.authorizeURL, resolvingAgainstBaseURL: false)?.queryItems ?? [])
+        .map { ($0.name, $0.value ?? "") })
+    #expect(challenge.authorizeURL.path == "/desktop-login")
+    #expect(query["challenge"]?.count == 43)
+    #expect(query["state"] == challenge.state)
+    #expect(query["platform"] == "macos")
+
+    let forged = URL(string: "drawoffer://auth/callback?code=desktop:0123456789abcdef.fixture&state=forged")!
+    await #expect(throws: APIError.server(status: 400, code: "LOGIN_CALLBACK_INVALID")) { try await coordinator.completeBrowserLogin(callback: forged) }
+    #expect(await transport.calls.contains { $0.path == "/api/auth/desktop/browser/exchange" } == false)
+
+    let callback = URL(string: "drawoffer://auth/callback?code=desktop:0123456789abcdef.fixture&state=\(challenge.state)")!
+    let user = try await coordinator.completeBrowserLogin(callback: callback)
+    #expect(user.id == "1")
+    let exchange = await transport.calls.first { $0.path == "/api/auth/desktop/browser/exchange" }
+    #expect(exchange?.body?["code"] == "desktop:0123456789abcdef.fixture")
+    #expect(exchange?.body?["code_verifier"]?.count == 43)
+    #expect(exchange?.body?["code_verifier"] != query["challenge"])
+    #expect(try store.load(scope: "fixture")?.refreshToken == "fixture-session.new-secret")
+    // The challenge is single use.
+    await #expect(throws: APIError.unauthorized) { try await coordinator.completeBrowserLogin(callback: callback) }
+}
+
+@Test func desktopBrowserLoginRejectsCallbackAfterSignOut() async throws {
+    let store = CredentialStore()
+    try store.clear(scope: "fixture")
+    let transport = SessionTransport()
+    let coordinator = SessionCoordinator(transport: transport, tokens: store)
+    let challenge = try await coordinator.beginBrowserLogin(clientVersion: "1.0.0")
+    try await coordinator.signOut()
+    let callback = URL(string: "drawoffer://auth/callback?code=desktop:0123456789abcdef.fixture&state=\(challenge.state)")!
+    await #expect(throws: APIError.unauthorized) { try await coordinator.completeBrowserLogin(callback: callback) }
+    #expect(await transport.calls.contains { $0.path == "/api/auth/desktop/browser/exchange" } == false)
 }

@@ -9,6 +9,8 @@ public enum AccountRequest {
         case "/api/account/contact-email": return method == "PUT"
         case "/api/account/user-profile": return ["GET", "PUT"].contains(method)
         case "/api/account/avatar": return ["PUT", "DELETE"].contains(method)
+        case "/api/account/career-profile": return ["GET", "PUT"].contains(method)
+        case "/api/account/career-profile/read-resume": return method == "POST"
         default: return false
         }
     }

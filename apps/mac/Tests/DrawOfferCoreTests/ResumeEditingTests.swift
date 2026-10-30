@@ -78,3 +78,20 @@ private let document = """
     let avatar = ResumeDocument.avatar(nil, src: "/api/resumes/1/assets/a.png")
     #expect(avatar["width"]?.numberValue == 96 && avatar["align"] == .null && avatar.text("media_kind") == "avatar")
 }
+
+@Test func sectionFocusBuildsLinesAndReplacesOneLine() throws {
+    let entry: JSONValue = .object([
+        "node_id": .string("node_entry_fixture_000001"),
+        "fields": .object(["organization": .object(["value": .string("虚构科技公司")])]),
+        "blocks": .array([.object(["node_id": .string("node_list_fixture_00001"), "block_type": .string("bullet_list"),
+            "items": .array([.object(["node_id": .string("node_item_fixture_00001"), "runs": ResumeDocument.plainRuns("负责前端开发")])])])]),
+    ])
+    let unit = try #require(SectionFocus.unit(entry: entry))
+    #expect(unit.heading == "虚构科技公司")
+    #expect(unit.lines == [SectionFocus.Line(id: "node_item_fixture_00001", text: "负责前端开发")])
+    let document: JSONValue = .object(["sections": .array([.object(["entries": .array([entry])])])])
+    let next = try #require(SectionFocus.replacing(document, lineID: "node_item_fixture_00001", with: "主导前端重构，首屏耗时降低 40%"))
+    let item = next["sections"]?.items.first?["entries"]?.items.first?["blocks"]?.items.first?["items"]?.items.first
+    #expect(ResumeDocument.runsText(item?["runs"]) == "主导前端重构，首屏耗时降低 40%")
+    #expect(SectionFocus.replacing(document, lineID: "missing", with: "x") == nil)
+}

@@ -26,7 +26,7 @@ public enum CareerBoard {
         return label == "待投递" ? "待投递" : "筛选中"
     }
 
-    static func stableType(_ raw: JSONValue) -> String {
+    public static func stableType(_ raw: JSONValue) -> String {
         if let current = raw["current_stage"], current != .null, !current.text("stage_type").isEmpty { return current.text("stage_type") }
         let type = raw.text("current_stage_type")
         if type == "hr" { return "interview" }

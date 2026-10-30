@@ -16,7 +16,7 @@ struct WorkspaceView: View {
     }
     @State private var loginRequest: LoginRequest?
     @State private var pendingCreateKey: String?
-    private struct ChatTarget: Equatable { let token = UUID(); let sessionID: String?; let initial: String? }
+    private struct ChatTarget: Equatable { let token = UUID(); let sessionID: String?; let initial: String?; var model: String? = nil }
     @State private var chat: ChatTarget?
     @State private var agentSessions = AgentSessionsModel()
     @State private var focusResumeID: String?
@@ -25,80 +25,31 @@ struct WorkspaceView: View {
     @State private var homeDraft = ""
     @State private var pluginNotice = false
     @State private var router = WorkspaceRouter()
+    @State private var announcements = AnnouncementCenter()
+    @State private var plansPresented = false
+    /// 首页星图“去练”带过去的练习焦点（模拟面试首页读取后清空）。
+    @State private var mockFocus: PracticeFocus?
+    /// 首页“选择文件”导入简历：我的简历页收到后打开导入。
+    @State private var importRequest: UUID?
 
     private var user: User? {
         if case .signedIn(let user) = session.phase { return user }
         return nil
     }
 
+    /// Web 编辑器用 `V3Shell bare` + `.wb3-content { inset: 0; border: 0; radius: 0 }`：不显示侧栏，编辑器铺满窗口。
+    private var bare: Bool { selection == .resumes && editResumeID != nil && user != nil }
+
     var body: some View {
-        HStack(spacing: 13) {
-            VStack(alignment: .leading, spacing: 4) {
-                Button { selection = .home } label: {
-                    if let url = Bundle.module.url(forResource: "wordmark", withExtension: "png", subdirectory: "Branding"),
-                       let image = NSImage(contentsOf: url) {
-                        Image(nsImage: image).resizable().scaledToFit().frame(width: 146, height: 30)
-                    } else { Text("DrawOffer").font(.title3.bold()) }
-                }.buttonStyle(.plain).accessibilityLabel("DrawOffer 首页").padding(.leading, 8).padding(.top, 24).padding(.bottom, 10)
-                Button { selection = .home; homeDraft = "" } label: {
-                    Label("新建对话", systemImage: "plus").font(.system(size: 13.5))
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 10).frame(height: 34)
-                }.buttonStyle(.plain)
-                VStack(spacing: 4) {
-                    ForEach(WorkspaceSection.sidebar) { section in
-                        Button { selection = section } label: {
-                            Label(section.title, systemImage: section.symbol)
-                                .font(.system(size: 14, weight: selection == section ? .medium : .regular))
-                                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 10).frame(height: 34)
-                                .foregroundStyle(selection == section ? Color(hex: 0x1D1D1B) : Color(hex: 0x55554F))
-                                .background(selection == section ? Color(hex: 0xE6E6E2) : .clear, in: RoundedRectangle(cornerRadius: 8))
-                        }.buttonStyle(.plain)
-                    }
-                }.padding(.top, 12)
-                HStack {
-                    Text("最近对话").font(.system(size: 11.5)).foregroundStyle(Color(hex: 0x96968F))
-                    Spacer()
-                    Button { selection = .home; homeDraft = "" } label: { Image(systemName: "plus") }
-                        .buttonStyle(.plain).accessibilityLabel("新建对话")
-                }.padding(.horizontal, 12).padding(.top, 22).padding(.bottom, 8)
-                if user == nil || (agentSessions.loaded && agentSessions.sessions.isEmpty) {
-                    Text(user == nil ? "登录后读取对话" : "还没有对话")
-                        .font(.system(size: 12)).foregroundStyle(Color(hex: 0x96968F)).padding(.horizontal, 12)
-                } else {
-                    ScrollView {
-                        VStack(spacing: 2) {
-                            ForEach(agentSessions.sessions.prefix(20), id: \.self) { item in
-                                let active = selection == .assistant && chat?.sessionID == item.text("id")
-                                Button { chat = ChatTarget(sessionID: item.text("id"), initial: nil); selection = .assistant } label: {
-                                    Text(item.text("title").isEmpty ? "新对话" : item.text("title")).font(.system(size: 13)).lineLimit(1)
-                                        .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 10).frame(height: 30)
-                                        .foregroundStyle(active ? Color(hex: 0x1D1D1B) : Color(hex: 0x55554F))
-                                        .background(active ? Color(hex: 0xE6E6E2) : .clear, in: RoundedRectangle(cornerRadius: 8))
-                                }.buttonStyle(.plain)
-                            }
-                        }
-                    }.frame(maxHeight: 240)
-                }
-                Spacer()
-                if user == nil {
-                    Button { requestLogin() } label: {
-                        HStack(spacing: 8) {
-                            Text("我").foregroundStyle(.white).frame(width: 36, height: 36).background(Color(hex: 0x17191C), in: Circle())
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("游客模式").font(.system(size: 13.5, weight: .medium))
-                                Text("登录 / 恢复登录").font(.system(size: 11)).foregroundStyle(Color(hex: 0x96968F))
-                            }
-                        }
-                    }.buttonStyle(.plain).padding(.horizontal, 6).padding(.bottom, 26)
-                } else {
-                    Menu {
-                        Text(user?.nickname ?? "个人资料")
-                        Button("账号设置") { selection = .account }
-                        Button("退出登录") { Task { await session.signOut() } }
-                    } label: { Label(user?.nickname ?? "个人资料", systemImage: "person.crop.circle") }
-                        .padding(.bottom, 26)
-                }
-            }.padding(.horizontal, 14).frame(width: 216)
+        HStack(spacing: bare ? 0 : 13) {
+            if !bare {
+            WorkspaceSidebar(selection: $selection, activeChatID: selection == .assistant ? chat?.sessionID : nil, sessions: agentSessions,
+                             openChat: { id in chat = ChatTarget(sessionID: id, initial: nil); selection = .assistant },
+                             newChat: { chat = nil; homeDraft = ""; selection = .home },
+                             requestLogin: { requestLogin() },
+                             openPlans: { plansPresented = true },
+                             chatDeleted: { id in if chat?.sessionID == id { chat = nil; selection = .home } })
+            }
             VStack(spacing: 0) {
                 if let message = session.errorMessage {
                     HStack {
@@ -108,38 +59,11 @@ struct WorkspaceView: View {
                         }
                     }.padding(12).frame(maxWidth: .infinity).background(.yellow.opacity(0.1))
                 }
-                switch selection {
-                case .home, nil:
-                    AssistantHomeView(nickname: user?.nickname, draft: $homeDraft,
-                        browse: { selection = .templates }, requireAccount: { requestLogin(reason: "登录 DrawOffer；你的输入会保留。") }, showPlugin: { pluginNotice = true },
-                        navigate: { selection = $0 }, editResume: { editResumeID = $0; selection = .resumes },
-                        send: { text in chat = ChatTarget(sessionID: nil, initial: text); homeDraft = ""; selection = .assistant })
-                case .datasets: DatasetLibraryView(requireAccount: { requestLogin(reason: "登录后管理你的资料库。") })
-                        case .mock: MockInterviewView(requireAccount: { requestLogin(reason: "登录后开始模拟面试。") }, showSchedule: { selection = .schedule })
-                case .schedule: InterviewScheduleView(requireAccount: { requestLogin(reason: "登录后管理面试安排。") })
-                case .jobs: JobsBoardView(requireAccount: { requestLogin(reason: "登录后管理岗位和求职进度。") })
-                case .templates:
-                    TemplatesView(pendingCreateKey: $pendingCreateKey,
-                                  requireLogin: { loginRequest = LoginRequest(template: $0) },
-                                  onCreated: { id in editResumeID = id.isEmpty ? nil : id; selection = .resumes })
-                case .resumes:
-                    ResumesView(focusResumeID: $focusResumeID, editResumeID: $editResumeID, browse: { selection = .templates }, login: { requestLogin() })
-                case .assistant:
-                    if user != nil, let chat {
-                        AssistantChatView(sessionID: chat.sessionID, initialMessage: chat.initial,
-                                          created: { _ in Task { await agentSessions.load(api: session.api, account: user?.id ?? "") } },
-                                          deleted: { self.chat = nil; selection = .home; Task { await agentSessions.load(api: session.api, account: user?.id ?? "") } },
-                                          sessionsChanged: { Task { await agentSessions.load(api: session.api, account: user?.id ?? "") } })
-                            .id(chat.token)
-                    } else { PlaceholderView(section: .assistant) }
-                case .account:
-                    if user != nil { AccountView() } else { PlaceholderView(section: .account) }
-                case let section?: PlaceholderView(section: section)
-                }
+                mainContent
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(.white).clipShape(RoundedRectangle(cornerRadius: 16))
-                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color(hex: 0xE4E4E0)))
-                .padding(.vertical, 12).padding(.trailing, 12)
+                .background(.white).clipShape(RoundedRectangle(cornerRadius: bare ? 0 : 16))
+                .overlay(RoundedRectangle(cornerRadius: bare ? 0 : 16).stroke(bare ? .clear : Color(hex: 0xE4E4E0)))
+                .padding(.vertical, bare ? 0 : 12).padding(.trailing, bare ? 0 : 12)
         }.background(Color(hex: 0xF1F1EF))
         .alert("安装浏览器插件", isPresented: $pluginNotice) {
             Button("在浏览器打开") { WebBridge.open("/career/applications", api: session.api) }
@@ -159,11 +83,25 @@ struct WorkspaceView: View {
             }.frame(width: 520, height: 560)
         }
         .environment(router)
+        .environment(announcements)
+        .sheet(isPresented: Binding(get: { announcements.detail != nil }, set: { if !$0 { announcements.detail = nil } })) {
+            AnnouncementDetailSheet().environment(announcements)
+        }
+        .sheet(isPresented: $plansPresented) { PlansSheet() }
+        .task(id: user?.id ?? "") {
+            announcements.reset(account: user?.id ?? "")
+            await announcements.refresh(api: session.api)
+            announcements.autoOpenImportant(api: session.api)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await announcements.refresh(api: session.api); announcements.autoOpenImportant(api: session.api) }
+        }
         .onChange(of: router.pending) {
             switch router.take() {
             case .section(let section): selection = section
             case .draft(let text): homeDraft = String(text.prefix(4000)); selection = .home
             case .editResume(let id): editResumeID = id; selection = .resumes
+            case .plans: plansPresented = true
             case nil: break
             }
         }
@@ -193,6 +131,58 @@ struct WorkspaceView: View {
                 selection = .home
             }
         }
+    }
+
+    @ViewBuilder private var mainContent: some View {
+        switch selection {
+        case .home, nil:
+            if user != nil {
+                // 登录后与 Web 一致：首页是“哪里要提升”星图；游客仍显示引导首页。
+                HomeImproveView(draft: $homeDraft,
+                    send: startChat,
+                    practice: { focus in mockFocus = focus; selection = .mock },
+                    editResume: { editResumeID = $0; selection = .resumes },
+                    navigate: { selection = $0 },
+                    importResume: { importRequest = UUID(); selection = .resumes })
+            } else {
+                AssistantHomeView(nickname: nil, draft: $homeDraft,
+                    browse: { selection = .templates }, requireAccount: { requestLogin(reason: "登录 DrawOffer；你的输入会保留。") }, showPlugin: { pluginNotice = true },
+                    navigate: { selection = $0 }, editResume: { editResumeID = $0; selection = .resumes },
+                    send: { text in chat = ChatTarget(sessionID: nil, initial: text); homeDraft = ""; selection = .assistant })
+            }
+        case .datasets: DatasetLibraryView(requireAccount: { requestLogin(reason: "登录后管理你的资料库。") })
+                case .mock: MockInterviewView(requireAccount: { requestLogin(reason: "登录后开始模拟面试。") }, showSchedule: { selection = .schedule }, incomingFocus: $mockFocus)
+        case .schedule: InterviewScheduleView(requireAccount: { requestLogin(reason: "登录后管理面试安排。") })
+        case .jobs: JobsBoardView(requireAccount: { requestLogin(reason: "登录后管理岗位和求职进度。") })
+        case .templates:
+            TemplatesView(pendingCreateKey: $pendingCreateKey,
+                          requireLogin: { loginRequest = LoginRequest(template: $0) },
+                          onCreated: { id in editResumeID = id.isEmpty ? nil : id; selection = .resumes })
+        case .resumes:
+            ResumesView(focusResumeID: $focusResumeID, editResumeID: $editResumeID, browse: { selection = .templates }, login: { requestLogin() }, importRequest: importRequest)
+        case .assistant:
+            if user != nil, let chat {
+                AssistantChatView(sessionID: chat.sessionID, initialMessage: chat.initial,
+                                  created: { _ in Task { await agentSessions.load(api: session.api, account: user?.id ?? "") } },
+                                  deleted: { self.chat = nil; selection = .home; Task { await agentSessions.load(api: session.api, account: user?.id ?? "") } },
+                                  sessionsChanged: { Task { await agentSessions.load(api: session.api, account: user?.id ?? "") } },
+                                  runningChanged: { id, running in
+                                      if running { agentSessions.runningIDs.insert(id) } else { agentSessions.runningIDs.remove(id) }
+                                  })
+                    .id(chat.token)
+            } else { PlaceholderView(section: .assistant) }
+        case .opportunities:
+            PlaceholderView(section: .opportunities)
+        case .account:
+            if user != nil { AccountView() } else { PlaceholderView(section: .account) }
+        case let section?: PlaceholderView(section: section)
+        }
+    }
+
+    private func startChat(_ text: String, _ model: String?) {
+        chat = ChatTarget(sessionID: nil, initial: text, model: model)
+        homeDraft = ""
+        selection = .assistant
     }
 
     private func requestLogin(reason: String? = nil) {
