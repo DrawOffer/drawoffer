@@ -29,11 +29,11 @@ public sealed class DatasetLibraryPage : Page {
     static List<JsonNode> Items(JsonNode? n)=>n?.AsArray().OfType<JsonNode>().ToList()??[];
     static readonly FontFamily LibrarySans=new("ms-appx:///Assets/Library/LibrarySans-Regular.otf#DrawOffer Library Sans");
     static readonly FontFamily LibrarySerif=new("ms-appx:///Assets/Library/LibrarySerif-SemiBold.ttf#DrawOffer Library Serif");
-    static TextBlock T(string s,double size=13,bool muted=false){var text=InterviewSchedulePage.Text(s,size,muted);text.FontFamily=LibrarySans;return text;}
+    static TextBlock T(string s,double size=13,bool muted=false){var text=LegacyControls.Text(s,size,muted);text.FontFamily=LibrarySans;return text;}
     static StackPanel Stack(params UIElement[] items){var p=new StackPanel{Spacing=12};foreach(var x in items)p.Children.Add(x);return p;}
     static StackPanel Row(params UIElement[] items){var p=Stack(items);p.Orientation=Orientation.Horizontal;return p;}
     static Border Card(UIElement child)=>new(){Child=child,Padding=new Thickness(16),CornerRadius=new CornerRadius(14),Background=new SolidColorBrush(Microsoft.UI.Colors.White),BorderThickness=new Thickness(1),BorderBrush=new SolidColorBrush(Windows.UI.Color.FromArgb(255,228,228,224))};
-    Button B(string label,Action action,bool dark=false){var b=InterviewSchedulePage.Button(label,action,dark);b.IsEnabled=!_busy;return b;}
+    Button B(string label,Action action,bool dark=false){var b=LegacyControls.Button(label,action,dark);b.IsEnabled=!_busy;return b;}
     bool SignedIn=>App.Session.Phase==SessionViewModel.SessionPhase.SignedIn;
     string Title=>_folder==""?"资料库":_folder=="uncategorized"?"未分类":S(_folders.FirstOrDefault(x=>S(x,"id")==_folder),"name");
     long MediaLimit=>Math.Min(512L*1024*1024,_limits?["max_media_file_bytes"]?.GetValue<long>()??500L*1024*1024);

@@ -13,7 +13,7 @@ namespace DrawOffer.App.Views;
 public sealed class MockInterviewPage : Page {
     readonly StackPanel _page=new(){Spacing=24,MaxWidth=1200,Padding=new Thickness(32,52,32,40)};
     readonly CancellationTokenSource _life=new();
-    readonly TextBlock _error=InterviewSchedulePage.Text("",12);
+    readonly TextBlock _error=LegacyControls.Text("",12);
     List<MockInterview> _records=[]; List<CareerApplication> _jobs=[]; List<JsonNode> _resumes=[],_materials=[];
     List<ScheduledInterview> _dates=[];
     MockInterview? _detail;
@@ -24,8 +24,8 @@ public sealed class MockInterviewPage : Page {
     HashSet<string> _chosen=[];
     (string Command,JsonNode Body)? _uncertain;
     ContentDialog? _dialog;
-    static TextBlock T(string value,double size=13,bool muted=false)=>InterviewSchedulePage.Text(value,size,muted);
-    Button B(string title,Action action,bool dark=false){var button=InterviewSchedulePage.Button(title,action,dark);button.IsEnabled=!_busy;return button;}
+    static TextBlock T(string value,double size=13,bool muted=false)=>LegacyControls.Text(value,size,muted);
+    Button B(string title,Action action,bool dark=false){var button=LegacyControls.Button(title,action,dark);button.IsEnabled=!_busy;return button;}
     static StackPanel Stack(params UIElement[] items){var s=new StackPanel{Spacing=14};foreach(var item in items)s.Children.Add(item);return s;}
     static StackPanel Row(params UIElement[] items){var s=Stack(items);s.Orientation=Orientation.Horizontal;return s;}
     static Border Card(UIElement content)=>new(){Child=content,Padding=new Thickness(24),CornerRadius=new CornerRadius(14),BorderThickness=new Thickness(1),BorderBrush=new SolidColorBrush(Windows.UI.Color.FromArgb(255,228,228,224)),Background=new SolidColorBrush(Microsoft.UI.Colors.White)};

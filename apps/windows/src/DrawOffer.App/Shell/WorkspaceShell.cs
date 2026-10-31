@@ -255,8 +255,7 @@ public sealed class WorkspaceShell : Grid
                 () => Select(WorkspaceSection.Templates), () => RequestLoginAsync(reason: "登录 DrawOffer；你的输入会保留。"), ShowPluginAsync),
             WorkspaceSection.Datasets => new DatasetLibraryPage(),
             WorkspaceSection.Mock => new MockInterviewPage(),
-            WorkspaceSection.Schedule => new InterviewSchedulePage(),
-            // W3：投递看板按 Mac `JobsBoardView` 重写；旧 JobsBoardPage 仍被旧日程页引用，W4 一并移除
+            WorkspaceSection.Schedule => new Views.Career.InterviewScheduleView(() => _ = RequestLoginAsync(reason: "登录后管理面试安排。")),
             WorkspaceSection.Jobs => new Views.Career.JobsBoardView(() => _ = RequestLoginAsync(reason: "登录后管理岗位和求职进度。")),
             WorkspaceSection.Templates => new TemplatesPage(),
             // 与 Mac `ResumesView.body` 一致：有待编辑的简历时直接进编辑器（铺满窗口、不显示侧栏），关闭后回到列表
