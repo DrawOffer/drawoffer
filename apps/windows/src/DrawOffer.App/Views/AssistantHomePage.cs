@@ -1,3 +1,4 @@
+using DrawOffer.Core.Models;
 using System.Text.Json.Nodes;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -16,7 +17,7 @@ public sealed class AssistantHomePage : Page
         JsonNode content;
         try { content = JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Assets", "Home", "content.json")))!; }
         catch { Content = new TextBlock { Text = "首页信息暂时无法读取，请重新打开客户端。", Margin = new Thickness(52) }; return; }
-        var hour = DateTime.Now.Hour;
+        var hour = Beijing.Now.Hour;
         var greeting = hour < 11 ? "早上好" : hour < 13 ? "中午好" : hour < 18 ? "下午好" : "晚上好";
         greeting += nickname is null ? "。" : $"，{nickname}。";
         var panel = new StackPanel { Width = 720, Spacing = 0, HorizontalAlignment = HorizontalAlignment.Center };

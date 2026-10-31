@@ -39,9 +39,9 @@ internal sealed class ScheduleSessionForm {
     }
     private void Render(){
         View.Children.Clear();_fields.Clear();
-        View.Children.Add(InterviewSchedulePage.Text(_item.Company+" · "+_item.Title,18));View.Children.Add(InterviewSchedulePage.Text(_item.Label+" · "+_item.Status(DateTimeOffset.Now),13,true));
+        View.Children.Add(InterviewSchedulePage.Text(_item.Company+" · "+_item.Title,18));View.Children.Add(InterviewSchedulePage.Text(_item.Label+" · "+_item.Status(Beijing.Now),13,true));
         if(_kind=="detail"){
-            View.Children.Add(InterviewSchedulePage.Text($"{_item.Start.ToLocalTime():yyyy-MM-dd HH:mm} — {_item.End.ToLocalTime():yyyy-MM-dd HH:mm}"));
+            View.Children.Add(InterviewSchedulePage.Text($"{_item.Start.ToBeijing():yyyy-MM-dd HH:mm} — {_item.End.ToBeijing():yyyy-MM-dd HH:mm}"));
             View.Children.Add(InterviewSchedulePage.Text(_item.OpenWindow?"开放作答窗口":"固定面试场次"));
             var labels=new Dictionary<string,string>{{"mode","方式"},{"meeting_url","会议 / 作答链接"},{"location","地点"},{"interviewer_name","面试官"},{"interviewer_title","面试官职位"},{"preparation_note","准备备注"},{"answer_plan_start_at","个人计划开始"},{"answer_plan_end_at","个人计划结束"},{"questions_markdown","面试问题"},{"review_summary","复盘总结"},{"improvement_markdown","改进计划"}};
             foreach(var pair in labels)if(_item.Text(pair.Key)!="")View.Children.Add(new TextBlock{Text=pair.Value+"："+_item.Text(pair.Key),TextWrapping=TextWrapping.Wrap,IsTextSelectionEnabled=true});
@@ -54,7 +54,7 @@ internal sealed class ScheduleSessionForm {
         }else{
             if(_kind is "reschedule" or "answer-plan"){
                 if(_kind=="answer-plan"){_remove=new CheckBox{Content="清除个人作答计划"};View.Children.Add(_remove);}
-                _startDate=new(){Header="开始日期",Date=_start.ToLocalTime()};_endDate=new(){Header="结束日期",Date=_end.ToLocalTime()};_startTime=new(){Header="开始时间",Time=_start.ToLocalTime().TimeOfDay};_endTime=new(){Header="结束时间",Time=_end.ToLocalTime().TimeOfDay};
+                _startDate=new(){Header="开始日期",Date=_start.ToBeijing()};_endDate=new(){Header="结束日期",Date=_end.ToBeijing()};_startTime=new(){Header="开始时间",Time=_start.ToBeijing().TimeOfDay};_endTime=new(){Header="结束时间",Time=_end.ToBeijing().TimeOfDay};
                 foreach(var field in new FrameworkElement[]{_startDate,_startTime,_endDate,_endTime})View.Children.Add(field);
                 if(_kind=="reschedule"){_conflict=new(){Content="确认仍保存有时间冲突的安排"};View.Children.Add(_conflict);}
             }else if(_kind=="edit"){
@@ -67,7 +67,7 @@ internal sealed class ScheduleSessionForm {
         }
         View.Children.Add(_error);
     }
-    private DateTimeOffset ReadDate(CalendarDatePicker date,TimePicker time)=>ScheduleCalendar.LocalDate(DateOnly.FromDateTime((date.Date??DateTimeOffset.Now).Date),time.Time);
+    private DateTimeOffset ReadDate(CalendarDatePicker date,TimePicker time)=>ScheduleCalendar.LocalDate(DateOnly.FromDateTime((date.Date??Beijing.Now).Date),time.Time);
     private async Task SaveAsync(){
         if(_busy||!_loaded||!_item.Editable)return;
         var from=ReadDate(_startDate,_startTime);var to=ReadDate(_endDate,_endTime);var remove=_kind=="answer-plan"&&_remove.IsChecked==true;
@@ -94,5 +94,6 @@ internal sealed class ScheduleSessionForm {
             foreach(var button in View.Children.OfType<StackPanel>().SelectMany(x=>x.Children.OfType<Button>()))button.IsEnabled=true;
         }
     }
-    private static string WindowsTimezone()=>TimeZoneInfo.TryConvertWindowsIdToIanaId(TimeZoneInfo.Local.Id,out var iana)?iana:TimeZoneInfo.Local.Id;
+    // Schedules are entered and listed in Beijing time whatever zone Windows is set to.
+    private static string WindowsTimezone()=>Beijing.Identifier;
 }

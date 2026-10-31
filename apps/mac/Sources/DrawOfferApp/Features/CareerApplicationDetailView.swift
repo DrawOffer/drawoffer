@@ -689,7 +689,7 @@ struct CareerRescheduleSheet: View {
         busy = true; error = nil; defer { busy = false }
         let formatter = ISO8601DateFormatter()
         // A lost response keeps the same request so a retry cannot apply a second, different change.
-        if payload == nil { payload = .object(["base_lock_version": session["lock_version"] ?? .number(1), "start_at": .string(formatter.string(from: start)), "end_at": .string(formatter.string(from: end)), "timezone": .string(TimeZone.current.identifier)]) }
+        if payload == nil { payload = .object(["base_lock_version": session["lock_version"] ?? .number(1), "start_at": .string(formatter.string(from: start)), "end_at": .string(formatter.string(from: end)), "timezone": .string(Beijing.identifier)]) }
         do {
             _ = try await api.careerRequest(path: "/api/interview-sessions/\(session.text("id"))/reschedule", method: "POST", query: [:], body: payload)
             saved()

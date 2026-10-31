@@ -98,24 +98,24 @@ public struct CareerDetailModel: Sendable {
 
 public enum CareerFormat {
     static func two(_ value: Int) -> String { value < 10 ? "0\(value)" : "\(value)" }
-    public static func monthDay(_ raw: String, calendar: Calendar = .current) -> String {
+    public static func monthDay(_ raw: String, calendar: Calendar = Beijing.calendar) -> String {
         guard let date = CareerApplication.date(raw) else { return "—" }
         let parts = calendar.dateComponents([.month, .day], from: date)
         return two(parts.month ?? 0) + "." + two(parts.day ?? 0)
     }
-    public static func clock(_ raw: String, calendar: Calendar = .current) -> String {
+    public static func clock(_ raw: String, calendar: Calendar = Beijing.calendar) -> String {
         guard let date = CareerApplication.date(raw) else { return "—" }
         let parts = calendar.dateComponents([.hour, .minute], from: date)
         return two(parts.hour ?? 0) + ":" + two(parts.minute ?? 0)
     }
-    public static func range(_ start: String, _ end: String, calendar: Calendar = .current) -> String {
+    public static func range(_ start: String, _ end: String, calendar: Calendar = Beijing.calendar) -> String {
         guard let s = CareerApplication.date(start), let e = CareerApplication.date(end) else { return "—" }
         return calendar.isDate(s, inSameDayAs: e)
             ? "\(monthDay(start, calendar: calendar)) \(clock(start, calendar: calendar))–\(clock(end, calendar: calendar))"
             : "\(monthDay(start, calendar: calendar)) \(clock(start, calendar: calendar)) – \(monthDay(end, calendar: calendar)) \(clock(end, calendar: calendar))"
     }
     /// Offer dates are calendar dates (`YYYY-MM-DD`); never shift them through UTC.
-    public static func offerDate(_ raw: String, calendar: Calendar = .current) -> Date? {
+    public static func offerDate(_ raw: String, calendar: Calendar = Beijing.calendar) -> Date? {
         let parts = raw.split(separator: "-").compactMap { Int($0) }
         guard raw.count == 10, parts.count == 3, parts[0] >= 1000 else { return nil }
         var components = DateComponents(); components.year = parts[0]; components.month = parts[1]; components.day = parts[2]
@@ -123,17 +123,17 @@ public enum CareerFormat {
         let check = calendar.dateComponents([.year, .month, .day], from: date)
         return check.year == parts[0] && check.month == parts[1] && check.day == parts[2] ? date : nil
     }
-    public static func offerDay(_ raw: String, calendar: Calendar = .current) -> String? {
+    public static func offerDay(_ raw: String, calendar: Calendar = Beijing.calendar) -> String? {
         guard let date = offerDate(raw, calendar: calendar) else { return nil }
         let parts = calendar.dateComponents([.month, .day], from: date)
         return two(parts.month ?? 0) + "." + two(parts.day ?? 0)
     }
-    public static func offerLong(_ raw: String, calendar: Calendar = .current) -> String? {
+    public static func offerLong(_ raw: String, calendar: Calendar = Beijing.calendar) -> String? {
         guard let date = offerDate(raw, calendar: calendar) else { return nil }
         let parts = calendar.dateComponents([.year, .month, .day], from: date)
         return "\(parts.year ?? 0)年\(parts.month ?? 0)月\(parts.day ?? 0)日"
     }
-    public static func days(from start: Date, to end: Date, calendar: Calendar = .current) -> Int {
+    public static func days(from start: Date, to end: Date, calendar: Calendar = Beijing.calendar) -> Int {
         calendar.dateComponents([.day], from: calendar.startOfDay(for: start), to: calendar.startOfDay(for: end)).day ?? 0
     }
 }
@@ -182,7 +182,7 @@ public enum CareerSessions {
         let title = session.text("interviewer_title")
         return title.isEmpty ? name : "\(name)（\(title)）"
     }
-    public static func line(_ session: JSONValue, withRole: Bool = false, calendar: Calendar = .current) -> String {
+    public static func line(_ session: JSONValue, withRole: Bool = false, calendar: Calendar = Beijing.calendar) -> String {
         if session.text("schedule_kind") == "open_window" {
             let planStart = session.text("answer_plan_start_at"), planEnd = session.text("answer_plan_end_at")
             let plan = !planStart.isEmpty && !planEnd.isEmpty ? " · 我的作答计划 " + CareerFormat.range(planStart, planEnd, calendar: calendar) : ""
@@ -251,7 +251,7 @@ extension CareerDetailModel {
         return ["screening", "assessment", "written_test"].contains(stable) ? stable : "interview"
     }
 
-    public init(application app: JSONValue, sessions all: [JSONValue], now: Date = Date(), calendar: Calendar = .current) {
+    public init(application app: JSONValue, sessions all: [JSONValue], now: Date = Date(), calendar: Calendar = Beijing.calendar) {
         func md(_ raw: String) -> String { CareerFormat.monthDay(raw, calendar: calendar) }
         func days(_ raw: String) -> Int { CareerApplication.date(raw).map { max(0, CareerFormat.days(from: $0, to: now, calendar: calendar)) } ?? 0 }
         let columnKey = Self.column(app)

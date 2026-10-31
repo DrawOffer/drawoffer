@@ -31,7 +31,7 @@ public sealed class MockInterviewPage : Page {
     static Border Card(UIElement content)=>new(){Child=content,Padding=new Thickness(24),CornerRadius=new CornerRadius(14),BorderThickness=new Thickness(1),BorderBrush=new SolidColorBrush(Windows.UI.Color.FromArgb(255,228,228,224)),Background=new SolidColorBrush(Microsoft.UI.Colors.White)};
     static string S(JsonNode? node,string key)=>node?[key]?.GetValue<string>()??"";
     static double N(JsonNode? node,string key)=>node?[key]?.GetValue<double>()??0;
-    static string Date(string value)=>DateTimeOffset.TryParse(value,out var date)?date.ToLocalTime().ToString("M月d日 HH:mm"):"—";
+    static string Date(string value)=>DateTimeOffset.TryParse(value,out var date)?date.ToBeijing().ToString("M月d日 HH:mm"):"—";
     static IEnumerable<JsonNode> Items(JsonNode? node)=>node?.AsArray().Where(x=>x is not null).Select(x=>x!)??Enumerable.Empty<JsonNode>();
     bool SignedIn=>App.Session.Phase==SessionViewModel.SessionPhase.SignedIn;
     public MockInterviewPage(){Content=new ScrollViewer{Content=_page};Loaded+=async(_,_)=>{App.Session.PropertyChanged+=SessionChanged;Render();await Load();};Unloaded+=(_,_)=>{++_generation;_life.Cancel();_dialog?.Hide();App.Session.PropertyChanged-=SessionChanged;};}
@@ -54,7 +54,7 @@ public sealed class MockInterviewPage : Page {
     void Header(string title,string subtitle,bool back=true){if(back)_page.Children.Add(B("‹ 模拟面试",Back));else _page.Children.Add(T("MOCK INTERVIEW · AI 练习",11,true));var heading=T(title,28);heading.FontFamily=new FontFamily("SimSun");heading.FontWeight=Microsoft.UI.Text.FontWeights.SemiBold;_page.Children.Add(heading);_page.Children.Add(T(subtitle,13,true));}
     void Render(){_page.Children.Clear();if(_screen=="home")Home();else if(_screen=="records")Records();else if(_screen=="new")Configuration();else if(_detail is {} item)Detail(item);if(_busy)_page.Children.Add(new ProgressRing{IsActive=true,Width=24,Height=24});_page.Children.Add(_error);_page.Children.Add(B("刷新",()=>_=Load()));}
     void Home(){Header("模拟面试","从一个在投岗位开始，AI 会按岗位 JD 和你的简历出题。",false);_page.Children.Add(Row(B($"练习记录  {(SignedIn&&!_loaded?"—":_records.Count.ToString())}",()=>{_screen="records";Render();_=Load();}),B("开始新面试",()=>_=Start(),true)));
-        var next=_dates.Where(x=>x.Editable&&x.Start>=DateTimeOffset.Now).OrderBy(x=>x.Start).FirstOrDefault();
+        var next=_dates.Where(x=>x.Editable&&x.Start>=Beijing.Now).OrderBy(x=>x.Start).FirstOrDefault();
         if(next is not null)_page.Children.Add(Card(Row(Stack(T(Date(next.Text("start_at")),18),T(next.Company+" · "+next.Title,18),T(next.Label,12,true)),B("针对这场练一次",()=>_=Start(next.ApplicationId),true))));
         else if(_records.Count==0&&(!SignedIn||_loaded))_page.Children.Add(Card(Row(Stack(T("还没有面试安排，也还没练过",18),T("选一个在投岗位做第一场练习；添加面试时间后，最近的一场会出现在这里。",13,true),T("① 选岗位    ② 答 5 道题 · 约 25 分钟    ③ 拿到评估报告",12)),B("添加面试时间",()=>WorkspacePage.Current.Navigate(WorkspaceSection.Schedule)))));
         if(_records.FirstOrDefault(x=>x.Active) is {} active)_page.Children.Add(Card(Row(T(active.Title+" · "+active.Label),B("继续本场",()=>Open(active),true))));
