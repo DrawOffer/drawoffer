@@ -424,16 +424,16 @@ private struct CreditsPanel: View {
 
     private func monthDay(_ value: String) -> String {
         guard let date = CareerApplication.date(value) else { return "" }
-        let parts = Calendar.current.dateComponents([.month, .day], from: date)
+        let parts = Beijing.calendar.dateComponents([.month, .day], from: date)
         return "\(parts.month ?? 0) 月 \(parts.day ?? 0) 日"
     }
 
     /// 「今天 15:30」或「10-26 15:30」。
     private func stamp(_ value: String) -> String {
         guard let date = CareerApplication.date(value) else { return "" }
-        let format = DateFormatter()
+        let format = Beijing.formatter()
         format.dateFormat = "HH:mm"
-        if Calendar.current.isDateInToday(date) { return "今天 " + format.string(from: date) }
+        if Beijing.calendar.isDateInToday(date) { return "今天 " + format.string(from: date) }
         format.dateFormat = "MM-dd HH:mm"
         return format.string(from: date)
     }
@@ -611,7 +611,7 @@ private struct InvitePanel: View {
         let status = row.text("status")
         let tag: (String, Color, Color) = ["pending": ("待结算", Color(hex: 0xFBF0E2), Color(hex: 0xB8661A)), "paid": ("已到账", Color(hex: 0xE7F3EC), Color(hex: 0x2E7D4F))][status]
             ?? ("已退款", Color(hex: 0xF1F1EE), V3.fnt)
-        let date = CareerApplication.date(row.text("createTime")).map { d in let p = Calendar.current.dateComponents([.month, .day], from: d); return String(format: "%d-%02d", p.month ?? 0, p.day ?? 0) } ?? ""
+        let date = CareerApplication.date(row.text("createTime")).map { d in let p = Beijing.calendar.dateComponents([.month, .day], from: d); return String(format: "%d-%02d", p.month ?? 0, p.day ?? 0) } ?? ""
         return HStack(spacing: 12) {
             Text(String(row.text("buyerLabel").prefix(1))).font(V3.sans(12)).foregroundStyle(V3.sub).frame(width: 28, height: 28).background(Color(hex: 0xF3F3F0), in: Circle())
             Text("\(row.text("buyerLabel")) 开通\(row.text("planTitle"))").foregroundStyle(status == "void" ? V3.fnt : V3.txt).frame(maxWidth: .infinity, alignment: .leading)

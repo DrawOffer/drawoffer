@@ -150,7 +150,7 @@ struct AccountView: View {
 
     private var registeredText: String {
         guard let date = CareerApplication.date(user.text("registered_at")) else { return "—" }
-        let parts = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        let parts = Beijing.calendar.dateComponents([.year, .month, .day], from: date)
         return "\(parts.year ?? 0)年\(parts.month ?? 0)月\(parts.day ?? 0)日"
     }
 

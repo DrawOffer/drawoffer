@@ -118,7 +118,7 @@ public struct CareerApplication: Identifiable, Sendable {
         let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let date = formatter.date(from: text) ?? ISO8601DateFormatter().date(from: text) { return date }
         // 不带时区的时间（如 `2026-10-31T06:28:41.227684`）按本地时间读，与浏览器 `new Date()` 一致。
-        let local = DateFormatter(); local.locale = Locale(identifier: "en_US_POSIX"); local.timeZone = .current
+        let local = Beijing.formatter(); local.locale = Locale(identifier: "en_US_POSIX"); local.timeZone = .current
         for pattern in ["yyyy-MM-dd'T'HH:mm:ss.SSSSSS", "yyyy-MM-dd'T'HH:mm:ss.SSS", "yyyy-MM-dd'T'HH:mm:ss"] {
             local.dateFormat = pattern; if let date = local.date(from: text) { return date }
         }

@@ -32,7 +32,7 @@ struct InterviewScheduleView: View {
     @State private var overflow: Date?
     @State private var showAllWindows = false
     @State private var pageGutter: CGFloat = 32
-    private let calendar = Calendar.current
+    private let calendar = Beijing.calendar
     private static let hourHeight: CGFloat = 64
     private static let gutter: CGFloat = 52
     private var account: String { if case .signedIn(let user) = session.phase { return user.id }; return "" }
@@ -40,7 +40,7 @@ struct InterviewScheduleView: View {
     private var month: Date { calendar.dateInterval(of: .month, for: anchor)!.start }
     private var visible: [ScheduledInterview] { interviews.filter { $0.raw.text("status") != "cancelled" } }
     private func plus(_ date: Date, _ days: Int) -> Date { calendar.date(byAdding: .day, value: days, to: date)! }
-    private func format(_ date: Date, _ pattern: String) -> String { let f = DateFormatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = pattern; return f.string(from: date) }
+    private func format(_ date: Date, _ pattern: String) -> String { let f = Beijing.formatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = pattern; return f.string(from: date) }
     private func at(_ day: Date, minute: Int) -> Date { calendar.date(bySettingHour: minute / 60, minute: minute % 60, second: 0, of: day)! }
     private var periodStart: Date { mode == "month" ? month : week }
     private var periodEnd: Date { mode == "month" ? calendar.date(byAdding: .month, value: 1, to: month)! : plus(week, 7) }
@@ -504,7 +504,7 @@ private struct ScheduleDetailDialog: View {
         if active { return ("进行中", V3.blue, V3.blueSoft) }
         return (isExam || isAI ? "待参加" : "待面试", V3.blue, V3.blueSoft)
     }
-    private func format(_ date: Date, _ pattern: String) -> String { let f = DateFormatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = pattern; return f.string(from: date) }
+    private func format(_ date: Date, _ pattern: String) -> String { let f = Beijing.formatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = pattern; return f.string(from: date) }
     private var relative: String {
         let until = current.start.timeIntervalSinceNow
         if !isWindow && !cancelled && !completed && until > 0 {
@@ -625,7 +625,7 @@ private struct ScheduleDetailDialog: View {
     private var art: some View {
         HStack(spacing: 18) {
             VStack(spacing: 0) {
-                Text("\(Calendar.current.component(.month, from: current.start)) 月").font(V3.sans(10)).foregroundStyle(.white).frame(maxWidth: .infinity).frame(height: 23).background(V3.txt)
+                Text("\(Beijing.calendar.component(.month, from: current.start)) 月").font(V3.sans(10)).foregroundStyle(.white).frame(maxWidth: .infinity).frame(height: 23).background(V3.txt)
                 Text(format(current.start, "dd")).font(V3.number(30)).foregroundStyle(V3.txt).frame(height: 44)
                 Text(isWindow ? format(current.end, "HH:mm") + " 截止" : format(current.start, "EEE HH:mm")).font(V3.sans(10)).foregroundStyle(V3.sub)
                 Spacer(minLength: 0)
@@ -776,7 +776,7 @@ private struct ScheduleSessionForm: View {
             busy = false
         }
     }
-    private func display(_ date: Date) -> String { let f = DateFormatter(); f.dateFormat = "M月d日 HH:mm"; return f.string(from: date) }
+    private func display(_ date: Date) -> String { let f = Beijing.formatter(); f.dateFormat = "M月d日 HH:mm"; return f.string(from: date) }
     private func field(_ label: String, _ value: Binding<String>) -> some View { VStack(alignment: .leading, spacing: 6) { Text(label).font(.system(size: 12)); TextField(label, text: value, axis: .vertical).lineLimit(2...6).textFieldStyle(.roundedBorder) }.disabled(frozen != nil) }
     private func fill() {
         guard let item else { return }
@@ -801,7 +801,7 @@ private struct ScheduleSessionForm: View {
                 let f = ISO8601DateFormatter()
                 switch kind {
                 case "reschedule":
-                    body["start_at"] = .string(f.string(from: start)); body["end_at"] = .string(f.string(from: end)); body["timezone"] = .string(TimeZone.current.identifier); body["allow_conflict"] = .bool(allowConflict)
+                    body["start_at"] = .string(f.string(from: start)); body["end_at"] = .string(f.string(from: end)); body["timezone"] = .string(Beijing.identifier); body["allow_conflict"] = .bool(allowConflict)
                 case "answer-plan":
                     body["answer_plan_start_at"] = removePlan ? .null : .string(f.string(from: start)); body["answer_plan_end_at"] = removePlan ? .null : .string(f.string(from: end))
                 case "complete":

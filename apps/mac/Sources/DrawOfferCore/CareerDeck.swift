@@ -64,19 +64,19 @@ public struct CareerLine: Sendable {
 
 public enum CareerDeckFormat {
     public static func two(_ value: Int) -> String { value < 10 ? "0\(value)" : "\(value)" }
-    public static func monthDay(_ date: Date?, calendar: Calendar = .current) -> String {
+    public static func monthDay(_ date: Date?, calendar: Calendar = Beijing.calendar) -> String {
         guard let date else { return "—" }
         let parts = calendar.dateComponents([.month, .day], from: date)
         return two(parts.month ?? 0) + "." + two(parts.day ?? 0)
     }
-    public static func clock(_ date: Date, calendar: Calendar = .current) -> String {
+    public static func clock(_ date: Date, calendar: Calendar = Beijing.calendar) -> String {
         let parts = calendar.dateComponents([.hour, .minute], from: date)
         return two(parts.hour ?? 0) + ":" + two(parts.minute ?? 0)
     }
-    public static func weekday(_ date: Date, calendar: Calendar = .current) -> String {
+    public static func weekday(_ date: Date, calendar: Calendar = Beijing.calendar) -> String {
         "周" + ["日", "一", "二", "三", "四", "五", "六"][(calendar.component(.weekday, from: date) - 1) % 7]
     }
-    public static func dayCount(_ from: Date, _ to: Date, calendar: Calendar = .current) -> Int {
+    public static func dayCount(_ from: Date, _ to: Date, calendar: Calendar = Beijing.calendar) -> Int {
         max(0, CareerFormat.days(from: from, to: to, calendar: calendar))
     }
     /// 「还有 2 天 4 小时」；已过返回 nil。

@@ -262,7 +262,7 @@ struct CareerCalendarPage: View {
             shape.fill(.white).overlay(shape.stroke(Color(hex: 0xE5EAF3))).shadow(color: Color(hex: 0x1A3373).opacity(0.05), radius: 5, y: 3)
                 .rotationEffect(.degrees(5)).offset(x: 6, y: 4)
             VStack(spacing: 0) {
-                Text("\(Calendar.current.component(.month, from: date)) 月").font(V3.sans(18, weight: .medium)).foregroundStyle(.white)
+                Text("\(Beijing.calendar.component(.month, from: date)) 月").font(V3.sans(18, weight: .medium)).foregroundStyle(.white)
                     .frame(maxWidth: .infinity).frame(height: 42).background(head)
                     .overlay(alignment: .top) {
                         HStack {
@@ -271,7 +271,7 @@ struct CareerCalendarPage: View {
                             RoundedRectangle(cornerRadius: 3).frame(width: 6, height: 14)
                         }.foregroundStyle(tone == nil ? Color(hex: 0xD6E2F8) : PD.edge).padding(.horizontal, 34).offset(y: -3)
                     }
-                Text("\(Calendar.current.component(.day, from: date))").font(.system(size: 54, weight: .semibold)).kerning(-1.6).frame(height: 60).padding(.top, 10)
+                Text("\(Beijing.calendar.component(.day, from: date))").font(.system(size: 54, weight: .semibold)).kerning(-1.6).frame(height: 60).padding(.top, 10)
                 Text(CareerDeckFormat.weekday(date)).font(V3.sans(17)).foregroundStyle(PD.mute).frame(height: 22).padding(.top, 4)
                 Spacer(minLength: 0)
             }

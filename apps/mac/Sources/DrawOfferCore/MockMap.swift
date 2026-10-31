@@ -448,11 +448,11 @@ public enum MockMap {
 
     static let weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"]
 
-    public static func dayDiff(_ from: Date, _ to: Date, calendar: Calendar = .current) -> Int {
+    public static func dayDiff(_ from: Date, _ to: Date, calendar: Calendar = Beijing.calendar) -> Int {
         calendar.dateComponents([.day], from: calendar.startOfDay(for: from), to: calendar.startOfDay(for: to)).day ?? 0
     }
 
-    public static func relativeDay(_ date: Date, now: Date, calendar: Calendar = .current) -> String {
+    public static func relativeDay(_ date: Date, now: Date, calendar: Calendar = Beijing.calendar) -> String {
         let diff = dayDiff(now, date, calendar: calendar)
         if diff == 0 { return calendar.component(.hour, from: date) >= 18 ? "今晚" : "今天" }
         if diff == 1 { return "明天" }
@@ -460,11 +460,11 @@ public enum MockMap {
         return "\(calendar.component(.month, from: date))·" + String(format: "%02d", calendar.component(.day, from: date))
     }
 
-    public static func hhmm(_ date: Date, calendar: Calendar = .current) -> String {
+    public static func hhmm(_ date: Date, calendar: Calendar = Beijing.calendar) -> String {
         String(format: "%02d:%02d", calendar.component(.hour, from: date), calendar.component(.minute, from: date))
     }
 
-    public static func mmddDot(_ date: Date, calendar: Calendar = .current) -> String {
+    public static func mmddDot(_ date: Date, calendar: Calendar = Beijing.calendar) -> String {
         String(format: "%02d·%02d", calendar.component(.month, from: date), calendar.component(.day, from: date))
     }
     public static func mmddDot(_ value: String) -> String { CareerApplication.date(value).map { mmddDot($0) } ?? "" }
@@ -564,8 +564,8 @@ public enum MockMap {
             let x = min(1040, 760 + Double(max(0, diff - 1)) * 150)
             var day = 1
             while day < diff && 760 + Double(day - 1) * 150 < x {
-                let date = Calendar.current.date(byAdding: .day, value: day, to: now) ?? now
-                days.append((760 + Double(day - 1) * 150, weekdays[Calendar.current.component(.weekday, from: date) - 1]))
+                let date = Beijing.calendar.date(byAdding: .day, value: day, to: now) ?? now
+                days.append((760 + Double(day - 1) * 150, weekdays[Beijing.calendar.component(.weekday, from: date) - 1]))
                 day += 1
             }
             let label = session.text("stage_label").nonEmptyValue ?? target.application?.text("current_stage_label").nonEmptyValue ?? "面试"

@@ -376,7 +376,7 @@ struct AssistantChatView: View {
     }
 
     static func timeLabel(_ date: Date) -> String {
-        let formatter = DateFormatter()
+        let formatter = Beijing.formatter()
         formatter.dateFormat = "HH:mm"  // Web `formatTime`：始终只显示时分
         return formatter.string(from: date)
     }
@@ -1134,7 +1134,7 @@ private struct SaveDocumentSheet: View {
             guard var current = upload else { return }
             do { _ = try await session.api.uploadDataset(current) }
             catch APIError.server(_, let code) where ["DATASET_NAME_CONFLICT", "DATASET_FILENAME_CONFLICT"].contains(code) {
-                let formatter = DateFormatter(); formatter.dateFormat = "yyyyMMdd-HHmmss"
+                let formatter = Beijing.formatter(); formatter.dateFormat = "yyyyMMdd-HHmmss"
                 current = current.rekey(); current.name = title + "-" + formatter.string(from: Date()) + ".md"; upload = current
                 _ = try await session.api.uploadDataset(current)
             }

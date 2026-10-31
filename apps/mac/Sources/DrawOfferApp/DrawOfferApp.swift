@@ -56,7 +56,8 @@ struct DrawOfferApp: App {
         Window("DrawOffer", id: "main") {
             Group {
                 if let session {
-                    RootView().environment(session)
+                    // Dates and clocks, DatePicker included, read in Beijing time whatever the Mac's zone is.
+                    RootView().environment(session).environment(\.timeZone, Beijing.timeZone).environment(\.calendar, Beijing.calendar)
                         .onOpenURL { url in
                             guard url.scheme == "drawoffer", url.host == "auth" else { return }
                             NSApplication.shared.activate(ignoringOtherApps: true)

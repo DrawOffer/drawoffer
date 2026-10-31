@@ -62,7 +62,7 @@ public struct Announcement: Identifiable, Equatable, Sendable {
     /// 与 Web `announcementDate` 相同：“10 月 19 日”。
     public var dateText: String {
         guard let publishedAt else { return "" }
-        let parts = Calendar.current.dateComponents([.month, .day], from: publishedAt)
+        let parts = Beijing.calendar.dateComponents([.month, .day], from: publishedAt)
         return "\(parts.month ?? 0) 月 \(parts.day ?? 0) 日"
     }
 

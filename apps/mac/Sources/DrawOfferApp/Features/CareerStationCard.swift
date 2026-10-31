@@ -116,7 +116,7 @@ struct CareerStationCard: View {
     private func detail(_ session: JSONValue?) -> JSONValue? { session.flatMap { details[$0.text("id")] } }
     private func dotDate(_ raw: String) -> String? {
         guard let value = CareerFormat.offerDate(raw) else { return nil }
-        let parts = Calendar.current.dateComponents([.year, .month, .day], from: value)
+        let parts = Beijing.calendar.dateComponents([.year, .month, .day], from: value)
         return "\(parts.year ?? 0).\(CareerDeckFormat.two(parts.month ?? 0)).\(CareerDeckFormat.two(parts.day ?? 0))"
     }
     private func money(_ raw: String) -> String? {
