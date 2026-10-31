@@ -20,7 +20,7 @@ public class InterviewScheduleTests {
         var window=Item("4","2029-12-31T09:00:00Z","2030-01-02T10:00:00Z",window:true);
         Assert.Equal(new[]{"1","2","3"},ScheduleCalendar.Upcoming([window,c,a,b],DateTimeOffset.Parse("2030-01-01T08:00:00Z")).Select(x=>x.Id));
     }
-    [Fact] public void EditingDoesNotAllowDeleteOrPatch(){Assert.True(CareerRequest.Allowed("/api/interview-sessions/12","PUT"));Assert.False(CareerRequest.Allowed("/api/interview-sessions/12","DELETE"));Assert.False(CareerRequest.Allowed("/api/interview-sessions/12","PATCH"));}
+    [Fact] public void EditingAllowsPutAndDeleteOnly(){Assert.True(CareerRequest.Allowed("/api/interview-sessions/12","PUT"));Assert.True(CareerRequest.Allowed("/api/interview-sessions/12","DELETE"));Assert.False(CareerRequest.Allowed("/api/interview-sessions/12","POST"));Assert.False(CareerRequest.Allowed("/api/interview-sessions/12","PATCH"));}
 
     [Fact] public void PersonalPlanKeepsOfficialDatesAndIdentity(){
         var official=Item("9","2030-01-01T00:00:00Z","2030-01-05T00:00:00Z",window:true);

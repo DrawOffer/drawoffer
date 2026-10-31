@@ -168,7 +168,7 @@ public sealed class InterviewSchedulePage : Page {
     }
     private async Task CreateAsync(DateTimeOffset start,DateTimeOffset? end=null){
         if(_dialog is not null)return;
-        if(App.Session.Phase!=SessionViewModel.SessionPhase.SignedIn){_pending=start;await WorkspacePage.Current.RequestLoginAsync(reason:"登录后管理面试安排");if(App.Session.Phase!=SessionViewModel.SessionPhase.SignedIn){_pending=null;return;}await LoadAsync();start=_pending??start;_pending=null;}
+        if(App.Session.Phase!=SessionViewModel.SessionPhase.SignedIn){_pending=start;await DrawOffer.App.Shell.WorkspaceShell.Current.RequestLoginAsync(reason:"登录后管理面试安排");if(App.Session.Phase!=SessionViewModel.SessionPhase.SignedIn){_pending=null;return;}await LoadAsync();start=_pending??start;_pending=null;}
         var form=new CareerDialogForm("schedule",null,"interview","一面",App.Session.Api,_life.Token,_applications,start:start,end:end??start.AddHours(1));
         var dialog=new ContentDialog{XamlRoot=XamlRoot,Title=form.Title,Content=new ScrollViewer{Content=form.View,MaxHeight=600},PrimaryButtonText="保存",CloseButtonText="取消"};_dialog=dialog;
         dialog.CloseButtonClick+=(_,e)=>e.Cancel=form.Busy;

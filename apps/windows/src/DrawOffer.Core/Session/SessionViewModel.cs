@@ -96,4 +96,53 @@ public sealed partial class SessionViewModel(IApiClient api) : ObservableObject
         Apply(null);
         ErrorMessage = "登录已失效，请重新登录。";
     }
+
+    /// <summary>头像换了以后只更新本地用户，不必重新拉取（Mac `updateAvatar`）。</summary>
+    public void UpdateAvatar(string? path)
+    {
+        if (Phase == SessionPhase.SignedIn && User is { } user) User = user with { AvatarUrl = path };
+    }
+
+    /// <summary>浏览器登录：打开授权页后等待 `drawoffer://` 回调；`BrowserLoginPending` 用于界面显示等待状态（Mac `SessionStore`）。</summary>
+    [ObservableProperty] private bool _browserLoginPending;
+
+    public async Task<Uri> BeginBrowserLoginAsync(string clientVersion)
+    {
+        if (Api is not HttpApiClient client) throw new InvalidOperationException("Desktop HTTP client required");
+        ++_operation;
+        ErrorMessage = null;
+        var challenge = await client.Coordinator.BeginBrowserLoginAsync(clientVersion);
+        Apply(null);
+        BrowserLoginPending = true;
+        return challenge.AuthorizeUri;
+    }
+
+    public void CancelBrowserLogin() => BrowserLoginPending = false;
+
+    public async Task CompleteBrowserLoginAsync(Uri callback)
+    {
+        // 没有进行中的浏览器登录时忽略回调（例如重复点击了旧页面的“打开 DrawOffer”）。
+        if (!BrowserLoginPending || Api is not HttpApiClient client) return;
+        var current = _operation;
+        try
+        {
+            var user = await client.Coordinator.CompleteBrowserLoginAsync(callback);
+            if (current != _operation) return;
+            ErrorMessage = null;
+            BrowserLoginPending = false;
+            Apply(user);
+        }
+        catch (Exception error)
+        {
+            if (current != _operation) return;
+            BrowserLoginPending = false;
+            ErrorMessage = error switch
+            {
+                ApiException { Status: System.Net.HttpStatusCode.Gone } => "授权已过期，请重新登录。",
+                ApiException { Status: System.Net.HttpStatusCode.BadRequest, Code: "LOGIN_CALLBACK_INVALID" } or ApiException { Status: System.Net.HttpStatusCode.Unauthorized }
+                    => "登录回调与本次请求不匹配，请从客户端重新点击登录。",
+                _ => "登录未完成，请检查网络后重新登录。",
+            };
+        }
+    }
 }

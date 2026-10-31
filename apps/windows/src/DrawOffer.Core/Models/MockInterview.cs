@@ -3,14 +3,24 @@ using DrawOffer.Core.Api;
 using System.Net;
 namespace DrawOffer.Core.Models;
 public static class MockInterviewRequest {
+    /// <summary>回合 SSE 上限：语音面试的面试官语音以 base64 mp3 随流返回（Mac `maximumTurnBytes`）。</summary>
+    public const int MaximumTurnBytes=32*1024*1024;
+    /// <summary>二进制音频接口：试听（mp3）与录音回放（wav）。</summary>
+    public static bool Audio(string path,string method)=>Allowed(path,method)&&(path.EndsWith("/speech/playback")||path.EndsWith("/recording"));
+    /// <summary>与 Mac `MockInterviewRequest.allowed` 一致。</summary>
     public static bool Allowed(string path,string method) {
         if(path=="/api/mock-interviews")return method is "GET" or "POST";
         if(path=="/api/datasets")return method=="GET";
-        var p=path.Split('/');if(p.Length is not (4 or 5)||p[0]!=""||p[1]!="api"||p[2]!="mock-interviews"||!Guid.TryParseExact(p[3],"D",out var id)||id.ToString("D")!=p[3])return false;
-        return p.Length==4?method is "GET" or "DELETE":method=="POST"&&new[]{"answers","skip","reply:retry","finish","abandon","retry","repeat"}.Contains(p[4]);
+        if(path=="/api/mock-interviews/speech-capability")return method=="GET";
+        var p=path.Split('/');if(p.Length is < 4 or > 7||p[0]!=""||p[1]!="api"||p[2]!="mock-interviews"||!Guid.TryParseExact(p[3],"D",out var id)||id.ToString("D")!=p[3])return false;
+        if(p.Length==4)return method is "GET" or "DELETE";
+        if(p.Length==5){if(p[4]=="recordings")return method=="DELETE";return method=="POST"&&new[]{"answers","skip","reply:retry","finish","abandon","retry","repeat","transcripts:correct","answer-mode"}.Contains(p[4]);}
+        if(p.Length==6){if(p[4]=="actions")return method=="PUT"&&p[5].Length is >= 1 and <= 3&&p[5].All(c=>c is >= '0' and <= '9');return p[4]=="speech"&&p[5]=="playback"&&method=="POST";}
+        if(p[4]!="questions"||p[5].Length==0||!p[5].All(c=>c is >= '0' and <= '9'))return false;
+        return p[6] switch{"transcript"=>method=="PUT","re-evaluate"=>method=="POST","recording"=>method=="GET",_=>false};
     }
     public static JsonNode DecodeEvents(string source) {
-        if(System.Text.Encoding.UTF8.GetByteCount(source)>4*1024*1024)throw new InvalidDataException();
+        if(System.Text.Encoding.UTF8.GetByteCount(source)>MaximumTurnBytes)throw new InvalidDataException();
         var events=new JsonArray();
         foreach(var block in source.Replace("\r\n","\n").Split("\n\n")) {
             var kind="";var lines=new List<string>();foreach(var line in block.Split('\n')){if(line.StartsWith("event:"))kind=line[6..].Trim();if(line.StartsWith("data:"))lines.Add(line[5..].Trim());}

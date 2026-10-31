@@ -11,6 +11,7 @@
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="../../../web/public/templates/avatar-cat.jpg" LogicalName="Fixture.avatar.jpg" />
+    <EmbeddedResource Include="Fixtures/home-scenes.mac.txt" LogicalName="Fixture.home-scenes.mac.txt" />
     <ProjectReference Include="..\..\src\DrawOffer.Core\DrawOffer.Core.csproj" />
   </ItemGroup>
 </Project>

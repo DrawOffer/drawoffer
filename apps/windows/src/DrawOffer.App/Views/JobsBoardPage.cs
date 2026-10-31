@@ -168,7 +168,7 @@ public sealed class JobsBoardPage : Page
         if(_dialog is not null)return;
         if(kind=="detail" && application is not null) { Content=new CareerApplicationDetailPage(application, ()=>{Content=_root;_=LoadAsync();}, (action,item)=>Open(action,item,action=="apply"?"screening":action=="schedule-current"?item.Stage:CareerStage.NextStages(item).FirstOrDefault(x=>x=="interview")??CareerStage.NextStages(item).FirstOrDefault()??"screening",item.StageLabel)); return; }
         if(kind=="plugin") {var notice=new ContentDialog {XamlRoot=XamlRoot,Title="安装 DrawOffer 岗位采集插件",Content="1. 从 DrawOffer Web 下载并解压插件 ZIP。\n2. 打开 Chrome / Edge 扩展管理，启用开发者模式。\n3. 加载已解压的扩展，在招聘网站收藏岗位。",CloseButtonText="完成"};_dialog=notice;try{await notice.ShowAsync();}finally{_dialog=null;}return;}
-        if(App.Session.Phase!=SessionViewModel.SessionPhase.SignedIn){_pending=kind;await WorkspacePage.Current.RequestLoginAsync(reason:"登录后管理岗位和求职进度。");return;}
+        if(App.Session.Phase!=SessionViewModel.SessionPhase.SignedIn){_pending=kind;await DrawOffer.App.Shell.WorkspaceShell.Current.RequestLoginAsync(reason:"登录后管理岗位和求职进度。");return;}
         var form=new CareerDialogForm(kind,application,stage,label,App.Session.Api,_life.Token,_items,round);
         var dialog=new ContentDialog {XamlRoot=XamlRoot,Title=form.Title,Content=new ScrollViewer {Content=form.View,MaxHeight=580},PrimaryButtonText=kind=="detail"?"保存备注":kind=="delete"?"确认删除":"保存",CloseButtonText="取消",DefaultButton=kind is "delete" or "accept" or "decline"?ContentDialogButton.Close:ContentDialogButton.Primary};
         dialog.Resources["ContentDialogMaxWidth"]=880d;dialog.FontFamily=new FontFamily("ms-appx:///Assets/Library/LibrarySans-Regular.otf#DrawOffer Library Sans");

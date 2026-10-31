@@ -2,7 +2,7 @@
 
 `apps/mac` 是 SwiftUI 客户端，`apps/windows` 是 WinUI 3 客户端。界面使用系统控件，仅简历纸面嵌入离线网页视图，复用 Web 的 `renderResumePrintDocument`；`apps/desktop` 的 Electron 壳是独立线路。
 
-正式 App 注入 desktop Bearer HTTP 客户端，支持微信扫码、手机确认后的领取、启动恢复、续期与退出。Mac 与 Windows 均直接进入工作区首页：未登录或恢复失败时仍可浏览随包提供的 9 套精选模板与虚构示例，不请求账号资源，不显示未经查询的个人数量；后端模板接口要求登录，所以游客只能看到随包示例，不代表完整在线模板目录。Mac 登录后模板页改为读取 `GET /api/resume-templates` 的真实启用模板（过滤已退役 `blank-cn`，显示使用次数），游客“使用此模板”先登录，成功后回到模板页按模板 key 匹配真实模板并打开创建弹窗。Mac 简历管理与原生编辑器见下文“Mac 我的简历”；Windows 仍只读。退出后清理准备状态并返回游客首页。Mac 的首页卡片、我的简历、模板、岗位看板与岗位详情、面试排期、文字与语音模拟面试、资料库、账号设置与 AI 对话均已使用原生页面接入现有接口，简历编辑覆盖文字格式、版式与模板切换；桌面端不提供注销账号、密码与微信绑定。Windows 仍以看板、排期、模拟面试与资料库为主。Mock 只用于 Core 测试。协议与权限边界见 [桌面会话契约](../../docs/api/http-contracts.md#桌面-bearer-会话)。
+正式 App 注入 desktop Bearer HTTP 客户端，支持启动恢复、续期与退出。Mac 用微信扫码与手机确认领取；Windows 改为浏览器登录：打开 `/desktop-login` 授权页（PKCE S256 challenge 与随机 state），授权码经当前用户注册的 `drawoffer://auth/callback` 协议回到已运行的实例，再换取 desktop token，后端接口需 `/api/auth/desktop/browser/*` 已部署。Mac 与 Windows 均直接进入工作区首页：未登录或恢复失败时仍可浏览随包提供的 9 套精选模板与虚构示例，不请求账号资源，不显示未经查询的个人数量；后端模板接口要求登录，所以游客只能看到随包示例，不代表完整在线模板目录。Mac 登录后模板页改为读取 `GET /api/resume-templates` 的真实启用模板（过滤已退役 `blank-cn`，显示使用次数），游客“使用此模板”先登录，成功后回到模板页按模板 key 匹配真实模板并打开创建弹窗。Mac 简历管理与原生编辑器见下文“Mac 我的简历”；Windows 仍只读。退出后清理准备状态并返回游客首页。Mac 的首页卡片、我的简历、模板、岗位看板与岗位详情、面试排期、文字与语音模拟面试、资料库、账号设置与 AI 对话均已使用原生页面接入现有接口，简历编辑覆盖文字格式、版式与模板切换；桌面端不提供注销账号、密码与微信绑定。Windows 仍以看板、排期、模拟面试与资料库为主。Mock 只用于 Core 测试。协议与权限边界见 [桌面会话契约](../../docs/api/http-contracts.md#桌面-bearer-会话)。
 
 ## 界面与 Web 对齐
 
@@ -59,7 +59,7 @@ App 共享一个会话协调器。Mac 窗口共享该实例；两端 App 的进�
 
 ## 验证入口与限制
 
-Mac 测试脚本兼容 CLT 的 Testing 框架路径，并在 CLT 残留旧 PackageDescription 私有接口时只修正临时副本，不修改系统文件。Windows Core 可在 macOS 上用 .NET 10 测试；WinUI XAML 编译与 Credential Locker 实机测试需要 Windows。平台测试使用唯一虚构 scope，并在 finally 清理；Mac 真实 Keychain 测试需显式设置 `RUN_DESKTOP_KEYCHAIN_TESTS=1`，Windows 需 `RUN_DESKTOP_CREDENTIAL_TESTS=1`，未启用时跳过。
+Mac 测试脚本兼容 CLT 的 Testing 框架路径，并在 CLT 残留旧 PackageDescription 私有接口时只修正临时副本，不修改系统文件。Windows Core 可在 macOS 上用 .NET 10 测试。Windows 界面全部用 C# 构建、没有 `.xaml` 文件，`bash apps/windows/scripts/typecheck.sh` 可在 macOS 上对整个 WinUI 工程做 C# 编译检查（跳过只能在 Windows 运行的 XAML 标记编译与 PRI 资源索引，产物不可运行）；`python3 apps/windows/scripts/parity.py <mac.swift>... -- <windows.cs>...` 按文件对列出两端界面文案、颜色与数字的差异。实际运行、打包与 Credential Locker 实机测试仍需要 Windows。平台测试使用唯一虚构 scope，并在 finally 清理；Mac 真实 Keychain 测试需显式设置 `RUN_DESKTOP_KEYCHAIN_TESTS=1`，Windows 需 `RUN_DESKTOP_CREDENTIAL_TESTS=1`，未启用时跳过。
 
 原生桌面的 Mac 编译/Keychain、Windows Core/Credential Locker/App 构建以及隔离真实 Redis 验证不再由 GitHub Actions 运行（仓库已移除 workflow），需要时在对应平台本地执行 `npm run test:mac`、`npm run test:windows-core` 等命令；它们也不替代手机和桌面 GUI 验收。
 
