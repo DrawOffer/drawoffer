@@ -12,7 +12,8 @@ case "$1" in
   launch)
     pkill -x DrawOffer 2>/dev/null || true; sleep 1
     open -n .build/DrawOffer.app --env DRAWOFFER_API_ORIGIN="${DRAWOFFER_API_ORIGIN:-http://127.0.0.1:5174}" \
-      --env DRAWOFFER_ALLOW_LOCAL_HTTP=1 --env DRAWOFFER_SNAPSHOT_DIR="$SNAP" --env DRAWOFFER_SNAPSHOT_CAPTURE_LOGIN=1
+      --env DRAWOFFER_ALLOW_LOCAL_HTTP=1 --env DRAWOFFER_SNAPSHOT_DIR="$SNAP" --env DRAWOFFER_SNAPSHOT_CAPTURE_LOGIN=1 \
+      ${DRAWOFFER_MOCK_FIXTURE:+--env DRAWOFFER_MOCK_FIXTURE="$DRAWOFFER_MOCK_FIXTURE"}
     sleep "${2:-6}" ;;
   shot)
     rm -f "$SNAP/$2.png" "$SNAP/$2.ax.txt"; touch "$SNAP/request-$2"

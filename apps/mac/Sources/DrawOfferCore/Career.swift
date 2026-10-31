@@ -116,7 +116,13 @@ public struct CareerApplication: Identifiable, Sendable {
     public var scheduleDate: Date? { guard ["assessment", "written_test", "ai_interview", "interview"].contains(stage) else { return nil }; return Self.date(raw.text("next_session_start_at")) }
     public static func date(_ text: String) -> Date? {
         let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.date(from: text) ?? ISO8601DateFormatter().date(from: text)
+        if let date = formatter.date(from: text) ?? ISO8601DateFormatter().date(from: text) { return date }
+        // 不带时区的时间（如 `2026-10-31T06:28:41.227684`）按本地时间读，与浏览器 `new Date()` 一致。
+        let local = DateFormatter(); local.locale = Locale(identifier: "en_US_POSIX"); local.timeZone = .current
+        for pattern in ["yyyy-MM-dd'T'HH:mm:ss.SSSSSS", "yyyy-MM-dd'T'HH:mm:ss.SSS", "yyyy-MM-dd'T'HH:mm:ss"] {
+            local.dateFormat = pattern; if let date = local.date(from: text) { return date }
+        }
+        return nil
     }
 }
 

@@ -4,7 +4,7 @@ import Foundation
 /// 一段一轮：`面试官：` 问题、`我：` 回答、`面试官（追问）：` 追问、`面试官（回答）：` 反问时面试官的回答。
 /// 旧记录（编号列表、自由文本、“说话人 1/2”）也能读。
 public struct RecordQuestion: Sendable, Equatable {
-    public struct FollowUp: Sendable, Equatable { public var question: String; public var answer: String }
+    public struct FollowUp: Sendable, Equatable { public var question: String; public var answer: String; public init(question: String, answer: String) { self.question = question; self.answer = answer } }
     public var question: String
     public var answer: String
     public var reply: String?

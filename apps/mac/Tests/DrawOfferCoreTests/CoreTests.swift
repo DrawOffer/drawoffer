@@ -96,4 +96,8 @@ private actor DelayedIdentityAPI: APIClient {
     #expect(!CareerRequest.allowed(path: "/api/memory/clear", method: "POST"))
     #expect(!CareerRequest.allowed(path: "/api/memory/grants", method: "GET"))
     #expect(!CareerRequest.allowed(path: "/api/billing/summary", method: "POST"))
+    #expect(CareerRequest.allowed(path: "/api/job-pool/companies/12", method: "GET"))
+    #expect(CareerRequest.allowed(path: "/api/job-pool/34/join", method: "POST"))
+    #expect(!CareerRequest.allowed(path: "/api/admin/job-pool/sources", method: "GET"))
+    #expect(!CareerRequest.allowed(path: "/api/job-pool/abc", method: "GET"))
 }

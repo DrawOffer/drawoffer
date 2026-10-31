@@ -214,14 +214,3 @@ struct AnnouncementDetailSheet: View {
         center.detail = (detail.ids, target)
     }
 }
-
-/// “我的额度”弹窗占位：套餐、积分明细与邀请好友在 M11 补齐。
-struct PlansSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    var body: some View {
-        VStack(spacing: 12) {
-            Text("我的额度").font(.headline)
-            Button("知道了") { dismiss() }
-        }.padding(24).frame(width: 360)
-    }
-}

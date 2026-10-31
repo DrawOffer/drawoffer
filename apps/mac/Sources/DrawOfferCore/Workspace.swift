@@ -12,6 +12,8 @@ public enum ParityRequest {
         (["GET"], #"/api/memory/(home|atlas|outline|overview|brief|match-evidence|checkins|constraints|review-links|review-repeats|review-comparison|feedback)"#),
         (["POST"], #"/api/memory/(home/disclosures|checkins|constraints)"#),
         (["DELETE"], #"/api/memory/constraints/[A-Za-z0-9_-]{1,64}"#),
+        (["GET"], #"/api/job-pool(/filters|/companies|/companies/[1-9][0-9]{0,19}|/[1-9][0-9]{0,19})?"#),
+        (["POST"], #"/api/job-pool/[1-9][0-9]{0,19}/join"#),
     ].map { ($0.0, try! NSRegularExpression(pattern: "^" + $0.1 + "$")) }
 
     public static func allowed(path: String, method: String) -> Bool {

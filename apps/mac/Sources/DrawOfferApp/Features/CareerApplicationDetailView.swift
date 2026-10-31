@@ -33,6 +33,8 @@ struct CareerApplicationDetailView: View {
     let api: any APIClient
     let back: () -> Void
     let perform: (String, CareerApplication) -> Void
+    /// 从资料库「求职进程」进来时直接停在资料页，返回回到资料库。
+    var libraryMaterials = false
     private enum Route: Equatable { case stage(String), report(String), job(String), materials(String?), record(String, paste: Bool, fromMaterials: String?) }
     @State private var route: Route?
     @State private var current: JSONValue?
@@ -65,7 +67,7 @@ struct CareerApplicationDetailView: View {
     private var active: Bool { raw.text("lifecycle_status") != "terminated" && raw.text("status") == "active" && raw.text("archived_at").isEmpty }
 
     var body: some View {
-        switch route {
+        switch route ?? (libraryMaterials ? .materials(nil) : nil) {
         case .stage(let id):
             CareerStageDetailView(sessionID: id, api: api, back: { route = nil; refreshed = UUID() }, openReport: { route = .report(id) })
         case .report(let id):
@@ -74,9 +76,10 @@ struct CareerApplicationDetailView: View {
             JobDetailView(jobID: id, application: raw, back: { route = nil; refreshed = UUID() }, deleted: back)
         case .materials(let id):
             CareerMaterialsPage(application: raw, deck: CareerDeck(application: raw, sessions: sessions, now: now), details: details, initialSessionID: id, splitting: Set(splits.filter { $0.value.running }.keys),
-                                back: { route = nil }, openRecord: { session, mode in route = .record(session, paste: mode == .paste, fromMaterials: session) },
+                                back: { if libraryMaterials { back() } else { route = nil } }, openRecord: { session, mode in route = .record(session, paste: mode == .paste, fromMaterials: session) },
                                 openReview: { route = .stage($0.text("id")) }, generateReview: { route = .stage($0.text("id")) }, add: { addMode = .upload; adding = $0 }, addFromLibrary: { addMode = .library; adding = $0 },
-                                openResume: { if !raw.text("resume_id").isEmpty { router?.jump(.editResume(raw.text("resume_id"))) } }, openJob: openJob)
+                                openResume: { if !raw.text("resume_id").isEmpty { router?.jump(.editResume(raw.text("resume_id"))) } }, openJob: openJob,
+                                fromLibrary: libraryMaterials, openProgress: libraryMaterials ? { router?.jump(.application(application.id)) } : nil)
                 .task(id: refreshed) { await load() }
                 .sheet(item: Binding(get: { adding.map(CareerSessionRef.init) }, set: { if $0 == nil { adding = nil } })) { entry in
                     CareerAddContentSheet(session: entry.value, recordKind: entry.value.text("stage_type") == "written_test" || entry.value.text("stage_type") == "assessment" ? "笔试" : "面试",

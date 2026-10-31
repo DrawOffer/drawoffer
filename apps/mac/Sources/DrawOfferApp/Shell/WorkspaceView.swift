@@ -29,8 +29,10 @@ struct WorkspaceView: View {
     @State private var plansPresented = false
     /// 首页星图“去练”带过去的练习焦点（模拟面试首页读取后清空）。
     @State private var mockFocus: PracticeFocus?
+    @State private var mockFullScreen = false
     /// 首页“选择文件”导入简历：我的简历页收到后打开导入。
     @State private var importRequest: UUID?
+    @State private var openApplication: String?
 
     private var user: User? {
         if case .signedIn(let user) = session.phase { return user }
@@ -38,7 +40,14 @@ struct WorkspaceView: View {
     }
 
     /// Web 编辑器用 `V3Shell bare` + `.wb3-content { inset: 0; border: 0; radius: 0 }`：不显示侧栏，编辑器铺满窗口。
-    private var bare: Bool { selection == .resumes && editResumeID != nil && user != nil }
+    private var bare: Bool { (selection == .resumes && editResumeID != nil || selection == .mock && mockFullScreen) && (user != nil || fixture) }
+    #if DEBUG
+    private var fixture: Bool { ProcessInfo.processInfo.environment["DRAWOFFER_MOCK_FIXTURE"] != nil }
+    #else
+    private let fixture = false
+    #endif
+    /// 编辑器铺满窗口；模拟面试的场次画面只是不显示侧栏，内容卡四边仍留 12（Web `.v3-window.is-bare .v3-content { left: 12px }`）。
+    private var edge: Bool { bare && selection == .resumes }
 
     var body: some View {
         HStack(spacing: bare ? 0 : 13) {
@@ -61,9 +70,9 @@ struct WorkspaceView: View {
                 }
                 mainContent
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(.white).clipShape(RoundedRectangle(cornerRadius: bare ? 0 : 16))
-                .overlay(RoundedRectangle(cornerRadius: bare ? 0 : 16).stroke(bare ? .clear : Color(hex: 0xE4E4E0)))
-                .padding(.vertical, bare ? 0 : 12).padding(.trailing, bare ? 0 : 12)
+                .background(.white).clipShape(RoundedRectangle(cornerRadius: edge ? 0 : 16))
+                .overlay(RoundedRectangle(cornerRadius: edge ? 0 : 16).stroke(edge ? .clear : Color(hex: 0xE4E4E0)))
+                .padding(.vertical, edge ? 0 : 12).padding(.trailing, edge ? 0 : 12).padding(.leading, bare && !edge ? 12 : 0)
         }.background(Color(hex: 0xF1F1EF))
         .alert("安装浏览器插件", isPresented: $pluginNotice) {
             Button("在浏览器打开") { WebBridge.open("/career/applications", api: session.api) }
@@ -88,6 +97,7 @@ struct WorkspaceView: View {
             AnnouncementDetailSheet().environment(announcements)
         }
         .sheet(isPresented: $plansPresented) { PlansSheet() }
+        .onAppear { if fixture { selection = .mock } }
         .task(id: user?.id ?? "") {
             announcements.reset(account: user?.id ?? "")
             await announcements.refresh(api: session.api)
@@ -102,6 +112,7 @@ struct WorkspaceView: View {
             case .draft(let text): homeDraft = String(text.prefix(4000)); selection = .home
             case .editResume(let id): editResumeID = id; selection = .resumes
             case .plans: plansPresented = true
+            case .application(let id): openApplication = id; selection = .jobs
             case nil: break
             }
         }
@@ -151,9 +162,9 @@ struct WorkspaceView: View {
                     send: { text in chat = ChatTarget(sessionID: nil, initial: text); homeDraft = ""; selection = .assistant })
             }
         case .datasets: DatasetLibraryView(requireAccount: { requestLogin(reason: "登录后管理你的资料库。") })
-                case .mock: MockInterviewView(requireAccount: { requestLogin(reason: "登录后开始模拟面试。") }, showSchedule: { selection = .schedule }, incomingFocus: $mockFocus)
+                case .mock: MockInterviewView(requireAccount: { requestLogin(reason: "登录后开始模拟面试。") }, showSchedule: { selection = .schedule }, navigate: { selection = $0 }, incomingFocus: $mockFocus, fullScreen: $mockFullScreen)
         case .schedule: InterviewScheduleView(requireAccount: { requestLogin(reason: "登录后管理面试安排。") })
-        case .jobs: JobsBoardView(requireAccount: { requestLogin(reason: "登录后管理岗位和求职进度。") })
+        case .jobs: JobsBoardView(requireAccount: { requestLogin(reason: "登录后管理岗位和求职进度。") }, openApplication: $openApplication)
         case .templates:
             TemplatesView(pendingCreateKey: $pendingCreateKey,
                           requireLogin: { loginRequest = LoginRequest(template: $0) },
@@ -172,9 +183,10 @@ struct WorkspaceView: View {
                     .id(chat.token)
             } else { PlaceholderView(section: .assistant) }
         case .opportunities:
-            PlaceholderView(section: .opportunities)
+            if user != nil { JobPoolView(openApplication: { openApplication = $0; selection = .jobs }) }
+            else { PlaceholderView(section: .opportunities) }
         case .account:
-            if user != nil { AccountView() } else { PlaceholderView(section: .account) }
+            if user != nil { AccountSection() } else { PlaceholderView(section: .account) }
         case let section?: PlaceholderView(section: section)
         }
     }

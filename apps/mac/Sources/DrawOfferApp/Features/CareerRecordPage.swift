@@ -115,6 +115,21 @@ struct CareerRecordPage: View {
     }
 
     private func reader(_ proxy: ScrollViewProxy) -> some View {
+        RecordReaderView(questions: questions, active: $active, proxy: proxy)
+    }
+}
+
+/// 面试记录阅读（Web `progress/RecordReader.tsx`）：所有题连着读 + 右侧细目录。求职进度的面试记录、模拟面试的「翻看面试记录」共用。
+/// 外层 ScrollView 要命名坐标空间 `record` 并按 `RecordOffsets` 算出 `active`。
+struct RecordReaderView: View {
+    let questions: [RecordQuestion]
+    @Binding var active: Int
+    let proxy: ScrollViewProxy
+    var missing: (RecordQuestion, Int) -> String? = { _, _ in nil }
+
+    var body: some View { reader(proxy) }
+
+    private func reader(_ proxy: ScrollViewProxy) -> some View {
         let list = questions
         return HStack(alignment: .top, spacing: 60) {
             VStack(alignment: .leading, spacing: 0) {
@@ -138,7 +153,7 @@ struct CareerRecordPage: View {
             }
             VStack(spacing: 10) {
                 if item.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    bubble("这道题没记下回答", me: true, missing: true)
+                    bubble(missing(item, position) ?? "这道题没记下回答", me: true, missing: true)
                 } else { bubble(item.answer, me: true) }
                 if let reply = item.reply, !reply.trimmingCharacters(in: .whitespaces).isEmpty { bubble(reply, me: false) }
                 ForEach(Array(follows.enumerated()), id: \.offset) { _, follow in
@@ -201,7 +216,7 @@ struct CareerRecordPage: View {
     }
 }
 
-private struct RecordOffsets: PreferenceKey {
+struct RecordOffsets: PreferenceKey {
     static let defaultValue: [Int: CGFloat] = [:]
     static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) { value.merge(nextValue()) { $1 } }
 }

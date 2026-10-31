@@ -264,7 +264,7 @@ public actor SessionCoordinator {
     public func speechSocket(interviewID: String, questionID: String, purpose: String) async throws -> URLSessionWebSocketTask {
         let transport = self.transport
         return try await authorized { access in
-            try transport.speechSocket(path: "/api/mock-interviews/\(interviewID)/speech", query: ["question_id": questionID, "purpose": purpose], access: access)
+            try transport.speechSocket(path: "/api/mock-interviews/\(interviewID)/speech", query: questionID.isEmpty ? ["purpose": purpose] : ["question_id": questionID, "purpose": purpose], access: access)
         }
     }
 

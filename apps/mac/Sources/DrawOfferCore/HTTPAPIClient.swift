@@ -177,11 +177,21 @@ final class DesktopTransport: DesktopRequesting {
     }
 
     /// 实时语音识别 WebSocket：`/api/mock-interviews/{id}/speech?question_id=&purpose=`，握手携带 desktop Bearer。
+    /// 作答与输入框语音带题号；设备检测试读一句不带题号（结果不保存、不能用来提交回答）。
+    static func speechQueryAllowed(_ query: [String: String]) -> Bool {
+        let question = query["question_id"] ?? ""
+        let numeric = !question.isEmpty && question.allSatisfy { $0.isASCII && $0.isNumber }
+        switch query["purpose"] {
+        case "voice_input", "voice_answer": return numeric && query.count == 2
+        case "device_check": return query.count == 1
+        default: return false
+        }
+    }
+
     func speechSocket(path: String, query: [String: String], access: String?) throws -> URLSessionWebSocketTask {
         let parts = path.split(separator: "/").map(String.init)
         guard parts.count == 4, parts[0] == "api", parts[1] == "mock-interviews", UUID(uuidString: parts[2])?.uuidString.lowercased() == parts[2],
-              parts[3] == "speech", let question = query["question_id"], !question.isEmpty, question.allSatisfy({ $0.isASCII && $0.isNumber }),
-              ["voice_input", "voice_answer"].contains(query["purpose"] ?? ""), query.count == 2 else { throw APIError.invalidResponse }
+              parts[3] == "speech", Self.speechQueryAllowed(query) else { throw APIError.invalidResponse }
         var components = URLComponents(url: origin.appending(path: path), resolvingAgainstBaseURL: false)!
         components.scheme = components.scheme == "https" ? "wss" : "ws"
         components.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
@@ -233,7 +243,7 @@ final class DesktopTransport: DesktopRequesting {
     }
 
     func career(path: String, method: String, query: [String: String], body: JSONValue?, access: String?) async throws -> JSONValue {
-        guard CareerRequest.allowed(path: path, method: method), !query.keys.contains(where: { !["scope", "cursor", "limit", "week_start", "timezone", "application_id", "include_archived", "v", "job_application_id", "resume_id", "status", "folder_id", "confirm_contents", "start_at", "end_at", "type", "q", "prefix", "session_id", "include_history"].contains($0) }) else { throw APIError.invalidResponse }
+        guard CareerRequest.allowed(path: path, method: method), !query.keys.contains(where: { !["scope", "cursor", "limit", "week_start", "timezone", "application_id", "include_archived", "v", "job_application_id", "resume_id", "status", "folder_id", "confirm_contents", "start_at", "end_at", "type", "q", "prefix", "session_id", "include_history", "keyword", "company_ids", "city", "job_category", "recruitment_type", "job_id"].contains($0) }) else { throw APIError.invalidResponse }
         var url = URLComponents(url: origin.appending(path: path), resolvingAgainstBaseURL: false)!
         url.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
         var request = URLRequest(url: url.url!)

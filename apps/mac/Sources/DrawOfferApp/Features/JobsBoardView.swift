@@ -21,6 +21,8 @@ struct JobAction: Identifiable {
 struct JobsBoardView: View {
     @Environment(SessionStore.self) private var session
     let requireAccount: () -> Void
+    /// 其他页面（岗位广场）要求打开的求职进程；加载完成后进入详情并清空。
+    var openApplication: Binding<String?> = .constant(nil)
     @State private var applications: [CareerApplication] = []
     @State private var sessions: [JSONValue] = []
     @State private var overview: JSONValue = .null
@@ -105,7 +107,7 @@ struct JobsBoardView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .task(id: account + refreshing.uuidString) { await load() }
+        .task(id: account + refreshing.uuidString + (openApplication.wrappedValue ?? "")) { await load() }
         .sheet(item: $action) { item in
             CareerForm(action: item, applications: applications, api: session.api, completed: { action = nil; refreshing = UUID() }, close: { action = nil })
                 .frame(width: item.compact ? 480 : 880, height: item.compact ? nil : 780)
@@ -547,6 +549,7 @@ struct JobsBoardView: View {
             } while !cursor.isEmpty
             try Task.checkCancellation()
             applications = result.map { $0.includingSessions(arrangements) }; sessions = arrangements; overview = metrics
+            if let target = openApplication.wrappedValue { selected = applications.first { $0.id == target }; openApplication.wrappedValue = nil }
         } catch is CancellationError { return }
         catch APIError.unauthorized { session.reportAuthenticationFailure(); failure = "登录已失效，请重新登录。" }
         catch { failure = "岗位加载失败，请检查服务连接后重试。" }

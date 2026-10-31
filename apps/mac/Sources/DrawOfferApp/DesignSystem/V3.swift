@@ -62,11 +62,16 @@ struct V3ButtonStyle: ButtonStyle {
     var kind: Kind = .ghost
     var height: CGFloat = 32
     var width: CGFloat? = nil
+    /// `.v3-btn.is-sm`：12px 字。
+    var small = false
+    /// 撑满可用宽度（居中确认的两个按钮）。
+    var fill = false
     @Environment(\.isEnabled) private var enabled
     func makeBody(configuration: Configuration) -> some View {
         let pressed = configuration.isPressed
         return HStack(spacing: 6) { configuration.label }
-            .font(V3.sans(kind == .text ? 13 : 14, weight: .medium)).lineLimit(1).fixedSize(horizontal: true, vertical: false)
+            .font(V3.sans(kind == .text ? 13 : small ? 12 : 14, weight: .medium)).lineLimit(1).fixedSize(horizontal: !fill, vertical: false)
+            .frame(maxWidth: fill ? .infinity : nil)
             .foregroundStyle(kind == .dark || kind == .danger ? Color.white : kind == .text ? (pressed ? V3.txt : V3.sub) : V3.txt)
             .padding(.horizontal, kind == .text ? 0 : height >= 36 ? 18 : 14)
             .frame(width: width, height: kind == .text ? nil : height)
@@ -366,9 +371,12 @@ extension V3Dialog where Left == EmptyView {
 struct V3DialogHead: View {
     let title: String
     var sub: String? = nil
+    /// 账号弹窗（`.acc-dialog`）的说明距标题 7、行高 20。
+    var subTop: CGFloat = 8
+    var subLine: CGFloat = 22
     var body: some View {
         Text(title).font(.system(size: 20, weight: .semibold)).foregroundStyle(V3.txt).frame(height: 28).padding(.trailing, 28)
-        if let sub { Text(sub).font(V3.sans(14)).foregroundStyle(V3.sub).lineHeight(14, 22).fixedSize(horizontal: false, vertical: true).padding(.top, 8) }
+        if let sub { Text(sub).font(V3.sans(14)).foregroundStyle(V3.sub).lineHeight(14, subLine).fixedSize(horizontal: false, vertical: true).padding(.top, subTop) }
     }
 }
 

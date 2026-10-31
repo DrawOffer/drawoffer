@@ -18,6 +18,9 @@ struct CareerMaterialsPage: View {
     let addFromLibrary: (JSONValue) -> Void
     let openResume: () -> Void
     let openJob: () -> Void
+    /// 资料库里的求职进程项目（Web `JobMaterialsView`）：左上回资料库，右上多一个「打开求职进度 ↗」。
+    var fromLibrary = false
+    var openProgress: (() -> Void)? = nil
     @State private var selected: String?
     @State private var writtenOpen = false
 
@@ -34,9 +37,18 @@ struct CareerMaterialsPage: View {
             let width = min(920, max(0, geometry.size.width - gutter * 2))
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    Button(action: back) {
-                        HStack(spacing: 6) { Image(systemName: "arrow.left").font(.system(size: 13)); Text("求职进度") }.font(V3.sans(14)).foregroundStyle(V3.fnt).frame(height: 20).contentShape(Rectangle())
-                    }.buttonStyle(.plain).accessibilityLabel("返回求职进度").padding(.bottom, 12)
+                    if fromLibrary {
+                        HStack(spacing: 12) {
+                            Button(action: back) { HStack(spacing: 6) { Image(systemName: "arrow.left").font(.system(size: 13)); Text("资料库") }.contentShape(Rectangle()) }
+                                .buttonStyle(.plain).accessibilityLabel("返回资料库")
+                            Text("/").accessibilityHidden(true)
+                            Text("求职进程")
+                        }.font(V3.sans(16)).foregroundStyle(V3.fnt).frame(height: 20).padding(.bottom, 12)
+                    } else {
+                        Button(action: back) {
+                            HStack(spacing: 6) { Image(systemName: "arrow.left").font(.system(size: 13)); Text("求职进度") }.font(V3.sans(14)).foregroundStyle(V3.fnt).frame(height: 20).contentShape(Rectangle())
+                        }.buttonStyle(.plain).accessibilityLabel("返回求职进度").padding(.bottom, 12)
+                    }
                     HStack(alignment: .bottom, spacing: 16) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text([application.text("company_name_snapshot"), application.text("job_title_snapshot")].filter { !$0.isEmpty }.joined(separator: " · "))
@@ -44,8 +56,11 @@ struct CareerMaterialsPage: View {
                             Text("资料").font(V3.serif(30)).frame(height: 40)
                         }.frame(maxWidth: .infinity, alignment: .leading)
                         let target = station?.session ?? rounds.compactMap(\.session).first
-                        Button { if let target { add(target) } } label: { HStack(spacing: 6) { Image(systemName: "square.and.arrow.up").font(.system(size: 12)); Text("上传资料") } }
-                            .buttonStyle(PDButtonStyle(kind: .primary)).disabled(target == nil)
+                        HStack(spacing: 8) {
+                            if let openProgress { Button("打开求职进度 ↗", action: openProgress).buttonStyle(PDButtonStyle()) }
+                            Button { if let target { add(target) } } label: { HStack(spacing: 6) { Image(systemName: "square.and.arrow.up").font(.system(size: 12)); Text("上传资料") } }
+                                .buttonStyle(PDButtonStyle(kind: .primary)).disabled(target == nil)
+                        }
                     }
                     if !rounds.isEmpty { tabs(rounds, on: station?.id) }
                     if let station { panel(station) }
