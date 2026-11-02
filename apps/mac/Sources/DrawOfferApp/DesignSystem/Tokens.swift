@@ -33,3 +33,13 @@ extension Color {
         )
     }
 }
+
+extension Color {
+    /// CSS `color-mix(in srgb, self (1 - amount), other amount)`。
+    func mix(with other: Color, by amount: Double) -> Color {
+        let a = NSColor(self).usingColorSpace(.sRGB) ?? .black, b = NSColor(other).usingColorSpace(.sRGB) ?? .black
+        let t = min(1, max(0, amount))
+        return Color(.sRGB, red: a.redComponent * (1 - t) + b.redComponent * t, green: a.greenComponent * (1 - t) + b.greenComponent * t,
+                     blue: a.blueComponent * (1 - t) + b.blueComponent * t)
+    }
+}

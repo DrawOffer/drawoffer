@@ -5,7 +5,7 @@ import SwiftUI
 /// `draft` 只把文字放进首页输入框，由用户确认后再发送，不替用户自动发起对话。
 @MainActor @Observable
 final class WorkspaceRouter {
-    enum Jump: Equatable { case section(WorkspaceSection), draft(String), editResume(String) }
+    enum Jump: Equatable { case section(WorkspaceSection), draft(String), editResume(String), plans, application(String) }
     private(set) var pending: Jump?
 
     func jump(_ target: Jump) { pending = target }

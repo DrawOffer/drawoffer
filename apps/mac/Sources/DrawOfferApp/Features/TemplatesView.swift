@@ -1,3 +1,4 @@
+import AppKit
 import DrawOfferCore
 import DrawOfferRender
 import SwiftUI
@@ -7,6 +8,7 @@ import SwiftUI
 /// 游客没有模板接口权限，只展示随包的虚构示例，“使用此模板”先登录，登录后按模板 key 匹配真实模板继续创建。
 struct TemplatesView: View {
     @Environment(SessionStore.self) private var session
+    @Environment(WorkspaceRouter.self) private var router: WorkspaceRouter?
     /// 登录前选中的示例模板 key；进入页面后自动打开创建弹窗。
     @Binding var pendingCreateKey: String?
     let requireLogin: (ResumeTemplate) -> Void
@@ -20,58 +22,82 @@ struct TemplatesView: View {
     @State private var preview: ResumeTemplate?
     @State private var createAfterDismiss: ResumeTemplate?
     @State private var creating: ResumeTemplate?
-    @State private var selectedStyle = "全部风格"
-    @State private var selectedUse = "全部场景"
+    /// Web `TemplateFilterPopover`：风格与适用场景多选，同组内任一命中、两组同时满足。
+    @State private var selectedStyles: [String] = []
+    @State private var selectedUses: [String] = []
+    @State private var page = 1
+    static let pageSize = 20
 
     private var account: String { if case .signedIn(let user) = session.phase { return user.id }; return "" }
     private var guest: Bool { account.isEmpty }
-    private var styles: [String] { Array(Set(templates.flatMap(\.styleCategories))).sorted() }
-    private var uses: [String] { Array(Set(templates.flatMap(\.useCases))).sorted() }
     private var filtered: [ResumeTemplate] {
         templates.filter {
-            (selectedStyle == "全部风格" || $0.styleCategories.contains(selectedStyle))
-                && (selectedUse == "全部场景" || $0.useCases.contains(selectedUse))
+            (selectedStyles.isEmpty || !Set(selectedStyles).isDisjoint(with: $0.styleCategories))
+                && (selectedUses.isEmpty || !Set(selectedUses).isDisjoint(with: $0.useCases))
+        }
+    }
+    private var pageCount: Int { max(1, (filtered.count + Self.pageSize - 1) / Self.pageSize) }
+    private var pageItems: [ResumeTemplate] { Array(filtered.dropFirst((min(page, pageCount) - 1) * Self.pageSize).prefix(Self.pageSize)) }
+    private var filterCount: Int { selectedStyles.count + selectedUses.count }
+
+    /// 与 Web 相同的筛选空态文案。
+    private var emptyMessage: String {
+        let quote = { (values: [String]) in values.map { "「\($0)」" }.joined() }
+        return switch (selectedStyles.isEmpty, selectedUses.isEmpty) {
+        case (false, true): "\(quote(selectedStyles))风格下没有模板。试试换一个筛选条件。"
+        case (true, false): "\(quote(selectedUses))场景下没有模板。试试换一个筛选条件。"
+        case (false, false): "\(quote(selectedStyles))风格和\(quote(selectedUses))场景同时选中时没有模板。试试减少一个筛选条件。"
+        default: "没有符合条件的模板"
         }
     }
     private var ready: Bool { source == (guest ? "guest" : account) }
 
     var body: some View {
-        ScrollView {
+        V3Page {
             VStack(alignment: .leading, spacing: 0) {
-                V3PageHead(eyebrow: ["TEMPLATES", ready ? "\(templates.count) 套" : "– 套"], title: "简历模板",
-                           subtitle: "浏览当前可用版式，选择后填写简历名称并创建简历。") { EmptyView() }
+                V3PageHead(eyebrow: ["TEMPLATES", ready ? "\(templates.count)" : "–"], title: "简历模板",
+                           subtitle: "浏览当前可用版式，选择后填写简历名称并进入编辑器。", compact: true) { EmptyView() }
                 if guest {
                     Text("当前展示随包的虚构示例，可离线预览；登录后显示线上全部可用模板。")
                         .font(V3.sans(12)).foregroundStyle(V3.fnt).padding(.top, 6)
                 }
                 if let loadError, !ready {
-                    VStack(spacing: 12) {
-                        Image(systemName: "exclamationmark.arrow.triangle.2.circlepath").font(.system(size: 30)).foregroundStyle(V3.fnt)
-                        Text("模板暂时无法加载").font(V3.serif(18))
+                    VStack(spacing: 8) {
+                        Image(systemName: "arrow.clockwise").font(.system(size: 26)).foregroundStyle(V3.fnt).frame(height: 150)
+                        Text("模板暂时无法加载").font(V3.serif(18)).padding(.top, 13)
                         Text(loadError).font(V3.sans(13)).foregroundStyle(V3.sub)
                         Button { reload = UUID() } label: { Label("重新加载", systemImage: "arrow.clockwise") }
-                            .buttonStyle(V3ButtonStyle(kind: .ghost)).disabled(loading)
-                    }.frame(maxWidth: .infinity).padding(.top, 80)
+                            .buttonStyle(V3ButtonStyle(kind: .ghost)).disabled(loading).padding(.top, 28)
+                    }.frame(maxWidth: .infinity).padding(.top, 64)
                 } else if !ready {
                     ProgressView("正在加载简历模板…").font(V3.sans(13)).frame(maxWidth: .infinity, minHeight: 250)
                 } else if templates.isEmpty {
-                    VStack(spacing: 12) {
+                    VStack(spacing: 8) {
                         Text("当前没有可用模板").font(V3.serif(18))
-                        Text("模板启用后会显示在这里，你仍可以从已有简历继续使用。").font(V3.sans(13)).foregroundStyle(V3.sub)
-                    }.frame(maxWidth: .infinity).padding(.top, 80)
+                        Text("模板启用后会显示在这里，你仍可以从已有简历继续编辑。").font(V3.sans(13)).foregroundStyle(V3.sub)
+                        Button { backToResumes() } label: { Label("返回全部简历", systemImage: "doc") }
+                            .buttonStyle(V3ButtonStyle(kind: .ghost)).padding(.top, 28)
+                    }.frame(maxWidth: .infinity).padding(.top, 64)
                 } else { grid }
-            }.frame(maxWidth: 860, alignment: .leading).padding(.horizontal, 52).padding(.vertical, 20).frame(maxWidth: .infinity)
+            }
         }
         .task(id: "\(account)|\(reload)") { await load() }
-        .onChange(of: account) { _, _ in templates = []; source = ""; preview = nil; creating = nil; selectedStyle = "全部风格"; selectedUse = "全部场景" }
+        .onChange(of: account) { _, _ in templates = []; source = ""; preview = nil; creating = nil; selectedStyles = []; selectedUses = []; page = 1 }
+        .onChange(of: selectedStyles) { page = 1 }
+        .onChange(of: selectedUses) { page = 1 }
         .onChange(of: source) { _, _ in openPendingCreate() }
         .sheet(item: $preview, onDismiss: {
             if let template = createAfterDismiss { createAfterDismiss = nil; use(template) }
         }) { template in
+            // Web 预览只在当前这一页里切换上一套 / 下一套
+            let list = pageItems
             TemplatePreview(template: template, guest: guest, close: { preview = nil }, use: {
                 createAfterDismiss = template
                 preview = nil
-            }).frame(width: 960, height: 720)
+            }, previous: list.firstIndex { $0.id == template.id }.flatMap { list.count > 1 ? list[($0 - 1 + list.count) % list.count] : nil },
+               next: list.firstIndex { $0.id == template.id }.flatMap { list.count > 1 ? list[($0 + 1) % list.count] : nil },
+               position: list.firstIndex { $0.id == template.id }.map { ($0, list.count) },
+               show: { preview = $0 })
         }
         .sheet(item: $creating) { template in
             CreateResumeSheet(template: template, close: { creating = nil }, created: { id in
@@ -83,44 +109,44 @@ struct TemplatesView: View {
 
     private var grid: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // `.tpl-toolbar`：距头部 28、高 30、间距 12
             HStack(spacing: 12) {
-                Text("找到 \(filtered.count) 套模板").font(V3.sans(13))
-                if selectedStyle != "全部风格" || selectedUse != "全部场景" {
-                    Button("清除筛选") { selectedStyle = "全部风格"; selectedUse = "全部场景" }.buttonStyle(.link).font(V3.sans(12.5))
+                Text("找到 \(filtered.count) 套模板").font(V3.sans(12)).foregroundStyle(V3.sub)
+                if filterCount > 0 {
+                    Button("清除筛选") { selectedStyles = []; selectedUses = [] }.buttonStyle(.plain).font(V3.sans(12, weight: .medium)).foregroundStyle(V3.txt)
                 }
                 Spacer()
-                Picker("风格", selection: $selectedStyle) {
-                    Text("全部风格").tag("全部风格")
-                    ForEach(styles, id: \.self) { Text($0).tag($0) }
-                }.labelsHidden().frame(width: 140)
-                Picker("场景", selection: $selectedUse) {
-                    Text("全部场景").tag("全部场景")
-                    ForEach(uses, id: \.self) { Text($0).tag($0) }
-                }.labelsHidden().frame(width: 140)
-            }.padding(.top, 28)
-            Divider().padding(.top, 12)
+                Text("按展示顺序").font(V3.sans(12)).foregroundStyle(V3.fnt).padding(.trailing, 4)
+                TemplateFilter(styles: $selectedStyles, uses: $selectedUses)
+            }.frame(height: 30).padding(.top, 28)
             if filtered.isEmpty {
-                Text("没有符合条件的模板，试试减少一个筛选条件。").font(V3.sans(13)).foregroundStyle(V3.fnt)
-                    .frame(maxWidth: .infinity, minHeight: 160)
+                VStack(spacing: 8) {
+                    Image(systemName: "line.3.horizontal.decrease").font(.system(size: 24)).foregroundStyle(V3.fnt).frame(height: 150)
+                    Text("没有符合条件的模板").font(V3.serif(18)).padding(.top, 13)
+                    Text(emptyMessage).font(V3.sans(13)).foregroundStyle(V3.sub)
+                    Button { selectedStyles = []; selectedUses = [] } label: { Label("清除筛选", systemImage: "line.3.horizontal.decrease") }
+                        .buttonStyle(V3ButtonStyle(kind: .ghost)).padding(.top, 28)
+                }.frame(maxWidth: .infinity).padding(.top, 42)
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 20)], alignment: .leading, spacing: 32) {
-                ForEach(filtered) { template in
+                ForEach(pageItems) { template in
                     Button { preview = template } label: {
-                        VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 0) {
                             TemplateThumbnail(template: template, guest: guest)
-                            HStack(alignment: .firstTextBaseline) {
-                                Text(template.name).font(V3.sans(13, weight: .medium)).lineLimit(2)
-                                Spacer(minLength: 4)
+                            Text(template.name).font(V3.sans(14, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1).truncationMode(.tail)
+                                .frame(height: 20).padding(.top, 14)
+                            HStack(spacing: 6) {
+                                ForEach(template.styleCategories + template.useCases, id: \.self) { V3Chip(label: $0) }
+                                Spacer(minLength: 0)
                                 if let count = template.useCount {
-                                    Text("\(TemplatesView.formatUses(count)) 使用").font(V3.number(11, weight: .regular)).foregroundStyle(V3.fnt)
+                                    Text("\(TemplatesView.formatUses(count)) 使用").font(V3.number(10.5, weight: .regular)).foregroundStyle(V3.fnt).lineLimit(1)
                                 }
-                            }
-                            Text((template.styleCategories + template.useCases).joined(separator: " · "))
-                                .font(V3.sans(11)).foregroundStyle(V3.fnt).lineLimit(2)
-                        }
+                            }.frame(height: 20).padding(.top, 4)
+                        }.contentShape(Rectangle())
                     }.buttonStyle(.plain).accessibilityLabel("查看模板：\(template.name)")
                 }
             }.padding(.top, 24)
+            if !filtered.isEmpty { V3Pagination(page: min(page, pageCount), total: filtered.count, pageSize: Self.pageSize) { page = $0 } }
         }
     }
 
@@ -141,6 +167,8 @@ struct TemplatesView: View {
             loadError = owner.isEmpty ? "随包示例读取失败，请重新打开模板页。" : "请检查网络后重试，已有简历不会受到影响。"
         }
     }
+
+    private func backToResumes() { router?.jump(.section(.resumes)) }
 
     private func use(_ template: ResumeTemplate) {
         if guest { requireLogin(template) } else { creating = template }
@@ -198,38 +226,89 @@ struct TemplateThumbnail: View {
     }
 }
 
+/// 03.1a 模板预览，对齐 Web `TemplatePreviewDialog`（760×900，放不下时随窗口收矮）：标题与标签、使用次数，
+/// 点阵舞台里 420 宽（100%）的 A4，两侧圆形切换钮（循环，← → 同样），底部缩放条，页脚「第 n / N 套」、取消与主按钮。
 private struct TemplatePreview: View {
     @Environment(SessionStore.self) private var session
     let template: ResumeTemplate
     let guest: Bool
     let close: () -> Void
     let use: () -> Void
+    var previous: ResumeTemplate? = nil
+    var next: ResumeTemplate? = nil
+    var position: (index: Int, count: Int)? = nil
+    var show: (ResumeTemplate) -> Void = { _ in }
     @State private var paper: ResumeRenderRequest?
     @State private var height: CGFloat = 1123
     @State private var error: String?
+    @State private var zoom = 1.0
+    static let minZoom = 0.5, maxZoom = 2.0, step = 0.1
+    /// 100% 时纸面宽 420（A4 794 × 0.5292）。
+    static let base = 0.5292
+
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(template.name).font(.title3.weight(.semibold))
-                    if let description = template.description, !description.isEmpty {
-                        Text(description).font(V3.sans(12)).foregroundStyle(V3.fnt).lineLimit(2)
+            VStack(alignment: .leading, spacing: 7) {
+                Text(template.name).font(.system(size: 20, weight: .semibold)).foregroundStyle(V3.txt).lineLimit(1).frame(height: 29)
+                    .padding(.trailing, 40)
+                HStack(spacing: 6) {
+                    ForEach(template.styleCategories + template.useCases, id: \.self) { V3Chip(label: $0) }
+                    if let count = template.useCount {
+                        Text("\(TemplatesView.formatUses(count)) 使用").font(V3.number(11, weight: .regular)).foregroundStyle(V3.fnt).padding(.leading, 6)
                     }
+                }.frame(height: 20)
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 32).padding(.top, 28).frame(height: 100, alignment: .top)
+                .overlay(alignment: .topTrailing) {
+                    Button(action: close) { Image(systemName: "xmark").font(.system(size: 12, weight: .medium)).frame(width: 28, height: 28).contentShape(Rectangle()) }
+                        .buttonStyle(.plain).foregroundStyle(V3.fnt).keyboardShortcut(.cancelAction).accessibilityLabel("关闭").padding(.top, 26).padding(.trailing, 26)
                 }
+            ZStack {
+                V3DotStage(height: nil) { EmptyView() }
+                ScrollView([.vertical, .horizontal]) {
+                    if let paper {
+                        let scale = zoom * Self.base
+                        ResumePaperView(request: paper, onRendered: { height = max(1123, $0) }, onError: { error = $0 })
+                            .frame(width: 794, height: height).scaleEffect(scale, anchor: .topLeading)
+                            .frame(width: 794 * scale, height: height * scale, alignment: .topLeading)
+                            .clipShape(RoundedRectangle(cornerRadius: 4)).shadow(color: .black.opacity(0.08), radius: 12, y: 8)
+                            .padding(.top, 34).padding(.horizontal, 76).padding(.bottom, 80)
+                            .frame(minWidth: 0, maxWidth: .infinity)
+                    } else if let error { Text(error).font(V3.sans(13)).foregroundStyle(V3.red).padding(40) }
+                    else { ProgressView().controlSize(.small).padding(40) }
+                }
+                HStack {
+                    navButton(previous, left: true)
+                    Spacer()
+                    navButton(next, left: false)
+                }.padding(.horizontal, 20)
+                VStack {
+                    Spacer()
+                    HStack {
+                        zoomButton("−", label: "缩小模板", enabled: zoom > Self.minZoom) { change(-1) }
+                        Spacer()
+                        Text("\(Int((zoom * 100).rounded()))%").font(V3.number(11.5, weight: .medium)).foregroundStyle(V3.txt).accessibilityLabel("模板预览缩放比例")
+                        Spacer()
+                        zoomButton("+", label: "放大模板", enabled: zoom < Self.maxZoom) { change(1) }
+                    }.padding(.horizontal, 6).frame(width: 132, height: 32)
+                        .background(.white, in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(V3.cl))
+                        .shadow(color: .black.opacity(0.06), radius: 3, y: 2)
+                        .accessibilityElement(children: .contain).accessibilityLabel("模板预览缩放")
+                        .padding(.bottom, 16)
+                }
+            }.clipShape(RoundedRectangle(cornerRadius: 11)).padding(.horizontal, 31).padding(.bottom, 24)
+            HStack(spacing: 10) {
+                if let position { Text("第 \(position.index + 1) / \(position.count) 套").font(V3.sans(11.5)).foregroundStyle(V3.fnt) }
                 Spacer()
-                Button(guest ? "使用此模板" : "创建简历", action: use).buttonStyle(WebActionStyle())
-                Button("关闭", action: close).buttonStyle(.plain).keyboardShortcut(.cancelAction)
-            }.padding(20)
-            Text("虚构示例资料 · 最终排版以 PDF 为准；字体、换行与分页可能不同。")
-                .font(.system(size: 12)).foregroundStyle(Tokens.Color.textMuted).padding(.bottom, 12)
-            if let error { Text(error).foregroundStyle(.red) }
-            ScrollView([.vertical, .horizontal]) {
-                if let paper {
-                    ResumePaperView(request: paper, onRendered: { height = max(1123, $0) }, onError: { error = $0 })
-                        .frame(width: 794, height: height).padding(24)
-                } else if error == nil { ProgressView("加载预览…").padding(40) }
-            }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Tokens.Color.stage)
-        }.task {
+                Button("取消", action: close).buttonStyle(V3ButtonStyle(kind: .ghost, height: 36, width: 80))
+                Button(guest ? "使用此模板" : "创建简历", action: use).buttonStyle(V3ButtonStyle(kind: .dark, height: 36, width: 100))
+            }.padding(.horizontal, 32).frame(minHeight: 88).overlay(alignment: .top) { Rectangle().fill(V3.line).frame(height: 1) }
+        }
+        // Web：760×900，窗口放不下时减去上下各 24 的遮罩留白
+        .frame(width: 760, height: min(900, (NSApp.mainWindow?.contentLayoutRect.height ?? 900) - 48))
+        .onKeyPress(.leftArrow) { if let previous { show(previous); return .handled }; return .ignored }
+        .onKeyPress(.rightArrow) { if let next { show(next); return .handled }; return .ignored }
+        .task(id: template.id) {
+            paper = nil; error = nil; height = 1123
             do {
                 let result = try await preparePaper(template, guest: guest, api: session.api)
                 try Task.checkCancellation(); paper = result.request
@@ -237,6 +316,23 @@ private struct TemplatePreview: View {
             catch is CancellationError { }
             catch { self.error = "预览加载失败，请重试。" }
         }
+    }
+
+    private func navButton(_ target: ResumeTemplate?, left: Bool) -> some View {
+        Button { if let target { show(target) } } label: {
+            Image(systemName: left ? "chevron.left" : "chevron.right").font(.system(size: 12, weight: .medium)).frame(width: 36, height: 36)
+                .background(.white, in: Circle()).overlay(Circle().stroke(V3.cl)).shadow(color: .black.opacity(0.06), radius: 3, y: 2)
+        }.buttonStyle(.plain).foregroundStyle(V3.sub).disabled(target == nil).opacity(target == nil ? 0.4 : 1)
+            .accessibilityLabel(target.map { "\(left ? "上一个" : "下一个")模板：\($0.name)" } ?? (left ? "没有上一个模板" : "没有下一个模板"))
+    }
+
+    private func zoomButton(_ title: String, label: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Text(title).font(.system(size: 14, weight: .medium)).frame(width: 24, height: 24).contentShape(Rectangle()) }
+            .buttonStyle(.plain).foregroundStyle(V3.sub).disabled(!enabled).opacity(enabled ? 1 : 0.35).accessibilityLabel(label)
+    }
+
+    private func change(_ direction: Double) {
+        zoom = min(Self.maxZoom, max(Self.minZoom, ((zoom + direction * Self.step) * 100).rounded() / 100))
     }
 }
 
@@ -253,23 +349,27 @@ private struct CreateResumeSheet: View {
     @State private var uncertain = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("创建简历").font(V3.serif(20))
-            Text("基于“\(template.name)”创建简历，输入一个便于识别的名称。").font(V3.sans(13)).foregroundStyle(V3.sub)
-            VStack(alignment: .leading, spacing: 6) {
-                Text("简历名称").font(V3.sans(12, weight: .medium)).foregroundStyle(V3.sub)
-                TextField("例如：2026 产品经理简历", text: $title).textFieldStyle(.roundedBorder).onSubmit { submit() }
-            }
-            if let error { Text(error).font(V3.sans(12.5)).foregroundStyle(V3.red).fixedSize(horizontal: false, vertical: true) }
-            Text("创建后直接进入编辑器填写内容。")
-                .font(V3.sans(12)).foregroundStyle(V3.fnt).fixedSize(horizontal: false, vertical: true)
-            HStack {
-                Spacer()
-                Button("取消", action: close).buttonStyle(V3ButtonStyle(kind: .ghost)).disabled(busy).keyboardShortcut(.cancelAction)
-                Button(busy ? "正在创建…" : uncertain ? "查看简历列表" : "确认创建", action: submit)
-                    .buttonStyle(V3ButtonStyle(kind: .dark)).disabled(busy)
-            }
-        }.padding(24).frame(width: 440)
+        V3Dialog(closable: !busy, close: close) {
+            V3DialogHead(title: "创建简历", sub: "基于“\(template.name)”创建简历，输入一个便于识别的名称。")
+            V3TextInput(label: "简历名称", placeholder: "例如：2026 产品经理简历", text: $title, error: error, disabled: busy, submit: submit)
+                .padding(.top, 20).onChange(of: title) { if error != nil && !uncertain { error = nil } }
+        } foot: {
+            Button("取消", action: close).buttonStyle(V3ButtonStyle(kind: .ghost, height: 36)).disabled(busy)
+            Button(busy ? "正在创建…" : uncertain ? "查看简历列表" : "确认创建", action: submit)
+                .buttonStyle(V3ButtonStyle(kind: .dark, height: 36)).disabled(busy)
+        }
+    }
+
+    /// Web `createErrorMessage`。
+    static func message(_ error: Error) -> String {
+        guard case APIError.server(_, let code) = error else { return "创建简历失败，请稍后重试。" }
+        switch code {
+        case "RESUME_LIMIT_REACHED": return "简历数量已达上限（\(ResumeRequest.maximumPerUser) 份），请删除不需要的简历后重试。"
+        case "INVALID_RESUME_TITLE": return "请输入 1–255 个字符的简历名称。"
+        case "RESUME_TITLE_CONFLICT": return "该名称已经存在，请换一个名称。"
+        case "TEMPLATE_INACTIVE": return "所选模板已不可用，请重新选择。"
+        default: return "创建简历失败，请稍后重试。"
+        }
     }
 
     private func submit() {
@@ -282,17 +382,77 @@ private struct CreateResumeSheet: View {
             defer { busy = false }
             do {
                 let result = try await session.api.careerRequest(path: "/api/resumes", method: "POST", query: [:],
-                    body: .object(["title": .string(name), "template_id": .string(template.id)]))
+                    body: .object(["title": .string(name), "template_id": .string(template.id), "guide": .bool(true)]))
                 created(result["resume"]?["id"]?.stringValue ?? "")
             } catch {
                 if case APIError.unauthorized = error { session.reportAuthenticationFailure() }
                 if case APIError.server = error {
-                    self.error = ResumeRequest.errorMessage(error, fallback: "创建失败，请稍后重试。")
+                    self.error = Self.message(error)
                 } else if case APIError.unauthorized = error {
                     self.error = ResumeRequest.errorMessage(error, fallback: "")
                 } else {
                     uncertain = true
                     self.error = "网络中断，无法确认是否已创建。请先查看简历列表，避免重复创建。"
+                }
+            }
+        }
+    }
+}
+
+
+/// Web `V3TemplateFilter`：`.tpl-filter-trigger` 按钮（默认 30 高，圆角 8，有筛选时蓝底蓝字「筛选 · N」）+
+/// 300 宽 `.tpl-filter-pop`（标题与重置，风格、适用场景两组胶囊多选）。模板页与编辑器模板面板共用。
+struct TemplateFilter: View {
+    @Binding var styles: [String]
+    @Binding var uses: [String]
+    var height: CGFloat = 30
+    @State private var open = false
+    static let styleOptions = ["简约", "经典", "现代", "创意"]
+    static let useOptions = ["实习", "校招", "社招"]
+    private var count: Int { styles.count + uses.count }
+
+    var body: some View {
+        Button { open.toggle() } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "line.3.horizontal.decrease").font(.system(size: 11)).foregroundStyle(count > 0 ? V3.blue : V3.sub)
+                Text(count > 0 ? "筛选 · \(count)" : "筛选")
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .medium)).foregroundStyle(count > 0 ? V3.blue : V3.fnt)
+                    .rotationEffect(.degrees(open ? 180 : 0))
+            }.font(V3.sans(12, weight: .medium)).foregroundStyle(count > 0 ? V3.blue : V3.txt)
+                .padding(.leading, 11).padding(.trailing, 18).frame(height: height)
+                .background(count > 0 ? V3.blueSoft : (open ? V3.field : .white), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(count > 0 ? Color(hex: 0xC9D7F4) : V3.cl))
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain).accessibilityLabel("筛选简历模板")
+            .popover(isPresented: $open, arrowEdge: .bottom) { popover }
+    }
+
+    private var popover: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("筛选简历模板").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
+                Spacer()
+                Button { styles = []; uses = [] } label: { Image(systemName: "arrow.clockwise").font(.system(size: 12)).frame(width: 22, height: 22) }
+                    .buttonStyle(.plain).foregroundStyle(V3.sub).disabled(count == 0).opacity(count == 0 ? 0.4 : 1)
+                    .help("重置筛选").accessibilityLabel("重置筛选")
+            }.frame(height: 16)
+            group("风格", Self.styleOptions, $styles).padding(.top, 20)
+            group("适用场景", Self.useOptions, $uses).padding(.top, 18)
+        }.padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 18).frame(width: 300)
+            .accessibilityElement(children: .contain).accessibilityLabel("筛选简历模板")
+    }
+
+    private func group(_ title: String, _ options: [String], _ values: Binding<[String]>) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(title).font(V3.sans(11)).foregroundStyle(V3.fnt).frame(height: 13)
+            HStack(spacing: 8) {
+                ForEach(options, id: \.self) { option in
+                    let on = values.wrappedValue.contains(option)
+                    Button(option) {
+                        if on { values.wrappedValue.removeAll { $0 == option } } else { values.wrappedValue.append(option) }
+                    }.buttonStyle(.plain).font(V3.sans(12, weight: .medium)).padding(.horizontal, 12).frame(height: 28)
+                        .foregroundStyle(on ? V3.blue : V3.sub).background(on ? V3.blueSoft : V3.field, in: Capsule())
+                        .accessibilityAddTraits(on ? .isSelected : [])
                 }
             }
         }

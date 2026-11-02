@@ -205,7 +205,7 @@ struct CareerStageScheduleFields: View {
     }
     /// A first pick starts from the next half hour, like Web `defaultInterviewStartAt`.
     private func seed(_ key: String) {
-        let calendar = Calendar.current
+        let calendar = Beijing.calendar
         let base = Date().addingTimeInterval(key == "end" ? 3 * 86400 : 86400)
         var parts = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: base)
         let minute = parts.minute ?? 0
@@ -215,5 +215,5 @@ struct CareerStageScheduleFields: View {
         if key == "end" { end = date } else { start = date }
     }
     private func presented(_ key: String) -> Binding<Bool> { Binding(get: { editing == key }, set: { if !$0 { editing = "" } }) }
-    private func stamp(_ date: Date, _ format: String) -> String { let f = DateFormatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = format; return f.string(from: date) }
+    private func stamp(_ date: Date, _ format: String) -> String { let f = Beijing.formatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = format; return f.string(from: date) }
 }

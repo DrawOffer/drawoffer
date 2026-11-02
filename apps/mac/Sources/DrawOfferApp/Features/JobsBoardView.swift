@@ -21,6 +21,8 @@ struct JobAction: Identifiable {
 struct JobsBoardView: View {
     @Environment(SessionStore.self) private var session
     let requireAccount: () -> Void
+    /// 其他页面（岗位广场）要求打开的求职进程；加载完成后进入详情并清空。
+    var openApplication: Binding<String?> = .constant(nil)
     @State private var applications: [CareerApplication] = []
     @State private var sessions: [JSONValue] = []
     @State private var overview: JSONValue = .null
@@ -58,6 +60,8 @@ struct JobsBoardView: View {
     private func columnTitle(_ column: String) -> String { column.hasPrefix("interview:") ? String(column.dropFirst(10)) : CareerStage.label(column) }
     private func completed(_ item: CareerApplication) -> Bool { item.completedSchedule != nil }
 
+    @State private var pageGutter: CGFloat = 32
+
     var body: some View {
         Group {
             if let selected {
@@ -69,9 +73,7 @@ struct JobsBoardView: View {
                 }).id(refreshing)
             } else {
                 VStack(alignment: .leading, spacing: 0) {
-                    V3PageHead(eyebrow: ["JOBS", "本周 " + weekLabel], title: "岗位看板", subtitle: subtitle) {
-                        Button { open("arranged") } label: { Image(systemName: "calendar").font(.system(size: 12)).foregroundStyle(V3.sub); Text("已有面试安排") }
-                            .buttonStyle(V3ButtonStyle(kind: .ghost, width: 124))
+                    V3PageHead(eyebrow: ["JOBS", "本周 " + weekLabel], title: "投递看板", subtitle: subtitle, subtitleHeight: 20) {
                         Button("导入岗位") { open("import") }.buttonStyle(V3ButtonStyle(kind: .dark, width: 100))
                     }
                     statistics.padding(.top, 29)
@@ -90,17 +92,22 @@ struct JobsBoardView: View {
                             Button("重试") { refreshing = UUID() }.buttonStyle(V3ButtonStyle(kind: .ghost))
                         }.frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
-                        controls.padding(.top, 20).padding(.bottom, 18)
+                        // Web：没有任何求职进程时不显示看板 / 列表与排序筛选
+                        if !applications.isEmpty { controls.padding(.top, 20).padding(.bottom, 18) }
                         if visible.isEmpty { empty }
                         else if mode == "list" { list }
                         else { boardArea }
                     }
                 }
-                .padding(.horizontal, 32).padding(.top, 52).padding(.bottom, 20)
+                .padding(.top, 52).padding(.bottom, 20)
+                // Web `.v3-page` 容器宽度分档（与 V3Page 相同的左右留白）；看板要撑满高度，所以不套 V3Page 的滚动
+                .padding(.horizontal, max(0, pageGutter))
+                .background { GeometryReader { geometry in Color.clear.onAppear { pageGutter = V3Page<EmptyView>.gutter(card: geometry.size.width) }
+                    .onChange(of: geometry.size.width) { _, width in pageGutter = V3Page<EmptyView>.gutter(card: width) } } }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .task(id: account + refreshing.uuidString) { await load() }
+        .task(id: account + refreshing.uuidString + (openApplication.wrappedValue ?? "")) { await load() }
         .sheet(item: $action) { item in
             CareerForm(action: item, applications: applications, api: session.api, completed: { action = nil; refreshing = UUID() }, close: { action = nil })
                 .frame(width: item.compact ? 480 : 880, height: item.compact ? nil : 780)
@@ -115,44 +122,46 @@ struct JobsBoardView: View {
     // MARK: Head and statistics
 
     private var weekStart: Date {
-        var calendar = Calendar.current; calendar.firstWeekday = 2
+        var calendar = Beijing.calendar; calendar.firstWeekday = 2
         return calendar.dateInterval(of: .weekOfYear, for: Date())?.start ?? Date()
     }
     private var weekLabel: String {
-        let formatter = DateFormatter(); formatter.dateFormat = "MM-dd"
-        return formatter.string(from: weekStart) + " 至 " + formatter.string(from: Calendar.current.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart)
+        let formatter = Beijing.formatter(); formatter.dateFormat = "MM-dd"
+        return formatter.string(from: weekStart) + " 至 " + formatter.string(from: Beijing.calendar.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart)
     }
     private var activeCount: Int { applications.filter { $0.raw.text("status") == "active" && $0.raw.text("archived_at").isEmpty && $0.raw.text("lifecycle_status") != "terminated" }.count }
     private var weeklyInterviews: Int {
         if let value = overview["metrics"]?["weekly_interviews"], value != .null { return value.integer }
-        let end = Calendar.current.date(byAdding: .day, value: 7, to: weekStart) ?? weekStart
+        let end = Beijing.calendar.date(byAdding: .day, value: 7, to: weekStart) ?? weekStart
         return sessions.filter { $0.text("status") != "cancelled" && (CareerApplication.date($0.text("start_at")).map { $0 >= weekStart && $0 < end } ?? false) }.count
-    }
-    private var offers: Int {
-        if let value = overview["metrics"]?["offers_received"], value != .null { return value.integer }
-        return applications.filter { $0.raw.text("current_stage_type") == "offer" && $0.raw.text("offer_status") != "declined" }.count
     }
     private var pendingOffers: Int { applications.filter { $0.raw.text("current_stage_type") == "offer" && $0.raw.text("offer_status") == "received" && $0.raw.text("status") == "active" }.count }
     private var subtitle: String {
         guard !account.isEmpty, !loading else { return "登录后查看你的求职进程" }
-        return "\(activeCount) 个进行中 · \(weeklyInterviews) 场面试" + (pendingOffers > 0 ? " · \(pendingOffers) 个 Offer 待回复" : "")
+        return "\(weeklyInterviews) 场面试" + (pendingOffers > 0 ? " · \(pendingOffers) 个 Offer 待回复" : "")
     }
     private var statistics: some View {
+        // Web `summarizeApplicationFunnel`：已投递为基数；进过面试 / HR / Offer 阶段算进面，到了 Offer 算拿到 Offer
         let applied = applications.filter { $0.raw.text("phase") != "pending" }
-        let reached = applied.filter { $0.raw.text("current_stage_type") != "screening" }.count
+        let reached = applied.filter { $0.raw["reached_interview"] == .bool(true) || ["interview", "hr", "offer"].contains($0.raw.text("current_stage_type")) }.count
+        let offered = applied.filter { $0.raw.text("current_stage_type") == "offer" }.count
         let ready = !account.isEmpty && !loading
-        let values: [(String, String, String?)] = [
+        let percent = { (part: Int, whole: Int) in "\(Int((Double(part) / Double(whole) * 100).rounded()))%" }
+        let values: [(String, String, (String, String)?)] = [
             ("投递总数", ready ? "\(applied.count)" : "—", nil),
-            ("本周面试", ready ? "\(weeklyInterviews)" : "—", nil),
-            ("面试转化率", ready && !applied.isEmpty ? "\(Int((Double(reached) / Double(applied.count) * 100).rounded()))%" : "—", nil),
-            ("Offer", ready ? "\(offers)" : "—", pendingOffers > 0 ? "待回复" : nil),
+            ("进行中", ready ? "\(activeCount)" : "—", nil),
+            ("进入面试", ready ? "\(reached)" : "—", ready && !applied.isEmpty ? ("进面率", percent(reached, applied.count)) : nil),
+            ("Offer", ready ? "\(offered)" : "—", ready && reached > 0 ? ("面试通过率", percent(offered, reached)) : nil),
         ]
         return HStack(spacing: 0) {
             ForEach(Array(values.enumerated()), id: \.offset) { index, item in
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(item.1).font(V3.number(28)).foregroundStyle(V3.txt)
-                        if let extra = item.2 { Text(extra).font(V3.sans(12, weight: .medium)).foregroundStyle(V3.fnt) }
+                        if let rate = item.2 {
+                            (Text(rate.0 + " ").foregroundStyle(V3.fnt) + Text(rate.1).font(V3.number(12, weight: .semibold)).foregroundStyle(V3.txt))
+                                .font(V3.sans(12, weight: .medium))
+                        }
                     }.frame(height: 36)
                     Text(item.0).font(V3.sans(12)).foregroundStyle(V3.fnt)
                 }
@@ -162,7 +171,7 @@ struct JobsBoardView: View {
         }
         .frame(height: 59, alignment: .top).padding(.bottom, 13)
         .overlay(alignment: .bottom) { Rectangle().fill(V3.line).frame(height: 1) }
-        .accessibilityElement(children: .contain).accessibilityLabel("岗位看板统计")
+        .accessibilityElement(children: .contain).accessibilityLabel("投递看板统计")
     }
 
     // MARK: Toolbar
@@ -336,12 +345,19 @@ struct JobsBoardView: View {
             Text(item.company + " · " + item.title).font(V3.sans(12, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1)
                 .padding(.trailing, 22).frame(height: 14).help(item.company + " · " + item.title)
             if !item.category.isEmpty, let label = categories.first(where: { $0.0 == item.category })?.1 {
-                V3Chip(label: label, height: 20, size: 10.5).offset(y: 24)
+                V3Chip(label: label).offset(y: 24)
             }
             HStack(spacing: 6) {
                 if let today {
-                    Text(today).font(V3.number(10, weight: .medium)).foregroundStyle(.white).padding(.horizontal, 7).frame(height: 20)
-                        .background(V3.txt, in: RoundedRectangle(cornerRadius: 5)).accessibilityLabel(status)
+                    // `.progress-card-today`：22 高胶囊、蓝色（测评 / 笔试的作答窗口为橙色）浅底与 20% 描边、12 号时钟、11px 数字
+                    let window = ["assessment", "written_test"].contains(CareerBoard.stableType(item.raw))
+                    let accent = window ? V3.orange : V3.blue
+                    HStack(spacing: 5) {
+                        Image(systemName: "clock").font(.system(size: 10, weight: .medium))
+                        Text(today).font(V3.number(11, weight: .medium))
+                    }.foregroundStyle(accent.mix(with: V3.txt, by: 0.35)).padding(.horizontal, 8).frame(height: 22)
+                        .background(window ? V3.orangeSoft : V3.blueSoft, in: Capsule()).overlay(Capsule().stroke(accent.opacity(0.2)))
+                        .accessibilityLabel(status)
                 } else {
                     Circle().fill(toneColor(tone)).frame(width: 5, height: 5)
                     Text(status).font(V3.sans(10.5)).foregroundStyle(tone == .red ? V3.red : V3.fnt).lineLimit(1)
@@ -349,12 +365,12 @@ struct JobsBoardView: View {
                 Spacer(minLength: 26)
             }.frame(height: 20).frame(maxHeight: .infinity, alignment: .bottom).padding(.bottom, -6).help(time ?? "")
         }
-        .padding(11).frame(maxWidth: .infinity, alignment: .topLeading).frame(height: 88)
+        .padding(11).frame(maxWidth: .infinity, alignment: .topLeading).frame(height: 86)
         .overlay(alignment: .bottomTrailing) { logo(item).padding(.trailing, 11).padding(.bottom, 7) }
         .overlay(alignment: .topTrailing) {
             Menu { cardMenu(item) } label: {
-                Image(systemName: "ellipsis").font(.system(size: 13, weight: .medium)).foregroundStyle(V3.txt)
-                    .frame(width: 22, height: 22).background(V3.field, in: RoundedRectangle(cornerRadius: 6))
+                Image(systemName: "ellipsis").font(.system(size: 13, weight: .medium)).foregroundStyle(V3.fnt)
+                    .frame(width: 22, height: 22).contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             .opacity(hovering ? 1 : 0).padding(6)
@@ -368,6 +384,7 @@ struct JobsBoardView: View {
         .onTapGesture { selected = item }
         .contextMenu { cardMenu(item) }
         .accessibilityElement(children: .combine).accessibilityLabel("\(item.company) \(item.title)，\(status)").accessibilityAddTraits(.isButton)
+        .accessibilityAction { selected = item }
         .task(id: account + item.raw.text("company_logo_url")) { await loadLogo(item) }
     }
     @ViewBuilder private func cardMenu(_ item: CareerApplication) -> some View {
@@ -439,7 +456,7 @@ struct JobsBoardView: View {
                 let next = nextSession(item)
                 Button { selected = item } label: {
                     row(header: false, showCategory: showCategory, cells: [
-                        AnyView(HStack(spacing: 6) { Text(item.company).foregroundStyle(V3.txt).fontWeight(.medium); Text("·").foregroundStyle(V3.fnt); Text(item.title) }.lineLimit(1)),
+                        AnyView(HStack(spacing: 6) { Text(item.company).foregroundStyle(V3.txt).fontWeight(.medium); Text("·").foregroundStyle(V3.fnt); Text(item.title).foregroundStyle(V3.txt).fontWeight(.medium) }.lineLimit(1)),
                         AnyView(V3Chip(label: item.categoryLabel, height: 20, size: 10)),
                         AnyView(Text(label).fontWeight(.medium).foregroundStyle(listTone(CareerBoard.tone(item.raw, completed: done))).lineLimit(1)),
                         AnyView(Text(next.map { CareerBoard.sessionRange($0) + " · " + $0.text("stage_label") } ?? "暂无安排").lineLimit(1)),
@@ -450,14 +467,14 @@ struct JobsBoardView: View {
             }
         }
     }
+    /// `.career-application-table`：`table-layout: fixed` 等分列；单元格左右 12，首列不留左边距。
     private func row(header: Bool, showCategory: Bool, cells: [AnyView]) -> some View {
         HStack(spacing: 0) {
-            cells[0].frame(maxWidth: .infinity, alignment: .leading)
-            if showCategory { cells[1].frame(width: 96, alignment: .leading).padding(.leading, 12) }
-            cells[2].frame(width: 170, alignment: .leading).padding(.leading, 12)
-            cells[3].frame(width: 200, alignment: .leading).padding(.leading, 12)
-            cells[4].frame(width: 100, alignment: .leading).padding(.leading, 12)
-            cells[5].frame(width: 100, alignment: .leading).padding(.leading, 12)
+            ForEach(Array(cells.enumerated()), id: \.offset) { index, cell in
+                if index != 1 || showCategory {
+                    cell.frame(maxWidth: .infinity, alignment: .leading).padding(.leading, index == 0 ? 0 : 12).padding(.trailing, 12)
+                }
+            }
         }
         .font(V3.sans(header ? 11 : 12)).foregroundStyle(header ? V3.fnt : V3.sub)
         .frame(height: header ? 36 : 56)
@@ -492,14 +509,14 @@ struct JobsBoardView: View {
         } else {
             ScrollView {
                 V3EmptyCard(title: account.isEmpty ? "登录后查看求职进程" : "还没有求职进程",
-                            message: "装上浏览器插件，在招聘网站上一键把岗位存进来；也可以粘贴岗位文字导入。", stageHeight: 216) {
+                            message: "装上浏览器插件，在招聘网站上一键把岗位存进来；也可以粘贴岗位文字导入。", stageHeight: 216, width: 560) {
                     CareerEmptyBoardArt()
                 } actions: {
                     Button { open("plugin") } label: { Image(systemName: "puzzlepiece.extension").font(.system(size: 12)); Text("安装浏览器插件") }
                         .buttonStyle(V3ButtonStyle(kind: .ghost, height: 36))
                     Button("粘贴岗位文字导入") { open("import") }.buttonStyle(CareerActionStyle(kind: .link))
                     Button("创建第一条求职进程") { open("arranged") }.buttonStyle(CareerActionStyle(kind: .link))
-                }.frame(maxWidth: .infinity).padding(.top, 24)
+                }.frame(maxWidth: .infinity).padding(.top, 40)
             }
         }
     }
@@ -521,7 +538,7 @@ struct JobsBoardView: View {
                 cursor = page.text("next_cursor")
                 if !cursor.isEmpty && !seen.insert(cursor).inserted { throw APIError.invalidResponse }
             } while !cursor.isEmpty
-            let metrics = try await session.api.careerRequest(path: "/api/interview-overview", method: "GET", query: ["timezone": TimeZone.current.identifier], body: nil)
+            let metrics = try await session.api.careerRequest(path: "/api/interview-overview", method: "GET", query: ["timezone": Beijing.identifier], body: nil)
             var arrangements: [JSONValue] = []; cursor = ""; seen = []
             repeat {
                 var params = ["limit": "500", "include_archived": "true"]; if !cursor.isEmpty { params["cursor"] = cursor }
@@ -532,6 +549,7 @@ struct JobsBoardView: View {
             } while !cursor.isEmpty
             try Task.checkCancellation()
             applications = result.map { $0.includingSessions(arrangements) }; sessions = arrangements; overview = metrics
+            if let target = openApplication.wrappedValue { selected = applications.first { $0.id == target }; openApplication.wrappedValue = nil }
         } catch is CancellationError { return }
         catch APIError.unauthorized { session.reportAuthenticationFailure(); failure = "登录已失效，请重新登录。" }
         catch { failure = "岗位加载失败，请检查服务连接后重试。" }
@@ -853,7 +871,7 @@ struct CareerForm: View {
     }
     /// Only the values without their own column stay in notes; stale date lines from older records are dropped.
     private var offerNotes: String { CareerNotes.merging(["收到日期": "", "回复截止": "", "预计入职": "", "试用期": "", "Offer 材料": offerMaterials, "薪酬说明": salaryDescription], into: current?.raw.text("notes") ?? "") }
-    private func calendarDay(_ date: Date) -> String { let f = DateFormatter(); f.calendar = Calendar(identifier: .gregorian); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"; return f.string(from: date) }
+    private func calendarDay(_ date: Date) -> String { let f = Beijing.formatter(); f.calendar = Beijing.calendar; f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"; return f.string(from: date) }
     /// The stage type sent to the API: HR 面 and OC have their own types.
     private var stageType: String { stage == "interview" && label == "HR 面" ? "hr" : stage == "offer" && offerIntent == "none" ? "oc" : stage }
     private var formalOfferFields: some View {
@@ -1052,10 +1070,10 @@ struct CareerForm: View {
     }
     private func shortDay(_ date: Date?) -> String? {
         guard let date else { return nil }
-        let f = DateFormatter(); f.dateFormat = "MM-dd"; return f.string(from: date)
+        let f = Beijing.formatter(); f.dateFormat = "MM-dd"; return f.string(from: date)
     }
     private func listDateTime(_ date: Date) -> String {
-        let f = DateFormatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = "M月d日 HH:mm"; return f.string(from: date)
+        let f = Beijing.formatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = "M月d日 HH:mm"; return f.string(from: date)
     }
     private struct TrackRow { let key: String; let label: String; let status: String; let current: Bool }
     private struct SummaryRow { let icon: String; let title: String; let text: String; let muted: Bool }
@@ -1209,7 +1227,7 @@ struct CareerForm: View {
                 var fields: [String: JSONValue] = ["base_lock_version": item["lock_version"] ?? .number(1)]
                 let formatter = ISO8601DateFormatter()
                 if sessionCommand == "reschedule" {
-                    fields["start_at"] = .string(formatter.string(from: start)); fields["end_at"] = .string(formatter.string(from: end)); fields["timezone"] = .string(TimeZone.current.identifier)
+                    fields["start_at"] = .string(formatter.string(from: start)); fields["end_at"] = .string(formatter.string(from: end)); fields["timezone"] = .string(Beijing.identifier)
                 } else if sessionCommand == "answer-plan" {
                     fields["answer_plan_start_at"] = .string(formatter.string(from: start)); fields["answer_plan_end_at"] = .string(formatter.string(from: end))
                 }
@@ -1345,7 +1363,7 @@ struct CareerForm: View {
                             "stage_label": .string(reuseCurrentStage ? (current.raw["current_stage"]?.text("stage_label") ?? label) : stage == "interview" ? label : CareerStage.label(stage)),
                             "round_no": stage == "interview" && !isHR ? .number(Double(round)) : .null,
                             "start_at": .string(formatter.string(from: begin)), "end_at": .string(formatter.string(from: finish)),
-                            "schedule_kind": .string(isWindow ? "open_window" : "fixed_slot"), "timezone": .string(TimeZone.current.identifier), "mode": .string(mode),
+                            "schedule_kind": .string(isWindow ? "open_window" : "fixed_slot"), "timezone": .string(Beijing.identifier), "mode": .string(mode),
                             "allow_conflict": .bool(allowConflict),
                             "meeting_url": ["video", "phone"].contains(mode) && !place.isEmpty ? .string(place) : .null,
                             "location": ["onsite", "other"].contains(mode) && !place.isEmpty ? .string(place) : .null,

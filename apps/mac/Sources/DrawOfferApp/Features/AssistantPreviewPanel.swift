@@ -50,6 +50,11 @@ struct ChatPreviewPanel: View {
     let close: () -> Void
     let save: (ChatPreviewTab) -> Void
     let markUnavailable: (String) -> Void
+    /// 全屏查看 / 恢复面板大小（Web `PreviewPanel` 的全屏切换）。
+    var fullscreen: Binding<Bool> = .constant(false)
+    @Environment(SessionStore.self) private var session
+    @State private var downloading = false
+    @State private var downloadError: String?
     @State private var reload = UUID()
     @State private var copied = false
 
@@ -61,6 +66,10 @@ struct ChatPreviewPanel: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 2) { ForEach(tabs, id: \.key) { tab in tabButton(tab) } }
                 }
+                Button { fullscreen.wrappedValue.toggle() } label: {
+                    Image(systemName: fullscreen.wrappedValue ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right").font(.system(size: 11))
+                }.buttonStyle(.plain).padding(.horizontal, 4).help(fullscreen.wrappedValue ? "恢复面板大小" : "全屏查看")
+                    .accessibilityLabel(fullscreen.wrappedValue ? "恢复面板大小" : "全屏查看")
                 Menu {
                     Button("重新加载") { reload = UUID() }
                     Button("关闭其他标签") { tabs.filter { $0.key != current?.key }.forEach { closeTab($0.key) } }.disabled(tabs.count < 2)
@@ -83,6 +92,24 @@ struct ChatPreviewPanel: View {
             if let current { footer(current).padding(.horizontal, 14).frame(height: 48) }
         }
         .background(.white)
+    }
+
+    /// 下载资料原文件（Web `downloadDatasetSource`）：先让用户选位置，再经桌面会话下载并移动过去。
+    private func download(_ tab: ChatPreviewTab) async {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = tab.label.nilIfEmpty ?? "资料"
+        guard panel.runModal() == .OK, let target = panel.url else { return }
+        downloading = true; downloadError = nil
+        defer { downloading = false }
+        do {
+            let file = try await session.api.downloadDataset(id: tab.id, limit: 512 * 1024 * 1024)
+            defer { file.discard() }
+            if FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: target) }
+            try FileManager.default.copyItem(at: file.url, to: target)
+        } catch {
+            if case APIError.server(404, _) = error { markUnavailable(tab.key) }
+            downloadError = "下载失败，请重试。"
+        }
     }
 
     private func tabButton(_ tab: ChatPreviewTab) -> some View {
@@ -108,6 +135,9 @@ struct ChatPreviewPanel: View {
             case .dataset:
                 Text("只读预览 · AI 已读取其中的文字内容").font(V3.sans(11.5)).foregroundStyle(V3.fnt).lineLimit(1)
                 Spacer()
+                if let downloadError { Text(downloadError).font(V3.sans(11)).foregroundStyle(V3.red) }
+                Button { Task { await download(tab) } } label: { Label(downloading ? "正在下载…" : "下载文件", systemImage: "arrow.down.circle") }
+                    .buttonStyle(V3ButtonStyle(kind: .ghost)).disabled(downloading || unavailable.contains(tab.key))
                 Button { router?.jump(.section(.datasets)) } label: { Label("在资料库中打开", systemImage: "arrow.up.forward.square") }.buttonStyle(V3ButtonStyle(kind: .ghost))
             case .image:
                 Text("截图 · 仅在本次对话中可见").font(V3.sans(11.5)).foregroundStyle(V3.fnt).lineLimit(1)

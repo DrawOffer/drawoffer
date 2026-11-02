@@ -20,6 +20,13 @@ import Testing
     #expect(MockInterviewRequest.allowed(path: base + "/recordings", method: "DELETE"))
     #expect(!MockInterviewRequest.allowed(path: base + "/questions/x/recording", method: "GET"))
     #expect(!MockInterviewRequest.allowed(path: base + "/questions/12/recording", method: "DELETE"))
+    // 语音场次改文字作答与报告下一步勾选（后端 get_current_mock_interview_user）。
+    #expect(MockInterviewRequest.allowed(path: base + "/answer-mode", method: "POST"))
+    #expect(MockInterviewRequest.allowed(path: base + "/actions/0", method: "PUT"))
+    #expect(MockInterviewRequest.allowed(path: base + "/actions/12", method: "PUT"))
+    #expect(!MockInterviewRequest.allowed(path: base + "/actions/0", method: "POST"))
+    #expect(!MockInterviewRequest.allowed(path: base + "/actions/x", method: "PUT"))
+    #expect(!MockInterviewRequest.allowed(path: base + "/actions/1234", method: "PUT"))
     #expect(!MockInterviewRequest.allowed(path: "/api/datasets", method: "POST"))
     #expect(!MockInterviewRequest.allowed(path: "/api/datasets/1", method: "GET"))
 }
@@ -39,4 +46,14 @@ import Testing
     #expect(item.current == nil)
     #expect(!item.active)
     #expect(item.label == "评估失败")
+}
+
+@Test func speechSocketQueryAllowsDeviceCheckWithoutQuestion() {
+    #expect(DesktopTransport.speechQueryAllowed(["question_id": "12", "purpose": "voice_answer"]))
+    #expect(DesktopTransport.speechQueryAllowed(["question_id": "12", "purpose": "voice_input"]))
+    #expect(DesktopTransport.speechQueryAllowed(["purpose": "device_check"]))
+    #expect(!DesktopTransport.speechQueryAllowed(["purpose": "voice_answer"]))
+    #expect(!DesktopTransport.speechQueryAllowed(["question_id": "x", "purpose": "voice_answer"]))
+    #expect(!DesktopTransport.speechQueryAllowed(["question_id": "12", "purpose": "device_check"]))
+    #expect(!DesktopTransport.speechQueryAllowed(["purpose": "other"]))
 }

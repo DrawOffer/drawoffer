@@ -16,9 +16,13 @@ public enum MockInterviewRequest {
         if parts.count == 4 { return ["GET", "DELETE"].contains(method) }
         if parts.count == 5 {
             if parts[4] == "recordings" { return method == "DELETE" }
-            return method == "POST" && ["answers", "skip", "reply:retry", "finish", "abandon", "retry", "repeat", "transcripts:correct"].contains(parts[4])
+            return method == "POST" && ["answers", "skip", "reply:retry", "finish", "abandon", "retry", "repeat", "transcripts:correct", "answer-mode"].contains(parts[4])
         }
-        if parts.count == 6 { return parts[4] == "speech" && parts[5] == "playback" && method == "POST" }
+        if parts.count == 6 {
+            // 报告「下一步」的勾选：/actions/{index}
+            if parts[4] == "actions" { return method == "PUT" && (1...3).contains(parts[5].count) && parts[5].allSatisfy { $0.isASCII && $0.isNumber } }
+            return parts[4] == "speech" && parts[5] == "playback" && method == "POST"
+        }
         // /questions/{id}/transcript|re-evaluate|recording
         guard parts.count == 7, parts[4] == "questions", !parts[5].isEmpty, parts[5].allSatisfy({ $0.isASCII && $0.isNumber }) else { return false }
         switch parts[6] {

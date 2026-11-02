@@ -1,6 +1,7 @@
 import AppKit
 import DrawOfferCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// 重命名（Web `RenameResumeDialog`）与复制为新简历。重命名只改列表标题，不写入正文；
 /// 复制携带固定的 `client_request_id`，结果不确定时重试不会多复制一份。
@@ -209,7 +210,7 @@ struct ResumeShareSheet: View {
 
     private func expiryLabel(_ share: ResumeShare) -> String {
         guard let expiresAt = share.expiresAt else { return "永久有效" }
-        let formatter = DateFormatter(); formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        let formatter = Beijing.formatter(); formatter.dateFormat = "yyyy-MM-dd HH:mm"
         let label = formatter.string(from: expiresAt)
         return share.isExpired() ? "已于 \(label) 过期" : "有效至 \(label)"
     }
@@ -274,5 +275,371 @@ struct ResumeShareSheet: View {
 
     private func deleteShare() async {
         await run("DELETE", body: nil, failure: "删除分享链接失败，请稍后重试。")
+    }
+}
+
+/// 新建简历（Web `ResumeCreateDialog`，02.1a）：大预览 + 左右切换模板（← → 键）、简历名称，创建后直接进入编辑器。
+struct ResumeCreateSheet: View {
+    @Environment(SessionStore.self) private var session
+    var initialTemplateID: String? = nil
+    let close: () -> Void
+    let created: (String) -> Void
+    @State private var templates: [ResumeTemplate] = []
+    @State private var index = 0
+    @State private var title = ""
+    @State private var loading = true
+    @State private var loadFailed = false
+    @State private var busy = false
+    @State private var error: String?
+    @FocusState private var titleFocused: Bool
+
+    private var selected: ResumeTemplate? { templates.indices.contains(index) ? templates[index] : nil }
+
+    /// Web `ResumeCreateDialog`（`.hv3-create.is-preview`）：760 宽、高 min(900, 窗口 − 48)；标题 29 高，下方模板名与最多 3 个标签；
+    /// 点阵舞台撑满中间（外边距 20/31），A4 纸面上下 24、左右 76 内缩，36 圆形翻页钮距边 20；名称区 20/32/24，输入框 44 高；
+    /// 页脚左侧「第 N / M 套」与提示，取消 80、提交 148。
+    var body: some View {
+        V3Dialog(width: 760, closable: !busy, close: close) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("新建简历").font(.system(size: 20, weight: .semibold)).foregroundStyle(V3.txt).frame(height: 29).padding(.trailing, 40)
+                HStack(spacing: 6) {
+                    if let selected {
+                        Text(selected.name).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1).truncationMode(.tail).frame(maxWidth: 360, alignment: .leading).fixedSize().padding(.trailing, 4)
+                        ForEach(Array((selected.styleCategories + selected.useCases).prefix(3)), id: \.self) { V3Chip(label: $0) }
+                    } else {
+                        Text("选一套模板，再起个名字，创建后直接进入编辑器。").font(V3.sans(14)).foregroundStyle(V3.sub)
+                    }
+                }.frame(height: 20).padding(.top, 7)
+            }.padding(.horizontal, 32).padding(.top, 28)
+            stage.padding(.top, 20).padding(.horizontal, 31)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("简历名称").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
+                    Spacer()
+                    Text("只给自己看，方便在列表里区分").font(V3.sans(11.5)).foregroundStyle(V3.fnt)
+                }.frame(height: 20)
+                TextField("", text: $title, prompt: Text("例如：后端工程师 · 字节跳动").foregroundStyle(V3.fnt2))
+                    .textFieldStyle(.plain).font(V3.sans(13.5)).foregroundStyle(V3.txt).focused($titleFocused).accessibilityLabel("简历名称")
+                    .padding(.horizontal, 14).frame(height: 44)
+                    .background(.white, in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(error != nil ? V3.red : titleFocused ? V3.txt : V3.cl))
+                    .disabled(busy).onSubmit { submit() }
+                    .onChange(of: title) { if title.count > 255 { title = String(title.prefix(255)) }; error = nil }
+                if let error { Text(error).font(V3.sans(12.5)).foregroundStyle(V3.red).fixedSize(horizontal: false, vertical: true) }
+            }.padding(.horizontal, 32).padding(.top, 20).padding(.bottom, 24)
+        } left: {
+            if !templates.isEmpty {
+                Text("第 \(index + 1) / \(templates.count) 套").font(V3.sans(11.5, weight: .medium)).foregroundStyle(V3.sub).lineLimit(1)
+                    .accessibilityLabel("当前模板位置")
+            }
+            Text("模板之后可以在编辑器里随时切换").font(V3.sans(11.5)).foregroundStyle(V3.fnt).lineLimit(1)
+        } foot: {
+            Button("取消", action: close).buttonStyle(V3ButtonStyle(kind: .ghost, height: 36, width: 80)).disabled(busy)
+            Button(busy ? "正在创建…" : "创建并进入编辑器", action: submit).buttonStyle(V3ButtonStyle(kind: .dark, height: 36, width: 148))
+                .disabled(busy || loading || loadFailed || selected == nil)
+        }
+        .bodyPadding(false)
+        .frame(height: min(900, (NSApp.mainWindow?.contentLayoutRect.height ?? 948) - 48))
+        .onKeyPress(.leftArrow) { guard !titleFocused else { return .ignored }; move(-1); return .handled }
+        .onKeyPress(.rightArrow) { guard !titleFocused else { return .ignored }; move(1); return .handled }
+        .onAppear { titleFocused = true }
+        .task { await load() }
+    }
+
+    private var stage: some View {
+        V3DotStage(height: nil) {
+            if loading { Text("正在加载简历模板…").font(V3.sans(12.5)).foregroundStyle(V3.sub) }
+            else if loadFailed {
+                VStack(spacing: 12) {
+                    Text("模板暂时无法加载，请检查网络后重试。").font(V3.sans(12.5)).foregroundStyle(V3.sub)
+                    Button { Task { await load() } } label: { Label("重新加载", systemImage: "arrow.clockwise") }.buttonStyle(V3ButtonStyle(kind: .ghost))
+                }
+            } else if templates.isEmpty {
+                Text("当前没有可用模板，暂时无法新建简历。").font(V3.sans(12.5)).foregroundStyle(V3.sub)
+            } else if let selected {
+                TemplateThumbnail(template: selected, guest: false).id(selected.id)
+                    .aspectRatio(210.0 / 297, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 4)).shadow(color: .black.opacity(0.08), radius: 12, y: 8)
+                    .padding(.vertical, 24).padding(.horizontal, 76)
+                    .accessibilityElement(children: .ignore).accessibilityLabel("\(selected.name)，已选择")
+                HStack {
+                    navButton("chevron.left", "上一个模板") { move(-1) }
+                    Spacer()
+                    navButton("chevron.right", "下一个模板") { move(1) }
+                }.padding(.horizontal, 20)
+            }
+        }.frame(maxHeight: .infinity)
+    }
+
+    private func navButton(_ symbol: String, _ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 12, weight: .medium)).foregroundStyle(V3.sub)
+                .frame(width: 36, height: 36).background(.white, in: Circle()).overlay(Circle().stroke(V3.cl))
+                .shadow(color: .black.opacity(0.06), radius: 3, y: 2).contentShape(Circle())
+        }.buttonStyle(.plain).disabled(busy || templates.count < 2).opacity(busy || templates.count < 2 ? 0.4 : 1).accessibilityLabel(label)
+    }
+
+    private func move(_ direction: Int) {
+        guard templates.count > 1 else { return }
+        index = (index + direction + templates.count) % templates.count
+        error = nil
+    }
+
+    private func load() async {
+        loading = true; loadFailed = false
+        defer { loading = false }
+        do {
+            templates = try await session.api.listResumeTemplates().filter { !ResumeRequest.retiredTemplateKeys.contains($0.key) }
+            index = max(0, initialTemplateID.flatMap { id in templates.firstIndex { $0.id == id } } ?? 0)
+        } catch { loadFailed = true }
+    }
+
+    private func submit() {
+        guard !busy else { return }
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { error = "请输入简历名称。"; titleFocused = true; return }
+        guard let selected else { error = "请先选择一套简历模板。"; return }
+        busy = true; error = nil
+        Task {
+            defer { busy = false }
+            do {
+                let result = try await session.api.careerRequest(path: "/api/resumes", method: "POST", query: [:],
+                    body: .object(["title": .string(name), "template_id": .string(selected.id), "guide": .bool(true)]))
+                created((result["resume"] ?? result).display("id"))
+            } catch {
+                if case APIError.unauthorized = error { session.reportAuthenticationFailure(); return }
+                if case APIError.server(_, let code) = error {
+                    self.error = code == "INVALID_RESUME_TITLE" ? "请输入 1–255 个字符的简历名称。"
+                        : code == "RESUME_TITLE_CONFLICT" ? "该名称已经存在，请换一个名称。"
+                        : code == "TEMPLATE_INACTIVE" ? "所选模板已不可用，请重新选择。"
+                        : code == "RESUME_LIMIT_REACHED" ? "已达到 \(ResumeRequest.maximumPerUser) 份上限。删除不用的简历后，才能新建或复制。"
+                        : "创建简历失败，请稍后重试。"
+                } else { self.error = "网络中断，无法确认是否已创建。请先查看简历列表，避免重复创建。" }
+                titleFocused = true
+            }
+        }
+    }
+}
+
+/// 导入简历（Web `ResumeImportDialog`）：拖入或选择 Markdown/DOCX/PDF（最大 10 MB），可移除文件、修改名称（默认取文件名），
+/// 导入默认版式取管理端排序的第一套模板，上传完成后后端开始解析。
+struct ResumeImportSheet: View {
+    @Environment(SessionStore.self) private var session
+    var initialFile: URL? = nil
+    let close: () -> Void
+    let accepted: (String) -> Void
+    @State private var file: URL?
+    @State private var title = ""
+    @State private var busy = false
+    @State private var error: String?
+    @State private var targeted = false
+
+    /// Web `ResumeImportDialog`（02.1b）：560 宽；未选文件时是 184 高的点阵拖放区，选中后是 116 高插图与 64 高文件行；
+    /// 页脚左侧提示、积分说明、取消 80 与「导入并开始解析」132。
+    var body: some View {
+        V3Dialog(width: 560, closable: !busy, close: close) {
+            V3DialogHead(title: "导入简历", sub: "AI 会把文件拆成可编辑的模块，之后可以随时修改。")
+            if let file {
+                V3DotStage(height: 116) { ImportArt(single: ImportArt.tag(file.lastPathComponent)) }.padding(.top, 16)
+                fileRow(file).padding(.top, 20)
+            } else {
+                Button(action: pick) {
+                    ZStack(alignment: .top) {
+                        ImportArt(single: nil).frame(height: 104)
+                        Text("拖入简历文件，或点击选择").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt).frame(height: 16).offset(y: 120)
+                        Text("支持 Markdown、DOCX、PDF，最大 10 MB").font(V3.sans(11)).foregroundStyle(V3.fnt).frame(height: 13).offset(y: 144)
+                    }
+                    .frame(maxWidth: .infinity).frame(height: 182)
+                    .background { V3DotStage(height: nil) { EmptyView() }.opacity(targeted ? 0.85 : 1) }
+                    .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(targeted ? Color(hex: 0xDCDCD8) : Color(hex: 0xE9E9E5), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).disabled(busy).accessibilityLabel("选择 Markdown、DOCX 或 PDF 文件").padding(.top, 16)
+                .dropDestination(for: URL.self) { urls, _ in if let first = urls.first { choose(first) }; return !urls.isEmpty } isTargeted: { targeted = $0 }
+            }
+            V3TextInput(label: "简历名称", placeholder: "例如：张三｜产品经理", text: $title, error: error, disabled: busy, submit: submit)
+                .onChange(of: title) { error = nil }.padding(.top, 24)
+        } left: {
+            Text(file == nil ? "未选择文件" : "默认使用文件名（不含扩展名），可修改").font(V3.sans(11.5)).foregroundStyle(V3.fnt).lineLimit(1)
+        } foot: {
+            FeatureCostLabel(code: "resume_import")
+            Button("取消", action: close).buttonStyle(V3ButtonStyle(kind: .ghost, height: 36, width: 80)).disabled(busy)
+            Button(busy ? "正在导入…" : "导入并开始解析", action: submit).buttonStyle(V3ButtonStyle(kind: .dark, height: 36, width: 132)).disabled(busy || file == nil)
+        }
+        .onAppear { if let initialFile, file == nil { choose(initialFile) } }
+    }
+
+    /// `.hv3-file`：圆角 12 的白卡，64 高一行（格式色块 36、名称 13/500、大小 11、「移除文件」链接），导入中下方加进度条。
+    private func fileRow(_ file: URL) -> some View {
+        let tag = ImportArt.tag(file.lastPathComponent)
+        return VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Text(tag.label).font(V3.number(9.5, weight: .bold)).foregroundStyle(tag.color)
+                    .frame(width: 36, height: 36).background(tag.soft, in: RoundedRectangle(cornerRadius: 8))
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(file.lastPathComponent).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1).truncationMode(.tail).frame(height: 16)
+                    Text(ByteCountFormatter.string(fromByteCount: Int64((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0), countStyle: .file))
+                        .font(V3.number(11, weight: .medium)).foregroundStyle(V3.fnt).frame(height: 13)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                Button("移除文件") { self.file = nil; title = "" }.buttonStyle(.plain).font(V3.sans(14, weight: .medium)).foregroundStyle(V3.sub).disabled(busy)
+            }.padding(.leading, 14).padding(.trailing, 18).frame(height: 64)
+            if busy {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("正在导入… 上传完成后自动开始解析").font(V3.sans(11.5)).foregroundStyle(V3.sub).frame(height: 14)
+                    ProgressView().progressViewStyle(.linear).tint(V3.txt).frame(height: 4)
+                        .accessibilityLabel("\(file.lastPathComponent) 正在导入")
+                }
+                .padding(.top, 11).padding(.bottom, 15).frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .top) { Rectangle().fill(V3.line).frame(height: 1) }.padding(.horizontal, 18)
+            }
+        }
+        .background(.white, in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(V3.cl))
+    }
+
+    private func pick() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.pdf] + ["md", "docx"].compactMap { UTType(filenameExtension: $0) }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        choose(url)
+    }
+
+    private func choose(_ url: URL) {
+        guard ResumeImportUpload.types[url.pathExtension.lowercased()] != nil else { error = "选择 Markdown、DOCX 或 PDF 文件"; return }
+        file = url
+        title = url.deletingPathExtension().lastPathComponent
+        error = nil
+    }
+
+    private func submit() {
+        guard !busy else { return }
+        guard let file else { error = "请先选择需要导入的文件。"; return }
+        if let message = ResumeImportUpload.titleError(title) { error = message; return }
+        busy = true; error = nil
+        Task {
+            defer { busy = false }
+            do {
+                let templates = try await session.api.listResumeTemplates()
+                guard let template = templates.first else { error = "导入所需的默认版式暂时不可用，请稍后重试。"; return }
+                let upload = try ResumeImportUpload(file: file, templateID: template.id, title: title)
+                _ = try await session.api.importResume(upload)
+                accepted(title.trimmingCharacters(in: .whitespacesAndNewlines))
+            } catch {
+                if case APIError.unauthorized = error { session.reportAuthenticationFailure(); return }
+                self.error = ResumeImportUpload.errorMessage(error)
+            }
+        }
+    }
+}
+
+
+/// Web `ImportArt`：多份文件纸（MD / DOCX / PDF）或单份带格式的纸，经虚线箭头变成分好模块的简历纸，右上一个 spark 角标。
+struct ImportArt: View {
+    struct Tag { let label: String; let color: Color; let soft: Color }
+    let single: Tag?
+
+    static func tag(_ name: String) -> Tag {
+        switch (name as NSString).pathExtension.lowercased() {
+        case "pdf": Tag(label: "PDF", color: Color(hex: 0xD9822B), soft: Color(hex: 0xFBEFE3))
+        case "docx", "doc": Tag(label: "DOCX", color: V3.blue, soft: V3.blueSoft)
+        default: Tag(label: "MD", color: V3.sub, soft: V3.field)
+        }
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            if let single {
+                paper(x: 168, y: 22, w: 48, h: 62, tag: single.label, color: single.color, rotate: 6)
+            } else {
+                paper(x: 128, y: 22, w: 46, h: 60, tag: "MD", color: V3.sub, rotate: 10)
+                paper(x: 150, y: 18, w: 46, h: 60, tag: "DOCX", color: V3.blue, rotate: 2)
+                paper(x: 172, y: 22, w: 46, h: 60, tag: "PDF", color: Color(hex: 0xD9822B), rotate: -6)
+            }
+            arrow.offset(x: 232, y: 46)
+            modules(filled: single == nil ? 3 : 2).offset(x: 284, y: 14)
+            Image(systemName: "sparkle").font(.system(size: 11, weight: .semibold)).foregroundStyle(.white)
+                .frame(width: 22, height: 22).background(V3.txt, in: Circle()).shadow(color: .black.opacity(0.1), radius: 3, y: 2).offset(x: 346, y: 6)
+        }
+        .frame(width: 496, height: single == nil ? 104 : 116, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .accessibilityHidden(true)
+    }
+
+    private func bar(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ color: Color = Color(hex: 0xECECEA), r: CGFloat = 1) -> some View {
+        RoundedRectangle(cornerRadius: r).fill(color).frame(width: w, height: h).offset(x: x, y: y)
+    }
+
+    private func sheet<C: View>(_ w: CGFloat, _ h: CGFloat, @ViewBuilder _ content: () -> C) -> some View {
+        ZStack(alignment: .topLeading) { content() }
+            .frame(width: w, height: h, alignment: .topLeading)
+            .background(.white).clipShape(RoundedRectangle(cornerRadius: 5))
+            .overlay(RoundedRectangle(cornerRadius: 5).stroke(V3.cl)).shadow(color: .black.opacity(0.06), radius: 8, y: 6)
+    }
+
+    private func paper(x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat, tag: String, color: Color, rotate: Double) -> some View {
+        sheet(w, h) {
+            bar(7, 9, w * 0.55, 4, Color(hex: 0xDCDCD8), r: 2)
+            bar(7, 18, w * 0.7, 3, r: 2)
+            bar(7, 25, w * 0.5, 3, r: 2)
+            Text(tag).font(.system(size: 7.5, weight: .bold)).foregroundStyle(.white)
+                .frame(width: tag.count > 2 ? 30 : 24, height: 13).background(color, in: RoundedRectangle(cornerRadius: 3)).offset(x: 7, y: h - 20)
+        }.rotationEffect(.degrees(rotate)).offset(x: x, y: y)
+    }
+
+    private func modules(filled: Int) -> some View {
+        sheet(76, 88) {
+            bar(9, 9, 30, 5, V3.txt)
+            bar(9, 18, 46, 3, Color(hex: 0xDCDCD8))
+            ForEach(Array([28.0, 48, 67].enumerated()), id: \.offset) { index, top in
+                if index < filled {
+                    ZStack(alignment: .topLeading) {
+                        bar(5, 3.5, 24, 3, Color(hex: 0xDCDCD8))
+                        bar(5, 9, 38, 2.5)
+                    }.frame(width: 58, height: 15, alignment: .topLeading).background(V3.field, in: RoundedRectangle(cornerRadius: 3)).offset(x: 9, y: top)
+                } else {
+                    RoundedRectangle(cornerRadius: 3).stroke(Color(hex: 0xE9E9E5), style: StrokeStyle(lineWidth: 1, dash: [3, 2])).frame(width: 58, height: 15).offset(x: 9, y: top)
+                }
+            }
+        }
+    }
+
+    private var arrow: some View {
+        Canvas { context, _ in
+            var line = Path(); line.move(to: CGPoint(x: 2, y: 7)); line.addLine(to: CGPoint(x: 34, y: 7))
+            context.stroke(line, with: .color(Color(hex: 0xB9B9B3)), style: StrokeStyle(lineWidth: 1.4, dash: [3, 3]))
+            var head = Path(); head.move(to: CGPoint(x: 34, y: 3)); head.addLine(to: CGPoint(x: 39, y: 7)); head.addLine(to: CGPoint(x: 34, y: 11))
+            context.stroke(head, with: .color(Color(hex: 0xB9B9B3)), style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
+        }.frame(width: 44, height: 14)
+    }
+}
+
+/// Web `FeatureCost`：后台配置的功能价格（`GET /api/billing/feature-prices`，每次启动读一次），读不到时按用量计。
+struct FeatureCostLabel: View {
+    @Environment(SessionStore.self) private var session
+    let code: String
+    @State private var label = "按实际用量消耗积分"
+    @MainActor private static var cache: [JSONValue]?
+
+    var body: some View {
+        Text(label).font(V3.sans(12)).foregroundStyle(V3.sub).frame(height: 18)
+            .task {
+                if Self.cache == nil, let result = try? await session.api.careerRequest(path: "/api/billing/feature-prices", method: "GET", query: [:], body: nil) {
+                    Self.cache = result["items"]?.items ?? []
+                }
+                label = Self.label(Self.cache?.first { $0.text("featureCode") == code })
+            }
+    }
+
+    static func label(_ price: JSONValue?) -> String {
+        let points = price?["unitPoints"]?.stringValue.flatMap(Double.init) ?? price?["unitPoints"]?.numberValue
+        let text = points.map { value in
+            let formatter = NumberFormatter(); formatter.numberStyle = .decimal; formatter.maximumFractionDigits = 2; formatter.locale = Locale(identifier: "en_US")
+            return formatter.string(from: NSNumber(value: value)) ?? String(value)
+        }
+        switch price?.text("priceMode") {
+        case "fixed" where text != nil: return "消耗 \(text!) 积分"
+        case "per_minute" where text != nil: return "每分钟 \(text!) 积分"
+        case "free": return "本次免费"
+        default: return "按实际用量消耗积分"
+        }
     }
 }

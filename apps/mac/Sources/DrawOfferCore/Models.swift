@@ -6,10 +6,17 @@ public struct User: Codable, Equatable, Sendable {
     public let email: String?
     public let nickname: String
     public let isAdmin: Bool
+    /// 头像地址（`/api/auth/default-avatar` 或本人私有资源），经桌面会话下载显示。
+    public let avatarURL: String?
+
+    public init(id: String, email: String?, nickname: String, isAdmin: Bool, avatarURL: String? = nil) {
+        self.id = id; self.email = email; self.nickname = nickname; self.isAdmin = isAdmin; self.avatarURL = avatarURL
+    }
 
     enum CodingKeys: String, CodingKey {
         case id, email, nickname
         case isAdmin = "is_admin"
+        case avatarURL = "avatar_url"
     }
 }
 
@@ -113,7 +120,7 @@ public struct ResumeSummary: Decodable, Identifiable, Equatable, Sendable {
 
     /// 与 Web `formatUpdatedAt` 同一口径：今天显示时刻，昨天显示「昨天」，今年显示月-日，更早显示年-月-日。
     /// 后端返回不带时区的 UTC 时间，按 UTC 解析后换算到本地时区。
-    public func updatedLabel(now: Date = Date(), calendar: Calendar = .current) -> String {
+    public func updatedLabel(now: Date = Date(), calendar: Calendar = Beijing.calendar) -> String {
         guard let date = ResumeSummary.parseTimestamp(updatedAt) else { return "—" }
         let pad = { (value: Int) in String(format: "%02d", value) }
         let parts = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
@@ -124,7 +131,7 @@ public struct ResumeSummary: Decodable, Identifiable, Equatable, Sendable {
         return "\(pad(parts.month ?? 0))-\(pad(parts.day ?? 0))"
     }
 
-    static func parseTimestamp(_ value: String) -> Date? {
+    public static func parseTimestamp(_ value: String) -> Date? {
         let hasZone = value.hasSuffix("Z") || value.range(of: #"[+-]\d{2}:\d{2}$"#, options: .regularExpression) != nil
         let text = hasZone ? value : value + "Z"
         let formatter = ISO8601DateFormatter()
