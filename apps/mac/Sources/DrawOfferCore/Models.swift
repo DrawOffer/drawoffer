@@ -120,7 +120,7 @@ public struct ResumeSummary: Decodable, Identifiable, Equatable, Sendable {
 
     /// 与 Web `formatUpdatedAt` 同一口径：今天显示时刻，昨天显示「昨天」，今年显示月-日，更早显示年-月-日。
     /// 后端返回不带时区的 UTC 时间，按 UTC 解析后换算到本地时区。
-    public func updatedLabel(now: Date = Date(), calendar: Calendar = .current) -> String {
+    public func updatedLabel(now: Date = Date(), calendar: Calendar = Beijing.calendar) -> String {
         guard let date = ResumeSummary.parseTimestamp(updatedAt) else { return "—" }
         let pad = { (value: Int) in String(format: "%02d", value) }
         let parts = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)

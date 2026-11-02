@@ -16,8 +16,8 @@ public sealed class InterviewSchedulePage : Page {
     private readonly StackPanel _next=new(){Spacing=10};
     private readonly TextBlock _title=Text("",28),_subtitle=Text("",13,true),_error=Text("",12,true);
     private readonly CancellationTokenSource _life=new();
-    private readonly CalendarDatePicker _date=new(){Date=DateTimeOffset.Now};
-    private DateOnly _anchor=DateOnly.FromDateTime(DateTime.Today);
+    private readonly CalendarDatePicker _date=new(){Date=Beijing.Now};
+    private DateOnly _anchor=Beijing.TodayDate;
     private string _mode="month",_query="";
     private bool _cancelled;
     private int _generation;
@@ -41,7 +41,7 @@ public sealed class InterviewSchedulePage : Page {
         var copy=new StackPanel{Spacing=8};copy.Children.Add(Text("SCHEDULE · 面试排期",11,true));_title.FontFamily=new FontFamily("SimSun");copy.Children.Add(_title);copy.Children.Add(_subtitle);head.Children.Add(copy);
         var nav=new StackPanel{Orientation=Orientation.Horizontal,Spacing=8,VerticalAlignment=VerticalAlignment.Center};
         foreach(var mode in new[]{("month","月"),("week","周"),("list","列表")})nav.Children.Add(Button(mode.Item2,()=>{_mode=mode.Item1;Render();}));
-        nav.Children.Add(Button("‹",()=>Shift(-1)));nav.Children.Add(Button("今天",()=>{_anchor=DateOnly.FromDateTime(DateTime.Today);Render();}));nav.Children.Add(Button("›",()=>Shift(1)));
+        nav.Children.Add(Button("‹",()=>Shift(-1)));nav.Children.Add(Button("今天",()=>{_anchor=Beijing.TodayDate;Render();}));nav.Children.Add(Button("›",()=>Shift(1)));
         _date.DateChanged+=(_,_)=>{if(_date.Date is {} date){_anchor=DateOnly.FromDateTime(date.Date);Render();}};_date.Width=130;nav.Children.Add(_date);
         Grid.SetColumn(nav,1);head.Children.Add(nav);_root.Children.Add(head);
         var toolbar=new Grid();toolbar.ColumnDefinitions.Add(new());toolbar.ColumnDefinitions.Add(new(){Width=GridLength.Auto});
@@ -85,9 +85,9 @@ public sealed class InterviewSchedulePage : Page {
         _calendar.Children.Clear();_calendar.RowDefinitions.Clear();_calendar.ColumnDefinitions.Clear();
         if(_mode=="month")MonthView();else if(_mode=="week")WeekView();else ListView();
         _next.Children.Clear();if(_error.Text!="")_next.Children.Add(_error);_next.Children.Add(Text("接下来",11,true));
-        var next=ScheduleCalendar.Upcoming(Visible,DateTimeOffset.Now);
+        var next=ScheduleCalendar.Upcoming(Visible,Beijing.Now);
         if(next.Length==0)_next.Children.Add(Text("接下来没有安排的面试或笔试",12,true));
-        foreach(var item in next)_next.Children.Add(Button($"{(item.OpenWindow?item.End:item.Start).ToLocalTime():M/d HH:mm}  {item.Company} · {item.Title} · {item.Label}  {item.Status(DateTimeOffset.Now)}",()=>_=OpenAsync(item)));
+        foreach(var item in next)_next.Children.Add(Button($"{(item.OpenWindow?item.End:item.Start).ToBeijing():M/d HH:mm}  {item.Company} · {item.Title} · {item.Label}  {item.Status(Beijing.Now)}",()=>_=OpenAsync(item)));
     }
     private void MonthView() {
         var days=ScheduleCalendar.MonthDays(_anchor);
@@ -97,17 +97,17 @@ public sealed class InterviewSchedulePage : Page {
         for(var col=0;col<7;col++){var label=Text(new[]{"周一","周二","周三","周四","周五","周六","周日"}[col],11,true);label.HorizontalAlignment=HorizontalAlignment.Center;Grid.SetColumn(label,col);_calendar.Children.Add(label);}
         for(var i=0;i<days.Length;i++) {
             var date=days[i];var content=new StackPanel{Spacing=4,Padding=new Thickness(7)};
-            var number=Button(date.Day.ToString(),()=>{_anchor=date;_mode="week";Render();},date==DateOnly.FromDateTime(DateTime.Today));number.FontSize=12;number.Padding=new Thickness(4);number.HorizontalAlignment=HorizontalAlignment.Left;number.Opacity=date.Month==_anchor.Month?1:0.4;content.Children.Add(number);
+            var number=Button(date.Day.ToString(),()=>{_anchor=date;_mode="week";Render();},date==Beijing.TodayDate);number.FontSize=12;number.Padding=new Thickness(4);number.HorizontalAlignment=HorizontalAlignment.Left;number.Opacity=date.Month==_anchor.Month?1:0.4;content.Children.Add(number);
             var events=Day(date).ToArray();foreach(var item in events.Take(3))content.Children.Add(Chip(item));
             if(events.Length>3){var overflow=new StackPanel{Spacing=6};foreach(var item in events.Skip(3))overflow.Children.Add(Chip(item));content.Children.Add(new Button{Content=$"另有 {events.Length-3} 项",FontSize=10,Flyout=new Flyout{Content=new ScrollViewer{Content=overflow,MaxHeight=400}}});}
-            var cell=new Border{Child=content,BorderBrush=Brush(0xE8E8E4),BorderThickness=new Thickness(0.5),Background=Brush(date==DateOnly.FromDateTime(DateTime.Today)?0xF8F8F5:0xFFFFFF),AllowDrop=true};
+            var cell=new Border{Child=content,BorderBrush=Brush(0xE8E8E4),BorderThickness=new Thickness(0.5),Background=Brush(date==Beijing.TodayDate?0xF8F8F5:0xFFFFFF),AllowDrop=true};
             cell.DoubleTapped+=(_,e)=>{if(e.OriginalSource is not Microsoft.UI.Xaml.Controls.Button)_=CreateAsync(ScheduleCalendar.LocalDate(date,TimeSpan.FromHours(9)));};
             ConfigureDrop(cell,date,false);Grid.SetColumn(cell,i%7);Grid.SetRow(cell,1+i/7);_calendar.Children.Add(cell);
         }
     }
     private Button Chip(ScheduledInterview item) {
-        var value=Button($"{item.Start.ToLocalTime():HH:mm}  {item.Caption}",()=>_=OpenAsync(item));
-        value.Content=new TextBlock{Text=$"{item.Start.ToLocalTime():HH:mm}  {item.Caption}",FontSize=10,TextTrimming=TextTrimming.CharacterEllipsis};
+        var value=Button($"{item.Start.ToBeijing():HH:mm}  {item.Caption}",()=>_=OpenAsync(item));
+        value.Content=new TextBlock{Text=$"{item.Start.ToBeijing():HH:mm}  {item.Caption}",FontSize=10,TextTrimming=TextTrimming.CharacterEllipsis};
         value.Padding=new Thickness(5,4,5,4);value.HorizontalAlignment=HorizontalAlignment.Stretch;value.HorizontalContentAlignment=HorizontalAlignment.Left;value.Background=Brush(EventColor(item));value.BorderThickness=new Thickness(0);value.CanDrag=item.Editable&&!item.OpenWindow;
         value.DragStarting+=(_,e)=>e.Data.SetText(item.Id);return value;
     }
@@ -117,7 +117,7 @@ public sealed class InterviewSchedulePage : Page {
         view.Drop+=async(_,e)=>{
             if(!e.DataView.Contains(StandardDataFormats.Text))return;
             var id=await e.DataView.GetTextAsync();var original=_items.FirstOrDefault(x=>x.Id==id);var item=timed?original?.Timed:original;if(item is null||!item.Editable||item.OpenWindow&&!timed)return;
-            var minute=timed?Math.Clamp((int)Math.Round(e.GetPosition(view).Y/56*60/15)*15,0,1425):(int)item.Start.ToLocalTime().TimeOfDay.TotalMinutes;
+            var minute=timed?Math.Clamp((int)Math.Round(e.GetPosition(view).Y/56*60/15)*15,0,1425):(int)item.Start.ToBeijing().TimeOfDay.TotalMinutes;
             var from=ScheduleCalendar.LocalDate(day,TimeSpan.FromMinutes(minute));await OpenAsync(original!,item.OpenWindow?"answer-plan":"reschedule",from,from+(item.End-item.Start));
         };
     }
@@ -141,9 +141,9 @@ public sealed class InterviewSchedulePage : Page {
                 foreach(var previous in column.Children.OfType<Button>().ToArray())column.Children.Remove(previous);
                 foreach(var item in events){
                     var lane=lanes[item.Id];var from=item.Start<ScheduleCalendar.LocalDate(day)?ScheduleCalendar.LocalDate(day):item.Start;var until=item.End>ScheduleCalendar.LocalDate(day.AddDays(1))?ScheduleCalendar.LocalDate(day.AddDays(1)):item.End;
-                    var chip=Chip(item);chip.CanDrag=item.Editable;chip.VerticalAlignment=VerticalAlignment.Top;chip.HorizontalAlignment=HorizontalAlignment.Left;chip.Width=Math.Max(20,column.ActualWidth/lane.Count-4);chip.Height=Math.Max(26,(until-from).TotalHours*56);chip.Margin=new Thickness(lane.Index*column.ActualWidth/lane.Count+2,from.ToLocalTime().TimeOfDay.TotalHours*56,0,0);column.Children.Add(chip);
+                    var chip=Chip(item);chip.CanDrag=item.Editable;chip.VerticalAlignment=VerticalAlignment.Top;chip.HorizontalAlignment=HorizontalAlignment.Left;chip.Width=Math.Max(20,column.ActualWidth/lane.Count-4);chip.Height=Math.Max(26,(until-from).TotalHours*56);chip.Margin=new Thickness(lane.Index*column.ActualWidth/lane.Count+2,from.ToBeijing().TimeOfDay.TotalHours*56,0,0);column.Children.Add(chip);
                     if(item.Editable){
-                        var face=new Grid();face.Children.Add(Text(item.Caption+"\n"+item.Start.ToLocalTime().ToString("HH:mm"),10));
+                        var face=new Grid();face.Children.Add(Text(item.Caption+"\n"+item.Start.ToBeijing().ToString("HH:mm"),10));
                         foreach(var top in new[]{true,false}){
                             var grip=new Microsoft.UI.Xaml.Controls.Primitives.Thumb{Height=5,HorizontalAlignment=HorizontalAlignment.Stretch,VerticalAlignment=top?VerticalAlignment.Top:VerticalAlignment.Bottom,Opacity=0.4};double change=0;
                             grip.DragStarted+=(_,_)=>change=0;grip.DragDelta+=(_,e)=>change+=e.VerticalChange;
@@ -163,7 +163,7 @@ public sealed class InterviewSchedulePage : Page {
     }
     private void ListView(){
         var panel=new StackPanel{Spacing=10};panel.Children.Add(Text("时间 · 公司 / 岗位 · 阶段与状态",11,true));
-        foreach(var item in Visible.Where(x=>x.Overlaps(ScheduleCalendar.LocalDate(Week),ScheduleCalendar.LocalDate(Week.AddDays(7)))).OrderBy(x=>x.Start))panel.Children.Add(Button($"{item.Start.ToLocalTime():M/d HH:mm}  {item.Company} · {item.Title}  {item.Label} · {item.Status(DateTimeOffset.Now)}",()=>_=OpenAsync(item)));
+        foreach(var item in Visible.Where(x=>x.Overlaps(ScheduleCalendar.LocalDate(Week),ScheduleCalendar.LocalDate(Week.AddDays(7)))).OrderBy(x=>x.Start))panel.Children.Add(Button($"{item.Start.ToBeijing():M/d HH:mm}  {item.Company} · {item.Title}  {item.Label} · {item.Status(Beijing.Now)}",()=>_=OpenAsync(item)));
         _calendar.Children.Add(new ScrollViewer{Content=panel});
     }
     private async Task CreateAsync(DateTimeOffset start,DateTimeOffset? end=null){

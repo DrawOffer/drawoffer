@@ -233,7 +233,7 @@ struct DatasetLibraryView: View {
     private func go(_ next:String) { guard !busy else { return }; view = next; if next == "home" { tab = tab } ; selected = []; query = ""; batchMode = false }
     private func relativeDay(_ value:String,withTime:Bool = false) -> String {
         guard let date = CareerApplication.date(value) else { return "" }
-        let calendar = Calendar.current
+        let calendar = Beijing.calendar
         let days = calendar.dateComponents([.day],from:calendar.startOfDay(for:date),to:calendar.startOfDay(for:Date())).day ?? 0
         let time = self.date(value,format:"HH:mm")
         if days == 0 { return withTime ? "今天 " + time : "今天" }
@@ -242,7 +242,7 @@ struct DatasetLibraryView: View {
     }
     private func listDate(_ value:String) -> String {
         guard let date = CareerApplication.date(value) else { return value }
-        return self.date(value,format:Calendar.current.component(.year,from:date) == Calendar.current.component(.year,from:Date()) ? "MM-dd" : "yyyy-MM-dd")
+        return self.date(value,format:Beijing.calendar.component(.year,from:date) == Beijing.calendar.component(.year,from:Date()) ? "MM-dd" : "yyyy-MM-dd")
     }
     /// 首页正文：我的项目网格（273:172 等比放大，间距 20）或求职进程卡片。
     @ViewBuilder private var home: some View {
@@ -348,7 +348,7 @@ struct DatasetLibraryView: View {
         let company = project.application.text("company_name_snapshot").trimmingCharacters(in:.whitespaces)
         let role = project.application.text("job_title_snapshot").trimmingCharacters(in:.whitespaces)
         let next = project.next
-        let nextDate = next?.date.flatMap(CareerApplication.date).map { String(format:"%02d-%02d",Calendar.current.component(.month,from:$0),Calendar.current.component(.day,from:$0)) } ?? ""
+        let nextDate = next?.date.flatMap(CareerApplication.date).map { String(format:"%02d-%02d",Beijing.calendar.component(.month,from:$0),Beijing.calendar.component(.day,from:$0)) } ?? ""
         return Button { go("app:" + project.id) } label:{
             VStack(alignment:.leading,spacing:14) {
                 HStack(spacing:10) {
@@ -922,7 +922,7 @@ struct DatasetLibraryView: View {
     /// 面试场次副标题：「三面 · 09-27 周日 16:00 · 飞书视频」；已完成 / 已取消的写状态。
     private func sessionMeta(_ item:JSONValue) -> String {
         let when = CareerApplication.date(item.text("start_at")).map { date in
-            let c = Calendar.current.dateComponents([.month,.day,.weekday,.hour,.minute],from:date)
+            let c = Beijing.calendar.dateComponents([.month,.day,.weekday,.hour,.minute],from:date)
             return String(format:"%02d-%02d 周%@ %02d:%02d",c.month ?? 0,c.day ?? 0,["日","一","二","三","四","五","六"][(c.weekday ?? 1) - 1],c.hour ?? 0,c.minute ?? 0)
         } ?? ""
         let tail = item.text("status") == "completed" ? "已完成" : item.text("status") == "cancelled" ? "已取消" : item.text("location").nonEmptyValue ?? ["video":"视频面试","onsite":"现场","phone":"电话","other":"其他"][item.text("mode")] ?? ""
@@ -969,7 +969,7 @@ struct DatasetLibraryView: View {
         .padding(.horizontal,16).frame(height:40).background(.white,in:Capsule()).overlay(Capsule().stroke(V3.cl)).shadow(color:.black.opacity(0.08),radius:12,y:4)
         .padding(.top,20).task(id:text) { try? await Task.sleep(for:.seconds(3)); if notice == text { notice = nil } }
     }
-    private func date(_ value:String,format pattern:String = "yyyy-MM-dd") -> String { guard let date = CareerApplication.date(value) else { return "—" }; let format = DateFormatter(); format.dateFormat = pattern; return format.string(from:date) }
+    private func date(_ value:String,format pattern:String = "yyyy-MM-dd") -> String { guard let date = CareerApplication.date(value) else { return "—" }; let format = Beijing.formatter(); format.dateFormat = pattern; return format.string(from:date) }
     private func explain(_ error:Error) -> String {
         if case APIError.unauthorized = error { return "登录已失效，请重新登录。" }
         if case APIError.server(_,let code) = error { return ["FOLDER_NAME_CONFLICT":"文件夹名称已存在。", "DATASET_NAME_CONFLICT":"同一文件夹已有同名文件，请选择保留两份或确认替换。", "DATASET_FILENAME_CONFLICT":"同一文件夹已有同名文件，请选择保留两份或确认替换。", "DATASET_IN_PROGRESS":"资料正在处理，暂时不能删除或替换。", "DATASET_NOT_RETRYABLE":"只有解析失败的文档可重新解析。", "DATASET_FILE_TOO_LARGE":"文件超出上传限制。", "INVALID_DATASET_NAME":"名称无效，请去除路径符号或控制字符。", "DATASET_ALREADY_LINKED":"已关联其他面试，请刷新后重试。", "FOLDER_NOT_FOUND":"文件夹已不存在，请刷新后选择。", "DATASET_NOT_FOUND":"资料已不存在或不可访问。", "ASSET_DELETE_FAILED":"原文件清理失败，请刷新确认后重试。", "DATASET_BUSY":"资料正在处理，暂时不能删除或替换。", "FOLDER_NAME_DUPLICATE":"文件夹名称已存在。", "DATASET_CONTENT_CONFLICT":"资料已更新，请刷新后重新确认替换。", "PRECONDITION_FAILED":"资料已更新，请刷新后重新确认替换。"][code] ?? "操作未完成（\(code)）。请刷新确认状态后再试。" }

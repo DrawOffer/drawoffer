@@ -33,13 +33,13 @@ public enum JobPool {
         job["source_attributes"]?[key]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyValue
     }
 
-    public static func isToday(_ value: String, now: Date = Date(), calendar: Calendar = .current) -> Bool {
+    public static func isToday(_ value: String, now: Date = Date(), calendar: Calendar = Beijing.calendar) -> Bool {
         guard let date = CareerApplication.date(value) else { return false }
         return calendar.isDate(date, inSameDayAs: now)
     }
 
     /// `poolRelative`：今天 / N 天前 / N 周前，之后为「10月29日」，非今年带年份。
-    public static func relative(_ value: String, now: Date = Date(), calendar: Calendar = .current) -> String {
+    public static func relative(_ value: String, now: Date = Date(), calendar: Calendar = Beijing.calendar) -> String {
         guard let date = CareerApplication.date(value) else { return "" }
         let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now)).day ?? 0
         if days <= 0 { return "今天" }
@@ -51,7 +51,7 @@ public enum JobPool {
     }
 
     /// `poolDate`：今天 / 昨天 / 2026/10/29，后接 24 小时制时间。
-    public static func date(_ value: String, now: Date = Date(), calendar: Calendar = .current) -> String {
+    public static func date(_ value: String, now: Date = Date(), calendar: Calendar = Beijing.calendar) -> String {
         guard let date = CareerApplication.date(value) else { return "尚无记录" }
         let parts = calendar.dateComponents([.year, .month, .day], from: date)
         let day = calendar.isDate(date, inSameDayAs: now) ? "今天"

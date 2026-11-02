@@ -32,12 +32,12 @@ public struct ScheduledInterview: Identifiable, Sendable {
 }
 
 public enum ScheduleCalendar {
-    public static func weekStart(_ date: Date, calendar: Calendar = .current) -> Date {
+    public static func weekStart(_ date: Date, calendar: Calendar = Beijing.calendar) -> Date {
         let day = calendar.startOfDay(for: date)
         let weekday = calendar.component(.weekday, from: day)
         return calendar.date(byAdding: .day, value: -((weekday + 5) % 7), to: day)!
     }
-    public static func monthDays(_ date: Date, calendar: Calendar = .current) -> [Date] {
+    public static func monthDays(_ date: Date, calendar: Calendar = Beijing.calendar) -> [Date] {
         let month = calendar.dateInterval(of: .month, for: date)!
         let first = weekStart(month.start, calendar: calendar)
         let last = calendar.date(byAdding: .day, value: -1, to: month.end)!

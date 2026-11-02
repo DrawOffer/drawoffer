@@ -210,7 +210,7 @@ struct ResumeShareSheet: View {
 
     private func expiryLabel(_ share: ResumeShare) -> String {
         guard let expiresAt = share.expiresAt else { return "永久有效" }
-        let formatter = DateFormatter(); formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        let formatter = Beijing.formatter(); formatter.dateFormat = "yyyy-MM-dd HH:mm"
         let label = formatter.string(from: expiresAt)
         return share.isExpired() ? "已于 \(label) 过期" : "有效至 \(label)"
     }

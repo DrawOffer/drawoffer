@@ -122,17 +122,17 @@ struct JobsBoardView: View {
     // MARK: Head and statistics
 
     private var weekStart: Date {
-        var calendar = Calendar.current; calendar.firstWeekday = 2
+        var calendar = Beijing.calendar; calendar.firstWeekday = 2
         return calendar.dateInterval(of: .weekOfYear, for: Date())?.start ?? Date()
     }
     private var weekLabel: String {
-        let formatter = DateFormatter(); formatter.dateFormat = "MM-dd"
-        return formatter.string(from: weekStart) + " 至 " + formatter.string(from: Calendar.current.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart)
+        let formatter = Beijing.formatter(); formatter.dateFormat = "MM-dd"
+        return formatter.string(from: weekStart) + " 至 " + formatter.string(from: Beijing.calendar.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart)
     }
     private var activeCount: Int { applications.filter { $0.raw.text("status") == "active" && $0.raw.text("archived_at").isEmpty && $0.raw.text("lifecycle_status") != "terminated" }.count }
     private var weeklyInterviews: Int {
         if let value = overview["metrics"]?["weekly_interviews"], value != .null { return value.integer }
-        let end = Calendar.current.date(byAdding: .day, value: 7, to: weekStart) ?? weekStart
+        let end = Beijing.calendar.date(byAdding: .day, value: 7, to: weekStart) ?? weekStart
         return sessions.filter { $0.text("status") != "cancelled" && (CareerApplication.date($0.text("start_at")).map { $0 >= weekStart && $0 < end } ?? false) }.count
     }
     private var pendingOffers: Int { applications.filter { $0.raw.text("current_stage_type") == "offer" && $0.raw.text("offer_status") == "received" && $0.raw.text("status") == "active" }.count }
@@ -538,7 +538,7 @@ struct JobsBoardView: View {
                 cursor = page.text("next_cursor")
                 if !cursor.isEmpty && !seen.insert(cursor).inserted { throw APIError.invalidResponse }
             } while !cursor.isEmpty
-            let metrics = try await session.api.careerRequest(path: "/api/interview-overview", method: "GET", query: ["timezone": TimeZone.current.identifier], body: nil)
+            let metrics = try await session.api.careerRequest(path: "/api/interview-overview", method: "GET", query: ["timezone": Beijing.identifier], body: nil)
             var arrangements: [JSONValue] = []; cursor = ""; seen = []
             repeat {
                 var params = ["limit": "500", "include_archived": "true"]; if !cursor.isEmpty { params["cursor"] = cursor }
@@ -871,7 +871,7 @@ struct CareerForm: View {
     }
     /// Only the values without their own column stay in notes; stale date lines from older records are dropped.
     private var offerNotes: String { CareerNotes.merging(["收到日期": "", "回复截止": "", "预计入职": "", "试用期": "", "Offer 材料": offerMaterials, "薪酬说明": salaryDescription], into: current?.raw.text("notes") ?? "") }
-    private func calendarDay(_ date: Date) -> String { let f = DateFormatter(); f.calendar = Calendar(identifier: .gregorian); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"; return f.string(from: date) }
+    private func calendarDay(_ date: Date) -> String { let f = Beijing.formatter(); f.calendar = Beijing.calendar; f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"; return f.string(from: date) }
     /// The stage type sent to the API: HR 面 and OC have their own types.
     private var stageType: String { stage == "interview" && label == "HR 面" ? "hr" : stage == "offer" && offerIntent == "none" ? "oc" : stage }
     private var formalOfferFields: some View {
@@ -1070,10 +1070,10 @@ struct CareerForm: View {
     }
     private func shortDay(_ date: Date?) -> String? {
         guard let date else { return nil }
-        let f = DateFormatter(); f.dateFormat = "MM-dd"; return f.string(from: date)
+        let f = Beijing.formatter(); f.dateFormat = "MM-dd"; return f.string(from: date)
     }
     private func listDateTime(_ date: Date) -> String {
-        let f = DateFormatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = "M月d日 HH:mm"; return f.string(from: date)
+        let f = Beijing.formatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = "M月d日 HH:mm"; return f.string(from: date)
     }
     private struct TrackRow { let key: String; let label: String; let status: String; let current: Bool }
     private struct SummaryRow { let icon: String; let title: String; let text: String; let muted: Bool }
@@ -1227,7 +1227,7 @@ struct CareerForm: View {
                 var fields: [String: JSONValue] = ["base_lock_version": item["lock_version"] ?? .number(1)]
                 let formatter = ISO8601DateFormatter()
                 if sessionCommand == "reschedule" {
-                    fields["start_at"] = .string(formatter.string(from: start)); fields["end_at"] = .string(formatter.string(from: end)); fields["timezone"] = .string(TimeZone.current.identifier)
+                    fields["start_at"] = .string(formatter.string(from: start)); fields["end_at"] = .string(formatter.string(from: end)); fields["timezone"] = .string(Beijing.identifier)
                 } else if sessionCommand == "answer-plan" {
                     fields["answer_plan_start_at"] = .string(formatter.string(from: start)); fields["answer_plan_end_at"] = .string(formatter.string(from: end))
                 }
@@ -1363,7 +1363,7 @@ struct CareerForm: View {
                             "stage_label": .string(reuseCurrentStage ? (current.raw["current_stage"]?.text("stage_label") ?? label) : stage == "interview" ? label : CareerStage.label(stage)),
                             "round_no": stage == "interview" && !isHR ? .number(Double(round)) : .null,
                             "start_at": .string(formatter.string(from: begin)), "end_at": .string(formatter.string(from: finish)),
-                            "schedule_kind": .string(isWindow ? "open_window" : "fixed_slot"), "timezone": .string(TimeZone.current.identifier), "mode": .string(mode),
+                            "schedule_kind": .string(isWindow ? "open_window" : "fixed_slot"), "timezone": .string(Beijing.identifier), "mode": .string(mode),
                             "allow_conflict": .bool(allowConflict),
                             "meeting_url": ["video", "phone"].contains(mode) && !place.isEmpty ? .string(place) : .null,
                             "location": ["onsite", "other"].contains(mode) && !place.isEmpty ? .string(place) : .null,

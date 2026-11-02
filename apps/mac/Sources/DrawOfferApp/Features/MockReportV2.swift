@@ -202,7 +202,7 @@ struct MockReportV2: View {
         guard let result = try? await session.api.careerRequest(path: "/api/interview-sessions", method: "GET", query: query, body: nil) else { return }
         let first = (result["items"]?.items ?? []).sorted { $0.text("start_at") < $1.text("start_at") }.first
         guard let first, let date = CareerApplication.date(first.text("start_at")) else { next = nil; return }
-        let calendar = Calendar.current
+        let calendar = Beijing.calendar
         let week = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"]
         let parts = calendar.dateComponents([.month, .day, .weekday], from: date)
         next = NextInterview(label: first.text("stage_label"), date: String(format: "%02d·%02d ", parts.month ?? 0, parts.day ?? 0) + week[(parts.weekday ?? 1) - 1],

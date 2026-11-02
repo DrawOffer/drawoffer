@@ -37,7 +37,7 @@ public static class ScheduleCalendar {
     }
     public static DateTimeOffset LocalDate(DateOnly date,TimeSpan time=default) {
         var value=date.ToDateTime(TimeOnly.MinValue).Add(time);
-        return new DateTimeOffset(value,TimeZoneInfo.Local.GetUtcOffset(value));
+        return new DateTimeOffset(value,Beijing.Offset);
     }
     public static ScheduledInterview[] Conflicts(IEnumerable<ScheduledInterview> items,string? excluding,DateTimeOffset start,DateTimeOffset end)=>
         items.Where(x=>x.Id!=excluding&&x.Editable&&!x.OpenWindow&&x.Overlaps(start,end)).ToArray();

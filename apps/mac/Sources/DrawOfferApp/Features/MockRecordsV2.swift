@@ -106,7 +106,7 @@ struct MockRecordsV2: View {
         let date = CareerApplication.date(when(item)) ?? Date()
         return VStack(alignment: .leading, spacing: 2) {
             Text(verbatim: MockMap.mmddDot(date)).font(.system(size: 15, weight: .medium)).foregroundStyle(off ? MI.mute : MI.ink)
-            Text(verbatim: Self.week[Calendar.current.component(.weekday, from: date) - 1]).font(V3.sans(12)).foregroundStyle(MI.mute)
+            Text(verbatim: Self.week[Beijing.calendar.component(.weekday, from: date) - 1]).font(V3.sans(12)).foregroundStyle(MI.mute)
         }.frame(width: 64, alignment: .leading)
     }
 

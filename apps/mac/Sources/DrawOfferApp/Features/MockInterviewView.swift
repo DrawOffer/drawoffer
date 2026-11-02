@@ -81,7 +81,7 @@ struct MockInterviewView: View {
     }
     private func date(_ value: String) -> String {
         guard let date = CareerApplication.date(value) else { return "—" }
-        let f = DateFormatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = "M月d日 HH:mm"; return f.string(from: date)
+        let f = Beijing.formatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = "M月d日 HH:mm"; return f.string(from: date)
     }
     var body: some View {
         Group {
@@ -244,7 +244,7 @@ struct MockInterviewView: View {
     private func coverageTypes(_ stage: String) -> [String] { stage.trimmingCharacters(in: .whitespaces).uppercased().hasPrefix("HR") ? ["hr", "comprehensive", "project_deep_dive"] : ["technical", "project_deep_dive", "comprehensive"] }
     private func estimate(_ count: Int = 5) -> Int { count * 4 + 5 }
     private func dayBand(_ date: Date) -> String {
-        let calendar = Calendar.current
+        let calendar = Beijing.calendar
         let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: Date()), to: calendar.startOfDay(for: date)).day ?? 0
         return days == 0 ? "今天" : days == 1 ? "明天" : format(date, "MM-dd")
     }
@@ -254,7 +254,7 @@ struct MockInterviewView: View {
         if minutes < 1440 { return "\(Int((Double(minutes) / 60).rounded())) 小时后" }
         return "\(Int((Double(minutes) / 1440).rounded())) 天后"
     }
-    private func format(_ date: Date, _ pattern: String) -> String { let f = DateFormatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = pattern; return f.string(from: date) }
+    private func format(_ date: Date, _ pattern: String) -> String { let f = Beijing.formatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = pattern; return f.string(from: date) }
     private func upcomingCard(_ session: ScheduledInterview, active: MockInterview?) -> some View {
         let types = coverageTypes(session.label)
         let mine = completed.filter { $0.raw.text("job_application_id") == session.applicationID }

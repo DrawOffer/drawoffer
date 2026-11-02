@@ -36,7 +36,7 @@ public sealed class JobsBoardPage : Page
     public JobsBoardPage() {
         for(var i=0;i<4;i++) _root.RowDefinitions.Add(new RowDefinition { Height=i==3 ? new GridLength(1,GridUnitType.Star) : GridLength.Auto });
         var head=new Grid(); head.ColumnDefinitions.Add(new ColumnDefinition()); head.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
-        var copy=new StackPanel { Spacing=8 }; var today=DateTime.Today; var start=today.AddDays(-(((int)today.DayOfWeek+6)%7));
+        var copy=new StackPanel { Spacing=8 }; var today=Beijing.Today; var start=today.AddDays(-(((int)today.DayOfWeek+6)%7));
         copy.Children.Add(Text($"CAREER · 本周 {start:M.d} 至 {start.AddDays(6):M.d}",11,true));
         copy.Children.Add(new TextBlock { Text="岗位看板", FontFamily=new FontFamily("ms-appx:///Assets/Library/LibrarySerif-SemiBold.ttf#DrawOffer Library Serif"),FontSize=28 }); copy.Children.Add(_subtitle); head.Children.Add(copy);
         var actions=new StackPanel { Orientation=Orientation.Horizontal,Spacing=10,Margin=new Thickness(0,24,0,0) };
@@ -127,7 +127,7 @@ public sealed class JobsBoardPage : Page
         }
         _body.Children.Add(new ScrollViewer { Content=content,HorizontalScrollBarVisibility=ScrollBarVisibility.Auto,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,HorizontalScrollMode=ScrollMode.Enabled });
     }
-    private static string ShortDate(string value)=>CareerApplication.Date(value)?.ToLocalTime().ToString("yyyy-MM-dd")??"—";
+    private static string ShortDate(string value)=>CareerApplication.Date(value)?.ToBeijing().ToString("yyyy-MM-dd")??"—";
     private static Grid ListRow(string[] values,bool heading) {
         var row=new Grid{MinWidth=840,ColumnSpacing=16};
         double[] widths=[280,60,100,130,100,100];
@@ -163,7 +163,7 @@ public sealed class JobsBoardPage : Page
         }catch(Exception){/* Named company remains visible when its logo cannot load. */}
         finally {if(generation==_generation)_pendingLogos.Remove(id);}
     }
-    private static string Time(CareerApplication item) {var key=item.Ended?"terminated_at":item.Stage=="pending"?"created_at":item.Stage=="screening"?"applied_at":item.Stage=="offer"?"updated_at":"next_session_start_at";return CareerApplication.Date(item.Text(key))?.ToLocalTime().ToString("M月d日 HH:mm") ?? "尚未安排";}
+    private static string Time(CareerApplication item) {var key=item.Ended?"terminated_at":item.Stage=="pending"?"created_at":item.Stage=="screening"?"applied_at":item.Stage=="offer"?"updated_at":"next_session_start_at";return CareerApplication.Date(item.Text(key))?.ToBeijing().ToString("M月d日 HH:mm") ?? "尚未安排";}
     private async void Open(string kind,CareerApplication? application=null,string stage="interview",string label="一面",int? round=null) {
         if(_dialog is not null)return;
         if(kind=="detail" && application is not null) { Content=new CareerApplicationDetailPage(application, ()=>{Content=_root;_=LoadAsync();}, (action,item)=>Open(action,item,action=="apply"?"screening":action=="schedule-current"?item.Stage:CareerStage.NextStages(item).FirstOrDefault(x=>x=="interview")??CareerStage.NextStages(item).FirstOrDefault()??"screening",item.StageLabel)); return; }

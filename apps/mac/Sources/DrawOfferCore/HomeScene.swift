@@ -182,15 +182,14 @@ public enum HomeScenes {
         "prerequisite": "它依赖的基础还不稳，先补基础", "shallow": "再往深追问时容易卡住", "misconception": "有一处说法反复出现偏差",
     ]
     static let facets: [(String, String)] = [("background", "背景"), ("task", "任务"), ("action", "行动"), ("result", "结果")]
-    static let china = TimeZone(identifier: "Asia/Shanghai")!
 
     public static func mmdd(_ date: Date) -> String {
-        let parts = Calendar.current.dateComponents([.month, .day], from: date)
+        let parts = Beijing.calendar.dateComponents([.month, .day], from: date)
         return "\(parts.month ?? 0) · \(parts.day ?? 0)"
     }
     /// Web `dateOf`：日期取当天中午（东八区），避免跨时区换日。
     static func dateOf(_ text: String) -> Date {
-        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = china
+        let calendar = Beijing.calendar
         let parts = text.prefix(10).split(separator: "-").compactMap { Int($0) }
         guard parts.count == 3 else { return Date.distantPast }
         return calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2], hour: 12)) ?? Date.distantPast
@@ -203,10 +202,10 @@ public enum HomeScenes {
     static func goalOf(_ level: Int?) -> Int { min(5, max(3, (level ?? 2) + 1)) }
     static func nextName(_ level: Int?) -> String { levelNames[goalOf(level) - 1] }
     static func countZh(_ count: Int) -> String { ["", "一", "两", "三"].indices.contains(count) ? ["", "一", "两", "三"][count] : String(count) }
-    static func startOfDay(_ date: Date) -> Date { Calendar.current.startOfDay(for: date) }
+    static func startOfDay(_ date: Date) -> Date { Beijing.calendar.startOfDay(for: date) }
     static func weekdayLabel(_ at: Date, _ now: Date) -> String {
         let days = Int(((startOfDay(at).timeIntervalSince(startOfDay(now))) / day).rounded())
-        return days == 0 ? "今天" : days == 1 ? "明天" : days == 2 ? "后天" : weekday[Calendar.current.component(.weekday, from: at) - 1]
+        return days == 0 ? "今天" : days == 1 ? "明天" : days == 2 ? "后天" : weekday[Beijing.calendar.component(.weekday, from: at) - 1]
     }
 
     struct Tree {

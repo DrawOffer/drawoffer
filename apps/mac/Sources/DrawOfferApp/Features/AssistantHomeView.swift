@@ -39,7 +39,7 @@ struct AssistantHomeView: View {
     @FocusState private var composerFocused: Bool
 
     private var greeting: String {
-        let hour = Calendar.current.component(.hour, from: Date())
+        let hour = Beijing.calendar.component(.hour, from: Date())
         let prefix = hour < 11 ? "早上好" : hour < 13 ? "中午好" : hour < 18 ? "下午好" : "晚上好"
         return prefix + (nickname.map { "，\($0)" } ?? "") + "。"
     }

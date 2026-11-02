@@ -21,7 +21,7 @@ public sealed class CareerApplicationDetailPage : Page {
     private static TextBlock Text(string text,double size=13,uint color=0x1D1D1B,bool serif=false)=>new(){Text=text,FontSize=size,FontFamily=serif?Serif:Sans,Foreground=Brush(color),TextWrapping=TextWrapping.Wrap};
     private static Button Button(string label,Action action,bool primary=false){var b=new Button{Content=Text(label,12,primary?0xFFFFFFu:0x1D1D1Bu),Height=34,Padding=new Thickness(16,0,16,0),Background=Brush(primary?0x1D1D1Bu:0xFFFFFFu),BorderBrush=Brush(primary?0x1D1D1Bu:0xE4E4E0u),CornerRadius=new CornerRadius(6)};b.Click+=(_,_)=>action();return b;}
     private static Border Card(UIElement content,uint color=0xFFFFFF,int radius=14)=>new(){Child=content,Padding=new Thickness(18),Background=Brush(color),BorderBrush=Brush(0xE6E6E2),BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(radius)};
-    private static string Date(string? raw,bool time=false)=>CareerApplication.Date(raw??"")?.ToLocalTime().ToString(time?"MM.dd HH:mm":"MM.dd")??"—";
+    private static string Date(string? raw,bool time=false)=>CareerApplication.Date(raw??"")?.ToBeijing().ToString(time?"MM.dd HH:mm":"MM.dd")??"—";
     public CareerApplicationDetailPage(CareerApplication item,Action back,Action<string,CareerApplication> perform){_seed=_item=item;_back=back;_perform=perform;Content=new ScrollViewer{Content=_page};Loaded+=async(_,_)=>await RefreshAsync();Unloaded+=(_,_)=>_life.Cancel();Render();}
     public async Task RefreshAsync(){_loading=true;_error=null;Render();try{
         var detail=await App.Session.Api.CareerRequestAsync("/api/job-applications/"+_seed.Id,ct:_life.Token);

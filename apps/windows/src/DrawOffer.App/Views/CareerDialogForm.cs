@@ -20,21 +20,21 @@ internal sealed class CareerDialogForm
     private readonly CheckBox _reuse=new(){Content="为当前阶段添加排期"},_allowConflict=new(){Content="确认仍保存有时间冲突的安排"};
     private readonly ComboBox _mode=Choice("面试方式",["视频","现场","电话","其他"]);
     private readonly CheckBox _scheduled=new() {Content="同时添加排期"},_window=new() {Content="开放作答窗口"};
-    private readonly CalendarDatePicker _startDate=new() {Header="开始日期",Date=DateTimeOffset.Now},_endDate=new() {Header="结束日期",Date=DateTimeOffset.Now};
-    private readonly TimePicker _startTime=new() {Header="开始时间",Time=DateTime.Now.TimeOfDay},_endTime=new() {Header="结束时间",Time=DateTime.Now.AddHours(1).TimeOfDay};
+    private readonly CalendarDatePicker _startDate=new() {Header="开始日期",Date=Beijing.Now},_endDate=new() {Header="结束日期",Date=Beijing.Now};
+    private readonly TimePicker _startTime=new() {Header="开始时间",Time=Beijing.Now.TimeOfDay},_endTime=new() {Header="结束时间",Time=Beijing.Now.AddHours(1).TimeOfDay};
     private readonly TextBlock _error=new() {TextWrapping=TextWrapping.Wrap};
     private readonly StackPanel _stageFields=new() {Spacing=16},_scheduleFields=new() {Spacing=12},_interviewFields=new() {Spacing=12},_offerFields=new() {Spacing=12};
     private JsonNode? _stagePayload,_sessionPayload,_offerPayload;
     private string? _createdId;
     private bool _staged,_sessionSaved,_busy;
     private readonly TextBox _channel=Field("投递渠道（可选）"),_oral=Field("口头薪酬（可选）"),_payText=Field("薪酬说明（如 35K × 16 薪）"),_deadline=Field("回复截止（可选）"),_join=Field("预计入职（可选）"),_trial=Field("试用期（可选）"),_materials=Field("Offer 材料（资料库文件名或备注，可选）");
-    private readonly CalendarDatePicker _received=new(){Header="收到日期",Date=DateTimeOffset.Now};
+    private readonly CalendarDatePicker _received=new(){Header="收到日期",Date=Beijing.Now};
     private readonly Grid _tiles=new(){ColumnSpacing=8,RowSpacing=8};
     private readonly ComboBox _offerIntent=Choice("Offer 阶段",["OC · 口头意向","正式 Offer"]);
     private readonly ComboBox _resume=Choice("投递简历（可选）",["不关联简历"]);
     private string[] _resumeIds=[];
     private readonly ComboBox _existing=Choice("岗位",["创建新岗位"]);
-    private readonly CalendarDatePicker _appliedDate=new(){Header="投递日期",Date=DateTimeOffset.Now};
+    private readonly CalendarDatePicker _appliedDate=new(){Header="投递日期",Date=Beijing.Now};
     private readonly CareerApplication[] _existingItems;
     private readonly StackPanel _creationFields=new(){Spacing=16};
     private string[] _stageKeys=CareerStage.Keys.Where(x=>x is not ("pending" or "ended")).ToArray();
@@ -98,7 +98,7 @@ internal sealed class CareerDialogForm
         UpdateSummary();_stage.SelectionChanged+=(_,_)=>UpdateSummary();_offerIntent.SelectionChanged+=(_,_)=>UpdateSummary();foreach(var field in new[]{_label,_deadline,_payText,_base})field.TextChanged+=(_,_)=>UpdateSummary();
         summary.Children.Add(copy);View.Children.Add(new Border{Child=summary,Background=new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255,247,247,245)),CornerRadius=new CornerRadius(14)});Grid.SetColumn(_form,1);View.Children.Add(_form);
     }
-    private string OfferNotes=>CareerNotes.Merge(new(){["收到日期"]=(_received.Date??DateTimeOffset.Now).ToString("O"),["回复截止"]=_deadline.Text,["薪酬说明"]=_payText.Text,["预计入职"]=_join.Text,["试用期"]=_trial.Text,["Offer 材料"]=_materials.Text},_application?.Text("notes")??"");
+    private string OfferNotes=>CareerNotes.Merge(new(){["收到日期"]=(_received.Date??Beijing.Now).ToString("O"),["回复截止"]=_deadline.Text,["薪酬说明"]=_payText.Text,["预计入职"]=_join.Text,["试用期"]=_trial.Text,["Offer 材料"]=_materials.Text},_application?.Text("notes")??"");
     private void BuildTiles(){
         _tiles.Children.Clear();_tiles.ColumnDefinitions.Clear();_tiles.RowDefinitions.Clear();for(var i=0;i<4;i++)_tiles.ColumnDefinitions.Add(new ColumnDefinition());for(var i=0;i<2;i++)_tiles.RowDefinitions.Add(new RowDefinition());
         var options=new[]{("screening","筛选中","filter"),("assessment","测评","text"),("written_test","笔试","edit"),("ai_interview","AI 面试","spark"),("interview","面试","user"),("interview","HR 面","brief"),("offer","OC","phone"),("offer","Offer","mail")};
@@ -135,16 +135,16 @@ internal sealed class CareerDialogForm
         if(_busy)return;
         if(section.Children.Count>2)section.Children.RemoveAt(2);
         var editor=new StackPanel{Spacing=10};editor.Children.Add(Text("确认"+(command switch{"reschedule"=>"改期","answer-plan"=>"个人作答计划","complete"=>"标记完成",_=>"取消安排"})));
-        var from=CareerApplication.Date(item["start_at"]?.GetValue<string>()??"")?.ToLocalTime()??DateTimeOffset.Now;
-        var to=CareerApplication.Date(item["end_at"]?.GetValue<string>()??"")?.ToLocalTime()??from.AddHours(1);
+        var from=CareerApplication.Date(item["start_at"]?.GetValue<string>()??"")?.ToBeijing()??Beijing.Now;
+        var to=CareerApplication.Date(item["end_at"]?.GetValue<string>()??"")?.ToBeijing()??from.AddHours(1);
         var fromDate=new CalendarDatePicker{Header="开始日期",Date=from};var toDate=new CalendarDatePicker{Header="结束日期",Date=to};
         var fromTime=new TimePicker{Header="开始时间",Time=from.TimeOfDay};var toTime=new TimePicker{Header="结束时间",Time=to.TimeOfDay};
         if(command is "reschedule" or "answer-plan")foreach(var field in new FrameworkElement[]{fromDate,fromTime,toDate,toTime})editor.Children.Add(field);
         var confirm=new Button{Content="确认"};JsonObject? payload=null;
         confirm.Click+=async(_,_)=>{
             if(_busy)return;
-            var begin=new DateTimeOffset((fromDate.Date??from).Date+fromTime.Time);
-            var finish=new DateTimeOffset((toDate.Date??to).Date+toTime.Time);
+            var begin=Beijing.At(DateOnly.FromDateTime((fromDate.Date??from).Date),fromTime.Time);
+            var finish=Beijing.At(DateOnly.FromDateTime((toDate.Date??to).Date),toTime.Time);
             if((command is "reschedule" or "answer-plan") && finish<=begin){_error.Text="结束时间须晚于开始时间。";return;}
             payload??=new JsonObject{["base_lock_version"]=item["lock_version"]?.GetValue<int>()??1};
             if(command=="reschedule"){payload["start_at"]=begin.ToUniversalTime().ToString("O");payload["end_at"]=finish.ToUniversalTime().ToString("O");payload["timezone"]="Asia/Shanghai";}
@@ -179,8 +179,8 @@ internal sealed class CareerDialogForm
     }
     private async Task ParseAsync(JsonNode? input=null){if(_busy||input is null&&string.IsNullOrWhiteSpace(_description.Text))return;_busy=true;try{var result=await Request("/api/job-descriptions/parse-draft","POST",input??new JsonObject{["text"]=_description.Text});_ct.ThrowIfCancellationRequested();var draft=result["draft"]!;_company.Text=draft["company_name"]?.GetValue<string>()??"";_role.Text=draft["job_title"]?.GetValue<string>()??"";_city.Text=draft["work_city"]?.GetValue<string>()??"";_description.Text=draft["description"]?.GetValue<string>()??_description.Text;_category.SelectedIndex=draft["employment_type"]?.GetValue<string>() switch{"internship"=>1,"campus"=>2,"full_time"=>3,_=>0};}catch(Exception e){_error.Text=JobsBoardPage.Explain(e);}finally{_busy=false;}}
     private string? Category=>_category.SelectedIndex switch{1=>"internship",2=>"campus",3=>"full_time",_=>null};
-    private DateTimeOffset Start=>( _startDate.Date??DateTimeOffset.Now).Date+_startTime.Time;
-    private DateTimeOffset End=>(_endDate.Date??DateTimeOffset.Now).Date+_endTime.Time;
+    private DateTimeOffset Start=>Beijing.At(DateOnly.FromDateTime((_startDate.Date??Beijing.Now).Date),_startTime.Time);
+    private DateTimeOffset End=>Beijing.At(DateOnly.FromDateTime((_endDate.Date??Beijing.Now).Date),_endTime.Time);
     private async Task SaveOfferAsync(string prefix,CareerApplication app){
         _offerPayload??=new JsonObject{["base_lock_version"]=app.LockVersion,["base_location"]=_base.Text==""?null:_base.Text,["salary"]=_salary.Text==""?null:decimal.Parse(_salary.Text),["salary_currency"]=_salary.Text==""?null:_currency.SelectedItem.ToString(),["salary_period"]=_salary.Text==""?null:_period.SelectedIndex==0?"month":"year",["benefits_description"]=_benefits.Text==""?null:_benefits.Text,["notes"]=OfferNotes};
         View.IsHitTestVisible=false;
@@ -212,7 +212,7 @@ internal sealed class CareerDialogForm
             else if(_kind=="terminate"){_stagePayload??=new JsonObject{["client_request_id"]=Guid.NewGuid().ToString(),["base_lock_version"]=app.LockVersion,["reason"]=_reason.SelectedIndex switch{1=>"company_rejected",2=>"completed",3=>"other",_=>"user_withdrew"}};await Request(prefix+"/terminate","POST",_stagePayload);}
             else if(NeedsStage){
                 if(_reuse.IsChecked==true&&!_staged){_staged=true;_existing.IsEnabled=_reuse.IsEnabled=false;}
-                if(!_staged){_stagePayload??=new JsonObject{["client_request_id"]=Guid.NewGuid().ToString(),["base_lock_version"]=app.LockVersion,["stage_type"]=Stage,["stage_label"]=Stage=="interview"?_label.Text.Trim():Stage=="offer"&&_offerIntent.SelectedIndex==0?"OC":CareerStage.Label(Stage),["interview_round_no"]=Stage=="interview"?(int)_round.Value:null,["applied_at"]=app.Stage=="pending"?(_appliedDate.Date??DateTimeOffset.Now).ToUniversalTime().ToString("O"):null,["resume_id"]=_resume.SelectedIndex>0?_resumeIds[_resume.SelectedIndex-1]:null,["notes"]=CareerNotes.Merge(new(){["投递渠道"]=_channel.Text,["口头薪酬"]=_oral.Text},app.Text("notes"))};var result=await Request(prefix+"/stages","POST",_stagePayload);_application=new(result["application"]!);_staged=true;BuildTiles();_stage.IsEnabled=false;_existing.IsEnabled=false;_label.IsEnabled=false;_round.IsEnabled=false;_scheduled.IsEnabled=false;}
+                if(!_staged){_stagePayload??=new JsonObject{["client_request_id"]=Guid.NewGuid().ToString(),["base_lock_version"]=app.LockVersion,["stage_type"]=Stage,["stage_label"]=Stage=="interview"?_label.Text.Trim():Stage=="offer"&&_offerIntent.SelectedIndex==0?"OC":CareerStage.Label(Stage),["interview_round_no"]=Stage=="interview"?(int)_round.Value:null,["applied_at"]=app.Stage=="pending"?(_appliedDate.Date??Beijing.Now).ToUniversalTime().ToString("O"):null,["resume_id"]=_resume.SelectedIndex>0?_resumeIds[_resume.SelectedIndex-1]:null,["notes"]=CareerNotes.Merge(new(){["投递渠道"]=_channel.Text,["口头薪酬"]=_oral.Text},app.Text("notes"))};var result=await Request(prefix+"/stages","POST",_stagePayload);_application=new(result["application"]!);_staged=true;BuildTiles();_stage.IsEnabled=false;_existing.IsEnabled=false;_label.IsEnabled=false;_round.IsEnabled=false;_scheduled.IsEnabled=false;}
                 if(_scheduled.IsChecked==true&&new[]{"assessment","written_test","ai_interview","interview"}.Contains(Stage)&&!_sessionSaved){_sessionPayload??=new JsonObject{["client_request_id"]=Guid.NewGuid().ToString(),["application_stage_id"]=_application.Raw["current_stage"]?["id"]?.GetValue<string>(),["stage_type"]=Stage=="interview"?"interview":"other",["stage_label"]=_reuse.IsChecked==true?_application.Raw["current_stage"]?["stage_label"]?.GetValue<string>():Stage=="interview"?_label.Text.Trim():CareerStage.Label(Stage),["round_no"]=Stage=="interview"?(int)_round.Value:null,["start_at"]=Start.ToUniversalTime().ToString("O"),["end_at"]=End.ToUniversalTime().ToString("O"),["schedule_kind"]=_window.IsChecked==true&&(Stage is "assessment" or "written_test")?"open_window":"fixed_slot",["timezone"]="Asia/Shanghai",["mode"]=Stage=="interview"?new[]{"video","onsite","phone","other"}[_mode.SelectedIndex]:"other",["allow_conflict"]=_allowConflict.IsChecked==true,["meeting_url"]=_meeting.Text==""?null:_meeting.Text,["location"]=_location.Text==""?null:_location.Text};await Request(prefix+"/interview-sessions","POST",_sessionPayload);_sessionSaved=true;}
                 if(Stage=="offer"&&_offerIntent.SelectedIndex==1)await SaveOfferAsync(prefix,_application);
             }
