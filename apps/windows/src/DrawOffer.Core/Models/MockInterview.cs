@@ -32,12 +32,12 @@ public static class MockInterviewRequest {
     }
 }
 public sealed record MockInterview(JsonNode Raw) {
-    public string Text(string key)=>Raw[key]?.GetValue<string>()??"";
+    public string Text(string key)=>Raw.Text(key);
     public string Id=>Text("id");public string Status=>Text("status");
     public bool Active=>new[]{"preparing","in_progress","evaluating"}.Contains(Status);
     public string Title=>Text("company_name")==""?Text("resume_title")+" · 通用面试":Text("company_name")+" · "+Text("job_title");
-    public JsonArray Questions=>Raw["questions"]?.AsArray()??[];
-    public JsonNode? Current=>Questions.FirstOrDefault(x=>x?["id"]?.GetValue<string>()==Text("current_question_id")&&x?["answer_status"]?.GetValue<string>()=="pending");
+    public JsonArray Questions=>Raw.Get("questions") as JsonArray??[];
+    public JsonNode? Current=>Questions.FirstOrDefault(x=>x.Text("id")==Text("current_question_id")&&x.Text("answer_status")=="pending");
     public string Label=>StatusLabels.GetValueOrDefault(Status,Status);
     public string Type=>Types.GetValueOrDefault(Text("interview_type"),"综合面");
     public static readonly Dictionary<string,string> Types=new(){{"technical","技术面"},{"project_deep_dive","项目深挖"},{"comprehensive","综合面"},{"hr","HR 面"}};

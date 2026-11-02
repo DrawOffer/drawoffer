@@ -254,7 +254,7 @@ public sealed class WorkspaceShell : Grid
             WorkspaceSection.Home => new AssistantHomePage(signedIn ? App.Session.User?.Nickname : null, _homeDraft, text => _homeDraft = text,
                 () => Select(WorkspaceSection.Templates), () => RequestLoginAsync(reason: "登录 DrawOffer；你的输入会保留。"), ShowPluginAsync),
             WorkspaceSection.Datasets => new DatasetLibraryPage(),
-            WorkspaceSection.Mock => new MockInterviewPage(),
+            WorkspaceSection.Mock => new Views.Mock.MockInterviewView(this),
             WorkspaceSection.Schedule => new Views.Career.InterviewScheduleView(() => _ = RequestLoginAsync(reason: "登录后管理面试安排。")),
             WorkspaceSection.Jobs => new Views.Career.JobsBoardView(() => _ = RequestLoginAsync(reason: "登录后管理岗位和求职进度。")),
             // 与 Mac 一致：岗位广场只对已登录用户开放；从广场打开求职进程时切到投递看板并进入详情
