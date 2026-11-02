@@ -45,4 +45,3 @@ struct ArtBadge: View {
             .shadow(color: .black.opacity(0.1), radius: 3, y: 2).offset(x: x, y: y)
     }
 }
-
