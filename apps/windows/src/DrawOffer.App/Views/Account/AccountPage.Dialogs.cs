@@ -22,7 +22,7 @@ public sealed partial class AccountPage
             var email=input.Text.Trim(); if (email.Length > 0 && !Regex.IsMatch(email,@"^[^\s@]+@[^\s@]+\.[^\s@]+$")) throw new InvalidOperationException("请输入有效的邮箱地址。");
             var result=await Request("/api/account/contact-email","PUT",new JsonObject {["email"]=email.Length==0?null:email});
             var user=User!.DeepClone(); user["contact_email"]=result["contact_email"]?.DeepClone(); ApplyUser(user); Toast("联系邮箱已保存");
-        });
+        },fallback:"联系邮箱保存失败，请重试。");
     }
     void Logout()
     {
@@ -35,20 +35,20 @@ public sealed partial class AccountPage
             return V3Dialog.Frame(new Border {Child=body,Padding=new Thickness(24)},420);
         },dismissible:false);
     }
-    void ShowForm(string title,string subtitle,UIElement fields,double width,Func<Task> save,string submit="保存",Func<bool>? allowed=null)
+    void ShowForm(string title,string subtitle,UIElement fields,double width,Func<Task> save,string submit="保存",Func<bool>? allowed=null,string fallback="保存失败，请稍后重试。",Func<string>? failureMessage=null)
     {
         var stamp=Stamp;var busy=false;
         _overlay=V3Overlay.Show(XamlRoot,close=>{
             var form=new ContentControl{Content=fields,HorizontalContentAlignment=HorizontalAlignment.Stretch};var error=Sans("",14,Red).Wrap();var content=VStack(20,V3DialogHead.Make(title,subtitle),form,error);
             var cancel=new V3Button("取消",()=>{if(!busy)close();},height:36,width:80);
             V3Button? button=null;button=new V3Button(submit,()=>_=Submit(),V3Button.Kind.Dark,height:36);
-            async Task Submit(){if(busy||stamp!=Stamp||allowed?.Invoke()==false)return;busy=true;form.IsEnabled=false;cancel.Enabled=button!.Enabled=false;button.Title="保存中…";error.Text="";try{await save();if(stamp==Stamp){close();Render();}}catch(OperationCanceledException){}catch(Exception ex){if(stamp==Stamp){error.Text=ex is InvalidOperationException?ex.Message:Explain(ex);_error=error.Text;}}finally{if(stamp==Stamp){busy=false;form.IsEnabled=true;cancel.Enabled=button.Enabled=true;button.Title=submit;}}}
+            async Task Submit(){if(busy||stamp!=Stamp||allowed?.Invoke()==false)return;busy=true;form.IsEnabled=false;cancel.Enabled=button!.Enabled=false;button.Title="保存中…";error.Text="";try{await save();if(stamp==Stamp){close();Render();}}catch(OperationCanceledException){}catch(Exception ex){if(stamp==Stamp){error.Text=ex is InvalidOperationException?ex.Message:Explain(ex,failureMessage?.Invoke()??fallback);_error=error.Text;}}finally{if(stamp==Stamp){busy=false;form.IsEnabled=true;cancel.Enabled=button.Enabled=true;button.Title=submit;}}}
             return V3Dialog.Make(content,[cancel,button],()=>{if(!busy)close();},width,closable:true);
         },dismissible:false);
     }
     void EditProfile()
     {
-        var stamp=Stamp;var picking=false;var nickname=Input(User.Text("nickname"),"昵称",40);nickname.MaxLength=50;
+        var stamp=Stamp;var picking=false;var failure="昵称保存失败，请稍后重试。";var nickname=Input(User.Text("nickname"),"昵称",40);nickname.MaxLength=50;
         AvatarCrop.Draft? draft=null;byte[]? bytes=null;ImageSource? picked=null;var remove=false;
         var crop=new Canvas {Width=232,Height=232,Background=Brush(Field),IsTabStop=true}.Tip("头像裁剪区域，可使用方向键移动");var previews=new StackPanel {Orientation=Orientation.Horizontal,Spacing=16};
         var zoom=new Slider {Minimum=1,Maximum=3,Value=1,Width=180,IsEnabled=false};
@@ -68,11 +68,12 @@ public sealed partial class AccountPage
         var right=VStack(0,Spread(Sans("昵称*",14,Sub,Medium),count),nickname.Top(5),Sans("头像",14,Sub,Medium).Top(22),HStack(16,new V3Button("重新选择",()=>_=Pick(),height:34,width:112),LinkButton("移除头像",()=>{draft=null;bytes=null;picked=null;remove=true;zoom.IsEnabled=false;Paint();})).Top(5),Sans("支持 JPG、PNG、WebP，最大 10 MB。",14,Fnt).Wrap().Top(10),Sans("预览",14,Sub,Medium).Top(22),previews.Top(9));
         Paint();ShowForm("编辑资料","头像和昵称会显示在侧栏、分享页和 AI 对话里。",Columns(32,(Px(232),VStack(22,crop,HStack(17, Sans("缩放",12,Sub),zoom))),(Px(292),right)),620,async()=>{
             if(picking)throw new InvalidOperationException("请先完成图片选择。");var name=nickname.Text.Trim();if(name.Length==0||new System.Globalization.StringInfo(name).LengthInTextElements>50)throw new InvalidOperationException("昵称不能为空，且不能超过 50 个字符。");
+            failure="昵称保存失败，请稍后重试。";
             if(name!=User.Text("nickname"))ApplyUser(await Request("/api/account/profile","PATCH",new JsonObject {["nickname"]=name}));
-            if(draft is {} d&&bytes is not null){var png=await CropPng(bytes,d);if(stamp!=Stamp||_disposed)throw new OperationCanceledException();var result=await Request("/api/account/avatar","PUT",new JsonObject {["fileName"]="avatar.png",["dataUrl"]="data:image/png;base64,"+Convert.ToBase64String(png)});var user=User!.DeepClone();user["avatar_url"]=result["url"]?.DeepClone();ApplyUser(user);Toast("头像已更新。");}
-            else if(remove&&User.Text("avatar_url").Length>0){await Request("/api/account/avatar","DELETE");var user=User!.DeepClone();user["avatar_url"]=null;ApplyUser(user);Toast("头像已删除。");}else Toast("资料已保存。");
+            if(draft is {} d&&bytes is not null){failure="头像处理或上传失败，请重试。";var png=await CropPng(bytes,d);if(stamp!=Stamp||_disposed)throw new OperationCanceledException();var result=await Request("/api/account/avatar","PUT",new JsonObject {["fileName"]="avatar.png",["dataUrl"]="data:image/png;base64,"+Convert.ToBase64String(png)});var user=User!.DeepClone();user["avatar_url"]=result["url"]?.DeepClone();ApplyUser(user);Toast("头像已更新。");}
+            else if(remove&&User.Text("avatar_url").Length>0){failure="头像删除失败，请稍后重试。";await Request("/api/account/avatar","DELETE");var user=User!.DeepClone();user["avatar_url"]=null;ApplyUser(user);Toast("头像已删除。");}else Toast("资料已保存。");
             await LoadAvatar();
-        });
+        },failureMessage:()=>failure);
     }
     static async Task<byte[]> NormalizePng(byte[] bytes)
     {
