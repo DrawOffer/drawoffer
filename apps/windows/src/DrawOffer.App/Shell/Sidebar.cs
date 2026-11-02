@@ -369,7 +369,7 @@ public sealed class UserAvatar : DrawOffer.App.DesignSystem.BorderControl
         if (string.IsNullOrEmpty(path)) return;
         if (path.StartsWith("/api/auth/default-avatar", StringComparison.Ordinal))
         {
-            Child = new Image { Source = new BitmapImage(new Uri("ms-appx:///Assets/DrawOffer.png")), Stretch = Stretch.UniformToFill };
+            Child = new Image { Source = new BitmapImage(new Uri("ms-appx:///Assets/Branding/default-avatar.png")), Stretch = Stretch.UniformToFill };
             return;
         }
         if (App.Session.Api is not Core.Api.HttpApiClient client) return;

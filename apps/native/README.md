@@ -72,6 +72,8 @@ Mac 测试脚本兼容 CLT 的 Testing 框架路径，并在 CLT 残留旧 Packa
 
 ## 纸面预览契约
 
+`build_renderer.mjs` 将预览 `paper.html`、可编辑纸面 `editor.html` 与编辑器引用的九个模板头像同步到 Mac 的 `DrawOfferRender/Resources` 和 Windows 的 `Assets/Renderer`；HTML 与模板头像均为忽略提交的生成资源，打包前必须先执行 `npm run build:native-renderer`。`check_renderer.mjs` 校验两端 HTML 与源头像的字节一致性。
+
 原生离线入口与 Web／PDF 加载相同的基础、应用、打印及 Muse 样式，复用 `renderResumePrintDocument`，使用同一份 canonical data、template snapshot 与 layout_plan。内容、模块顺序、模板结构、配色、图片及关键布局应保留；这不是字形、换行、分页或像素一致的承诺。Mac 使用 WebKit，Windows 使用 WebView2，最终 PDF 由 Chromium 生成，并使用其内嵌字体。最终排版以生成的 PDF 为准，原生模板舞台常驻显示差异提示。
 
 原生预览为可滚动的连续纸面，不模拟 PDF 的物理分页。页面等待图片解码与字体就绪后上报高度，两端舞台使用该高度，避免固定一页遮住长正文。快速切换只上报最新请求；版本不匹配或无效 layout_plan 会显示失败提示；单张图片解码失败保留正文和实际高度，显示占位及图片不可用提示。原生网页视图只允许离线资源；内置头像随包内联，私有图片由宿主通过桌面会话先安全下载，再通过两端原生请求模型的 assets 字段注入，参见下文。
