@@ -23,6 +23,22 @@ public sealed partial class DesktopTransport {
         var result=await response.Content.ReadFromJsonAsync<JsonNode>(timeout.Token)??throw new InvalidDataException();
         if(!response.IsSuccessStatusCode)throw new ApiException(response.StatusCode,result["error"]?.GetValue<string>()??"HTTP_"+(int)response.StatusCode);return result;
     }
+    /// <summary>直接上传到面试阶段（Mac `DatasetUpload.session`：`POST /api/interview-sessions/{id}/assets`，`source_type=uploaded`），不进资料库文件夹。</summary>
+    public async Task<JsonNode> UploadSessionAssetAsync(string session,DatasetUpload upload,string? access,CancellationToken ct=default){
+        if(!DatasetRequest.Id(session)||upload.Replacing is not null||!Guid.TryParseExact(upload.Id,"D",out var key)||key.ToString("D")!=upload.Id||string.IsNullOrWhiteSpace(upload.Name)||upload.Name.IndexOfAny(['\r','\n','"','\\','/'])>=0||upload.Limit<=0||upload.Limit>512L*1024*1024)throw new InvalidDataException();
+        var info=new FileInfo(upload.File);if(info.Length<=0||info.Length>upload.Limit)throw new InvalidDataException();
+        using var form=new MultipartFormDataContent();form.Add(new StringContent("uploaded"),"source_type");
+        await using var source=new FileStream(upload.File,FileMode.Open,FileAccess.Read,FileShare.Read,65536,true);
+        var content=new StreamContent(source);content.Headers.ContentType=new MediaTypeHeaderValue("application/octet-stream");form.Add(content,"file",upload.Name);
+        using var request=new HttpRequestMessage(HttpMethod.Post,"/api/interview-sessions/"+session+"/assets"){Content=form};request.Headers.Add("Idempotency-Key",upload.Id);
+        if(access is not null)request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",access);
+        using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);timeout.CancelAfter(TimeSpan.FromMinutes(10));
+        using var response=await _fileHttp.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,timeout.Token);
+        if(response.StatusCode==HttpStatusCode.Unauthorized)throw new ApiException(response.StatusCode,"UNAUTHORIZED");
+        if(!response.IsSuccessStatusCode&&response.Content.Headers.ContentType?.MediaType!="application/json")throw new ApiException(response.StatusCode,"HTTP_"+(int)response.StatusCode);
+        var result=await response.Content.ReadFromJsonAsync<JsonNode>(timeout.Token)??throw new InvalidDataException();
+        if(!response.IsSuccessStatusCode)throw new ApiException(response.StatusCode,result["error"]?.GetValue<string>()??"HTTP_"+(int)response.StatusCode);return result;
+    }
     public async Task DownloadDatasetAsync(string id,string target,long limit,string? access,CancellationToken ct=default){
         if(!DatasetRequest.Id(id)||limit<=0||limit>512L*1024*1024)throw new InvalidDataException();
         using var request=new HttpRequestMessage(HttpMethod.Get,"/api/datasets/"+id+"/source");request.Headers.CacheControl=new CacheControlHeaderValue{NoStore=true,NoCache=true};if(access is not null)request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",access);

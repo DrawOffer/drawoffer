@@ -12,6 +12,12 @@ const html = readFileSync(resolve(root, 'apps/native/renderer/dist/paper.html'),
 for (const path of ['apps/mac/Sources/DrawOfferRender/Resources/paper.html', 'apps/windows/src/DrawOffer.App/Assets/Renderer/paper.html']) {
   assert.equal(readFileSync(resolve(root, path), 'utf8'), html, `stale artifact: ${path}`);
 }
+const editor = readFileSync(resolve(root, 'apps/native/renderer/dist/editor.html'), 'utf8');
+for (const directory of ['apps/mac/Sources/DrawOfferRender/Resources', 'apps/windows/src/DrawOffer.App/Assets/Renderer']) {
+  assert.equal(readFileSync(resolve(root, directory, 'editor.html'), 'utf8'), editor, `stale editor: ${directory}`);
+  for (const filename of ['avatar-administrative.png', 'avatar-administrative.svg', 'avatar-campus.png', 'avatar-campus.svg', 'avatar-cat.jpg', 'avatar-civic.png', 'avatar-civic.svg', 'avatar-creative.png', 'avatar-creative.svg'])
+    assert.deepEqual(readFileSync(resolve(root, directory, 'templates', filename)), readFileSync(resolve(root, 'apps/web/public/templates', filename)), `stale editor avatar: ${directory}/${filename}`);
+}
 for (const path of ['apps/mac/Sources/DrawOfferApp/Resources/Branding/wordmark.png', 'apps/windows/src/DrawOffer.App/Assets/Branding/wordmark.png']) {
   assert.deepEqual(readFileSync(resolve(root, path)), readFileSync(resolve(root, 'apps/web/src/assets/drawoffer-wordmark.png')), `stale brand: ${path}`);
 }

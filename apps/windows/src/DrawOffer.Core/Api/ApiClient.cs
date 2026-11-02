@@ -70,11 +70,18 @@ public interface IDesktopTransport
 {
     Task<JsonNode> UploadDatasetAsync(DatasetUpload upload,string? access,CancellationToken ct=default) => throw new InvalidDataException();
     Task DownloadDatasetAsync(string id,string target,long limit,string? access,CancellationToken ct=default) => throw new InvalidDataException();
+    Task<JsonNode> UploadSessionAssetAsync(string session,DatasetUpload upload,string? access,CancellationToken ct=default) => throw new InvalidDataException();
     Task<JsonNode> CareerAsync(string path, string method, Dictionary<string,string>? query, JsonNode? body, string? access, CancellationToken ct = default) => throw new InvalidDataException();
     Uri Origin { get; }
     Task<DesktopImage> DownloadImageAsync(string path, int limit, string? access, CancellationToken ct = default)
         => throw new InvalidDataException();
     Task<JsonNode> SendAsync(string path, Dictionary<string, string>? body = null, string? access = null, CancellationToken ct = default);
+    Task StreamAgentAsync(string path, string method, JsonNode? body, string? access, Func<string, Task<bool>> onFrame, CancellationToken ct = default) => throw new InvalidDataException();
+    Task<JsonNode> UploadAgentAttachmentAsync(string session, string fileName, byte[] content, string id, string? access, CancellationToken ct = default) => throw new InvalidDataException();
+    Task<JsonNode> ImportResumeAsync(string fileName, string contentType, byte[] content, string? templateId, string idempotencyKey, string? access, CancellationToken ct = default) => throw new InvalidDataException();
+    Task<byte[]> DownloadResumePdfAsync(string id, int lockVersion, int limit, string? access, CancellationToken ct = default) => throw new InvalidDataException();
+    Task<byte[]> MockAudioAsync(string path, string method, JsonNode? body, string? access, CancellationToken ct = default) => throw new InvalidDataException();
+    Task<System.Net.WebSockets.ClientWebSocket> SpeechSocketAsync(string interviewId, IReadOnlyDictionary<string, string> query, string? access, CancellationToken ct = default) => throw new InvalidDataException();
 }
 
 public sealed partial class DesktopTransport : IDesktopTransport, IDisposable
@@ -114,7 +121,7 @@ public sealed partial class DesktopTransport : IDesktopTransport, IDisposable
 
     public async Task<JsonNode> CareerAsync(string path, string method, Dictionary<string,string>? query, JsonNode? body, string? access, CancellationToken ct = default)
     {
-        if (!CareerRequest.Allowed(path, method) || query is not null && query.Keys.Any(k => !new[] { "scope", "cursor", "limit", "week_start", "timezone", "application_id", "include_archived", "v", "job_application_id", "resume_id", "status", "folder_id", "confirm_contents" }.Contains(k))) throw new InvalidDataException();
+        if (!CareerRequest.Allowed(path, method) || query is not null && query.Keys.Any(k => !CareerRequest.QueryKeys.Contains(k))) throw new InvalidDataException();
         var suffix = query is null || query.Count == 0 ? "" : "?" + string.Join("&", query.Select(x => Uri.EscapeDataString(x.Key) + "=" + Uri.EscapeDataString(x.Value)));
         using var request = new HttpRequestMessage(new HttpMethod(method), path + suffix);
         request.Headers.Add("X-Request-ID", Guid.NewGuid().ToString());
@@ -146,18 +153,26 @@ public sealed partial class DesktopTransport : IDesktopTransport, IDisposable
                     var image = new ByteArrayContent(bytes); image.Headers.ContentType = new MediaTypeHeaderValue(type); form.Add(image, "image", type == "image/png" ? "upload.png" : "upload.jpg");
                 } else { form.Add(new StringContent(body["text"]?.GetValue<string>() ?? ""), "text"); }
                 request.Content = form;
+            } else if(path.EndsWith("/written-questions:extract")) {
+                // Mac `HTTPAPIClient`：笔试导入走 multipart（截图按 files 字段逐张附上）
+                var (bytes, type) = CareerUpload.WrittenImport(body);
+                var content = new ByteArrayContent(bytes); content.Headers.ContentType = MediaTypeHeaderValue.Parse(type);
+                request.Content = content;
             } else request.Content = JsonContent.Create(payload);
         }
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);deadline.CancelAfter(TimeSpan.FromMinutes(3));ct=deadline.Token;
         using var response = await _http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead, ct);
         if(response.IsSuccessStatusCode&&response.Content.Headers.ContentType?.MediaType=="text/event-stream"&&path.StartsWith("/api/mock-interviews/")) {
             await using var stream=await response.Content.ReadAsStreamAsync(ct);using var data=new MemoryStream();var buffer=new byte[8192];int count;
-            while((count=await stream.ReadAsync(buffer,ct))>0){if(data.Length+count>4*1024*1024)throw new InvalidDataException();data.Write(buffer,0,count);}
+            while((count=await stream.ReadAsync(buffer,ct))>0){if(data.Length+count>MockInterviewRequest.MaximumTurnBytes)throw new InvalidDataException();data.Write(buffer,0,count);}
             return MockInterviewRequest.DecodeEvents(new System.Text.UTF8Encoding(false,true).GetString(data.ToArray()));
         }
+        if (response.StatusCode == HttpStatusCode.Unauthorized) throw new ApiException(response.StatusCode, "UNAUTHORIZED");
         if (!response.IsSuccessStatusCode && response.Content.Headers.ContentType?.MediaType != "application/json") throw new ApiException(response.StatusCode, "HTTP_" + (int)response.StatusCode);
+        // 204 或空正文（删除、勾选一类接口）：Mac 返回 `.null`，这里返回空对象，调用方读取字段时同样得到空值
+        if (response.StatusCode == HttpStatusCode.NoContent || response.Content.Headers.ContentLength == 0) return new JsonObject();
         var result = await response.Content.ReadFromJsonAsync<JsonNode>(ct) ?? new JsonObject();
-        if (!response.IsSuccessStatusCode) throw new ApiException(response.StatusCode, result["error"]?.GetValue<string>() ?? $"HTTP_{(int)response.StatusCode}");
+        if (!response.IsSuccessStatusCode) throw new ApiException(response.StatusCode, result.Text("error") is { Length: > 0 } code ? code : $"HTTP_{(int)response.StatusCode}");
         return result;
     }
 
@@ -189,9 +204,9 @@ public sealed partial class DesktopTransport : IDesktopTransport, IDisposable
 
 public sealed class HttpApiClient(DrawOffer.Core.Session.SessionCoordinator coordinator) : IApiClient
 {
-    public Task<JsonNode> UploadDatasetAsync(DatasetUpload upload,CancellationToken ct=default) => coordinator.UploadDatasetAsync(upload,ct);
-    public Task<DatasetFile> DownloadDatasetAsync(string id,long limit,CancellationToken ct=default) => coordinator.DownloadDatasetAsync(id,limit,ct);
-    public Task<JsonNode> CareerRequestAsync(string path, string method = "GET", Dictionary<string,string>? query = null, JsonNode? body = null, CancellationToken ct = default) => coordinator.CareerRequestAsync(path, method, query, body, ct);
+    public Task<JsonNode> UploadDatasetAsync(DatasetUpload upload,CancellationToken ct=default) => Coordinator.UploadDatasetAsync(upload,ct);
+    public Task<DatasetFile> DownloadDatasetAsync(string id,long limit,CancellationToken ct=default) => Coordinator.DownloadDatasetAsync(id,limit,ct);
+    public Task<JsonNode> CareerRequestAsync(string path, string method = "GET", Dictionary<string,string>? query = null, JsonNode? body = null, CancellationToken ct = default) => Coordinator.CareerRequestAsync(path, method, query, body, ct);
     public DrawOffer.Core.Session.SessionCoordinator Coordinator { get; } = coordinator;
     public Task<PaperPreparation> PreparePaperAsync(ResumeRenderRequest request, CancellationToken ct = default) => Coordinator.PreparePaperAsync(request, ct);
     public Task<User?> CurrentUserAsync(CancellationToken ct = default) => Coordinator.RestoreAsync(ct);

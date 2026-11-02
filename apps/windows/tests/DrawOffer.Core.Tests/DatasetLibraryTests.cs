@@ -7,6 +7,19 @@ public class DatasetLibraryTests {
     [Fact] public void SnapshotIsImmutableAcrossRetryAndCleanup(){var directory=DatasetUpload.PrivateDirectory();try{var original=Path.Combine(directory,"fictional.md");File.WriteAllText(original,"# fictional original");var upload=DatasetUpload.Snapshot(original,"1",1024);try{File.WriteAllText(original,"changed externally");Assert.Equal("# fictional original",File.ReadAllText(upload.File));Assert.Equal(upload.Id,(upload with{}).Id);Assert.Equal("1",upload.Folder);Assert.NotEqual(upload.Id,(upload with{Id=Guid.NewGuid().ToString("D")}).Id);Assert.Throws<InvalidDataException>(()=>DatasetUpload.Snapshot(original,"../1",1024));Assert.Throws<InvalidDataException>(()=>DatasetUpload.Snapshot(original,"1",1));if(!OperatingSystem.IsWindows()){Assert.Equal(UnixFileMode.UserRead|UnixFileMode.UserWrite|UnixFileMode.UserExecute,File.GetUnixFileMode(upload.Directory));Assert.Equal(UnixFileMode.UserRead|UnixFileMode.UserWrite,File.GetUnixFileMode(upload.File));}}finally{upload.Discard();}Assert.False(Directory.Exists(upload.Directory));}finally{Directory.Delete(directory,true);}}
     [Fact] public void MediaReadyWithoutParsing(){var media=new DatasetRecord(JsonNode.Parse("""{"asset_kind":"audio","upload_status":"succeeded","parse_status":null}""")!);Assert.True(media.Ready);Assert.False(media.Retryable);var doc=new DatasetRecord(JsonNode.Parse("""{"asset_kind":"document","upload_status":"succeeded","parse_status":"failed"}""")!);Assert.True(doc.Retryable);Assert.False(doc.Ready);}
 
+    [Theory]
+    [InlineData("项目记录.PDF", "pdf", "项目记录")]
+    [InlineData("项目记录.final.pdf", "pdf", "项目记录.final")]
+    [InlineData("项目记录.txt", "pdf", "项目记录.txt")]
+    [InlineData("无扩展名", "", "无扩展名")]
+    public void DisplayNameRemovesOnlyMatchingExtension(string name, string format, string expected)
+    {
+        var record = new DatasetRecord(new JsonObject { ["id"] = 123, ["folder_id"] = null, ["file_name"] = name, ["file_format"] = format });
+        Assert.Equal(expected, record.DisplayName);
+        Assert.Equal("123", record.Id);
+        Assert.Equal("", record.Folder);
+    }
+
     [Fact] public async Task RealTransferUsesStableKeyPrivateCookieAndRejectsRedirectsAndOversize(){
         using var listener=new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback,0);listener.Start();
         var origin=new Uri($"http://127.0.0.1:{((System.Net.IPEndPoint)listener.LocalEndpoint).Port}/");using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(15));var requests=new List<string>();

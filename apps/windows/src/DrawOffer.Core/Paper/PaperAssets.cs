@@ -17,6 +17,9 @@ public static class PaperAssets
     public const string Placeholder = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGM4c+bMfwAIMANkhLK+mwAAAABJRU5ErkJggg==";
     private static readonly HashSet<string> Bundled = new(new[] { "avatar-administrative.png", "avatar-administrative.svg", "avatar-campus.png", "avatar-campus.svg", "avatar-cat.jpg", "avatar-civic.png", "avatar-civic.svg", "avatar-creative.png", "avatar-creative.svg" }.Select(name => "/templates/" + name));
 
+    /// <summary>随包的模板示例头像（`/templates/...`），可编辑纸面从安装目录读出（Mac `PaperAssets.isBundledTemplate`）。</summary>
+    public static bool IsBundledTemplate(string path) => Bundled.Contains(path);
+
     public static HashSet<string> Sources(JsonNode? value)
     {
         var result = new HashSet<string>(StringComparer.Ordinal);

@@ -72,6 +72,8 @@ Mac 测试脚本兼容 CLT 的 Testing 框架路径，并在 CLT 残留旧 Packa
 
 ## 纸面预览契约
 
+`build_renderer.mjs` 将预览 `paper.html`、可编辑纸面 `editor.html` 与编辑器引用的九个模板头像同步到 Mac 的 `DrawOfferRender/Resources` 和 Windows 的 `Assets/Renderer`；HTML 与模板头像均为忽略提交的生成资源，打包前必须先执行 `npm run build:native-renderer`。`check_renderer.mjs` 校验两端 HTML 与源头像的字节一致性。
+
 原生离线入口与 Web／PDF 加载相同的基础、应用、打印及 Muse 样式，复用 `renderResumePrintDocument`，使用同一份 canonical data、template snapshot 与 layout_plan。内容、模块顺序、模板结构、配色、图片及关键布局应保留；这不是字形、换行、分页或像素一致的承诺。Mac 使用 WebKit，Windows 使用 WebView2，最终 PDF 由 Chromium 生成，并使用其内嵌字体。最终排版以生成的 PDF 为准，原生模板舞台常驻显示差异提示。
 
 原生预览为可滚动的连续纸面，不模拟 PDF 的物理分页。页面等待图片解码与字体就绪后上报高度，两端舞台使用该高度，避免固定一页遮住长正文。快速切换只上报最新请求；版本不匹配或无效 layout_plan 会显示失败提示；单张图片解码失败保留正文和实际高度，显示占位及图片不可用提示。原生网页视图只允许离线资源；内置头像随包内联，私有图片由宿主通过桌面会话先安全下载，再通过两端原生请求模型的 assets 字段注入，参见下文。
@@ -156,9 +158,13 @@ Mac 的岗位详情按 Figma 04.C01 与 Web `ApplicationProgressPage`/`StageDeta
 
 `JobDetailView.swift` 对齐 Web `JobDetailPage.tsx` 与 `JobMatchCard.tsx`，从求职进度页“岗位详情”进入（原岗位已删除时退回只读描述）。页头为来源、更新时间、职位名称、当前阶段、薪资与工作条件；简历匹配度卡显示分数、“还缺”标题、已命中/待补充标签与过期提示，分析只由用户触发，`JOB_MATCH_IN_PROGRESS` 或 pending 时每 3 秒轮询、最多 20 次，错误码文案与 Web 相同。未关联简历时可从本人简历中选择，经 `PUT /api/job-applications/{id}` 写入 `resume_id` 并带锁版本。岗位描述以原生 Markdown 显示，JD 已覆盖/待补充要求以标签列出（不做行内高亮）；另有核心技能、工作安排、公司信息与个人备注（可直接编辑）。“编辑岗位”表单覆盖 Web 全部可编辑字段，PUT 由当前记录与修改合成完整字段并携带 `base_lock_version`；永久删除前确认会一并删除求职进程、阶段、复盘与排期。
 
-### Mac 账号设置
+### 原生账号、求职资料与额度
 
-`AccountView.swift` 从侧栏账号菜单进入，读取 `GET /api/account/profile`、`/user-profile` 与 `/preferences`。可更换头像（选图后裁成居中正方形、缩放到 512px 内以 JPEG 经 `PUT /api/account/avatar` 上传，可移除；头像经桌面会话下载显示，不缓存）、修改昵称（`PATCH /api/account/profile`，侧栏名称立即更新）、联系邮箱、求职资料画像（求职类型、身份与毕业年份/工作年限、意向城市、期望薪资、学历院校专业与层次、技能语言证书、荣誉与校园经历；PUT 完整替换并带锁版本，冲突时读取最新版本提示确认）与偏好（语言、面试提醒开关）。桌面只能微信登录，账号页不提供注销账号、密码与微信绑定。
+Mac `AccountView.swift` 与 Windows `Views/Account/AccountPage.cs` 从侧栏进入，读取本人资料、联系邮箱、偏好与求职资料摘要。昵称与头像保存后同步会话用户；头像支持选图、缩放、拖动裁剪、三档预览、512px PNG 上传和移除，自定义图片经桌面会话下载。Windows 在裁剪前归一化 EXIF 方向，账号切换和离页后拒绝迟到结果；图片处理与系统选择器仍需 Windows 实机验证。
+
+求职资料为独立子页：基本信息、证件、求职意向、经历、技能与更多字段采用只读行和就地编辑。保存携带 `base_lock_version`，经历从用户选择的简历读取，之后与简历独立；证件单独确认同意且仅回显服务端掩码。意向保存前读取最新画像并合并修改，保留未知字段。普通保存失败保留输入，版本冲突读取最新资料。偏好只提供界面语言；桌面不提供注销账号、密码和微信绑定。
+
+Mac `PlansSheet.swift` 与 Windows `Shell/PlansDialog*.cs` 按后端方案卡展示会员、积分包和邀请码优惠，提供积分明细筛选与分页、邀请记录及客服二维码。用户点击购买后才请求动作并在默认浏览器打开付款页，票据每 3 秒读取一次、最多 30 分钟；关闭弹层取消读取。Windows 未确认下单结果时重试沿用幂等键。Windows 控件、插图与细部视觉尚未实机验收，源码对照不能证明像素一致。
 
 ### Mac AI 对话
 
@@ -179,4 +185,4 @@ Mac 的岗位详情按 Figma 04.C01 与 Web `ApplicationProgressPage`/`StageDeta
 
 ### 资料库
 
-`DatasetLibraryView.swift` 与 `DatasetLibraryPage.cs` 使用原生文件夹与文件表格，Mac 已按 Web `DatasetsPage` 的 06.1/06.2 结构重做：根目录为“DATASETS · N 份”眉题、搜索与“新建文件夹”、按最近上传排序的文件夹卡（缩略纸张按格式着色）、新建文件夹虚线卡与“最近上传”列表；文件夹内为“DATASETS · 文件夹名”可返回的眉题、“共 N 份资料 · M 份已关联面试”、批量操作与上传资料按钮，表格列为格式/名称与状态/关联/大小/上传日期（失败时为重试）/⋯，点击可用行直接预览或播放，批量模式下显示复选框与底部操作栏；Mac 不再显示右侧详情面板与类型筛选。提供个人文件上传、解析预览、系统媒体播放、下载、重命名、批量移动/删除、解析重试及面试关联。游客显示空资料库，登录后读取本人数据；失败显示错误，不补入虚构资料。临时快照、幂等重试、替换确认、账号清理与 Markdown 图表/图片差异见 [原生资料库](../../docs/features/datasets.md#原生资料库)，接口权限见 [桌面资料库权限](../../docs/api/http-contracts.md#桌面资料库权限)。当前没有崩溃后的临时文件恢复清理器，Windows 系统交互需实机验证。
+`DatasetLibraryView.swift` 与 Windows `DatasetLibraryPage.cs` 使用 V4 项目资料库：首页为“我的项目 / 求职进程”双标签，提供项目搜索、全部文件、新建项目和存储用量；项目内提供说明编辑、添加本地资料、从资料库选择移入及文件表格，批量模式显示底部操作栏。求职进程项目复用求职进度资料页。Windows 页面拆为主页面、Layout 与 Actions 分部文件，已移除旧右侧详情、类型筛选和临时 `LegacyControls`。功能边界、临时快照、幂等重试、替换确认、账号清理与 Markdown 图表/图片差异统一见 [原生资料库](../../docs/features/datasets.md#原生资料库)，接口权限见 [桌面资料库权限](../../docs/api/http-contracts.md#桌面资料库权限)。当前没有崩溃后的临时文件恢复清理器，Windows 系统交互需实机验证。

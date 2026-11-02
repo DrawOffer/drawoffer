@@ -134,11 +134,17 @@ const editorHtml = `<!doctype html>
 `;
 const editorOut = resolve(nativeRoot, "renderer/dist/editor.html");
 writeFileSync(editorOut, editorHtml);
-const editorTarget = resolve(appsRoot, "mac/Sources/DrawOfferRender/Resources/editor.html");
-copyFileSync(editorOut, editorTarget);
-// 模板示例头像：纸面里写的是站内 /templates/... 地址，由原生 scheme 从随包资源读出
-const templateTarget = resolve(appsRoot, "mac/Sources/DrawOfferRender/Resources/templates");
-mkdirSync(templateTarget, { recursive: true });
-for (const filename of ["avatar-administrative.png", "avatar-administrative.svg", "avatar-campus.png", "avatar-campus.svg", "avatar-cat.jpg", "avatar-civic.png", "avatar-civic.svg", "avatar-creative.png", "avatar-creative.svg"])
-  copyFileSync(resolve(appsRoot, "web/public/templates", filename), resolve(templateTarget, filename));
-console.log(`editor.html ${(editorHtml.length / 1024).toFixed(0)} KiB -> mac`);
+const editorDirectories = [
+  resolve(appsRoot, "mac/Sources/DrawOfferRender/Resources"),
+  resolve(appsRoot, "windows/src/DrawOffer.App/Assets/Renderer"),
+];
+for (const directory of editorDirectories) {
+  mkdirSync(directory, { recursive: true });
+  copyFileSync(editorOut, resolve(directory, "editor.html"));
+  // 模板示例头像：纸面里写的是站内 /templates/... 地址，由原生 scheme 从随包资源读出
+  const templateTarget = resolve(directory, "templates");
+  mkdirSync(templateTarget, { recursive: true });
+  for (const filename of ["avatar-administrative.png", "avatar-administrative.svg", "avatar-campus.png", "avatar-campus.svg", "avatar-cat.jpg", "avatar-civic.png", "avatar-civic.svg", "avatar-creative.png", "avatar-creative.svg"])
+    copyFileSync(resolve(appsRoot, "web/public/templates", filename), resolve(templateTarget, filename));
+}
+console.log(`editor.html ${(editorHtml.length / 1024).toFixed(0)} KiB -> ${editorDirectories.length} clients`);
