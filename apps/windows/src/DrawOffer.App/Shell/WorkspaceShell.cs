@@ -257,6 +257,8 @@ public sealed class WorkspaceShell : Grid
             WorkspaceSection.Mock => new MockInterviewPage(),
             WorkspaceSection.Schedule => new Views.Career.InterviewScheduleView(() => _ = RequestLoginAsync(reason: "登录后管理面试安排。")),
             WorkspaceSection.Jobs => new Views.Career.JobsBoardView(() => _ = RequestLoginAsync(reason: "登录后管理岗位和求职进度。")),
+            // 与 Mac 一致：岗位广场只对已登录用户开放；从广场打开求职进程时切到投递看板并进入详情
+            WorkspaceSection.Opportunities when signedIn => new Views.JobPool.JobPoolView(id => { Views.Career.JobsBoardView.OpenApplication = id; Select(WorkspaceSection.Jobs); }),
             WorkspaceSection.Templates => new TemplatesPage(),
             // 与 Mac `ResumesView.body` 一致：有待编辑的简历时直接进编辑器（铺满窗口、不显示侧栏），关闭后回到列表
             WorkspaceSection.Resumes when signedIn && PendingEditResume is { } edit => new Views.Resumes.ResumeEditorView(edit, CloseEditor),
