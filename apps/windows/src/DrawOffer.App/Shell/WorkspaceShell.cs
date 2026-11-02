@@ -246,6 +246,8 @@ public sealed class WorkspaceShell : Grid
     void ShowSection()
     {
         var signedIn = SignedInUser is not null;
+        // 昵称和头像更新会发布 User 变化；保留当前账号页及其编辑草稿。
+        if (Selection == WorkspaceSection.Account && _content.Content is Views.Account.AccountPage) return;
         _content.Content = Selection switch
         {
             // 登录后与 Web 一致：首页是“哪里要提升”星图；游客仍显示引导首页
@@ -253,6 +255,7 @@ public sealed class WorkspaceShell : Grid
             WorkspaceSection.Assistant when signedIn && _chat is { } chat => new Views.Assistant.AssistantChatView(chat.sessionId, chat.initial, chat.model),
             WorkspaceSection.Home => new AssistantHomePage(signedIn ? App.Session.User?.Nickname : null, _homeDraft, text => _homeDraft = text,
                 () => Select(WorkspaceSection.Templates), () => RequestLoginAsync(reason: "登录 DrawOffer；你的输入会保留。"), ShowPluginAsync),
+            WorkspaceSection.Account => new Views.Account.AccountPage(),
             WorkspaceSection.Datasets => new DatasetLibraryPage(),
             WorkspaceSection.Mock => new Views.Mock.MockInterviewView(this),
             WorkspaceSection.Schedule => new Views.Career.InterviewScheduleView(() => _ = RequestLoginAsync(reason: "登录后管理面试安排。")),

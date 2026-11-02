@@ -525,7 +525,7 @@ public sealed partial class AssistantChatView : UserControl
         if (block.kind == "model" && FreeModel is { } free)
             actions.Children.Add(new V3Button($"改用 {free.Text("name")} 重新发送", async () => { await ChooseModelAsync(free); _creditBlock = null; await SendAsync(block.content); }, V3Button.Kind.Dark));
         if (block.kind == "exhausted")
-            actions.Children.Add(new V3Button("我的额度", () => Shell.WorkspaceShell.Current.Select(WorkspaceSection.Account)));
+            actions.Children.Add(new V3Button("我的额度", () => Shell.WorkspaceShell.Current.OpenPlans()));
         actions.Children.Add(Sans("把消息放回输入框", 12, Link).Align(v: VerticalAlignment.Center).OnTap(() => { _draft = block.content; _creditBlock = null; Render(); }, "把消息放回输入框"));
         stack.Children.Add(actions);
         var card = new Border { Child = stack, Padding = new Thickness(16), Background = Brush(OrangeSoft), CornerRadius = new CornerRadius(14) };
