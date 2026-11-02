@@ -179,4 +179,4 @@ Mac 的岗位详情按 Figma 04.C01 与 Web `ApplicationProgressPage`/`StageDeta
 
 ### 资料库
 
-`DatasetLibraryView.swift` 与 `DatasetLibraryPage.cs` 使用原生文件夹与文件表格，Mac 已按 Web `DatasetsPage` 的 06.1/06.2 结构重做：根目录为“DATASETS · N 份”眉题、搜索与“新建文件夹”、按最近上传排序的文件夹卡（缩略纸张按格式着色）、新建文件夹虚线卡与“最近上传”列表；文件夹内为“DATASETS · 文件夹名”可返回的眉题、“共 N 份资料 · M 份已关联面试”、批量操作与上传资料按钮，表格列为格式/名称与状态/关联/大小/上传日期（失败时为重试）/⋯，点击可用行直接预览或播放，批量模式下显示复选框与底部操作栏；Mac 不再显示右侧详情面板与类型筛选。提供个人文件上传、解析预览、系统媒体播放、下载、重命名、批量移动/删除、解析重试及面试关联。游客显示空资料库，登录后读取本人数据；失败显示错误，不补入虚构资料。临时快照、幂等重试、替换确认、账号清理与 Markdown 图表/图片差异见 [原生资料库](../../docs/features/datasets.md#原生资料库)，接口权限见 [桌面资料库权限](../../docs/api/http-contracts.md#桌面资料库权限)。当前没有崩溃后的临时文件恢复清理器，Windows 系统交互需实机验证。
+`DatasetLibraryView.swift` 与 Windows `DatasetLibraryPage.cs` 使用 V4 项目资料库：首页为“我的项目 / 求职进程”双标签，提供项目搜索、全部文件、新建项目和存储用量；项目内提供说明编辑、添加本地资料、从资料库选择移入及文件表格，批量模式显示底部操作栏。求职进程项目复用求职进度资料页。Windows 页面拆为主页面、Layout 与 Actions 分部文件，已移除旧右侧详情、类型筛选和临时 `LegacyControls`。功能边界、临时快照、幂等重试、替换确认、账号清理与 Markdown 图表/图片差异统一见 [原生资料库](../../docs/features/datasets.md#原生资料库)，接口权限见 [桌面资料库权限](../../docs/api/http-contracts.md#桌面资料库权限)。当前没有崩溃后的临时文件恢复清理器，Windows 系统交互需实机验证。
