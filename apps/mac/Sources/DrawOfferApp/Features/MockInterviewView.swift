@@ -6,6 +6,13 @@ struct MockInterviewView: View {
     @Environment(SessionStore.self) private var session
     let requireAccount: () -> Void
     let showSchedule: () -> Void
+    var navigate: (WorkspaceSection) -> Void = { _ in }
+    /// 首页星图“去练”带来的练习焦点：打开新面试表单并随创建提交 `practice_focus`（与 Web `?focus=` 一致）。
+    var incomingFocus: Binding<PracticeFocus?> = .constant(nil)
+    /// 面试中隐藏侧栏（Web `SessionFrame` 用 `V3Shell bare`）。
+    var fullScreen: Binding<Bool> = .constant(false)
+    @State private var legacyReport = false
+    @State private var practiceFocus: PracticeFocus?
     @State private var screen = "home"
     @State private var pending = false
     @State private var records: [MockInterview] = []
@@ -56,7 +63,14 @@ struct MockInterviewView: View {
     @State private var leaveCheck: String?
     struct TranscriptEdit: Identifiable { let question: JSONValue; var text: String; var id: String { question.text("id") } }
     @State private var transcriptEdit: TranscriptEdit?
-    private var account: String { if case .signedIn(let user) = session.phase { return user.id }; return "" }
+    private var account: String {
+        if case .signedIn(let user) = session.phase { return user.id }
+        #if DEBUG
+        // 本地对照的只读替身：后端连不上时也按已登录排版这一场（不发请求）。
+        if ProcessInfo.processInfo.environment["DRAWOFFER_MOCK_FIXTURE"] != nil { return "fixture" }
+        #endif
+        return ""
+    }
     private var completed: [MockInterview] { records.filter { $0.status == "completed" } }
     private func request(_ path: String, _ method: String = "GET", _ body: JSONValue? = nil, query: [String:String] = [:]) async throws -> JSONValue {
         let owner = account
@@ -70,6 +84,51 @@ struct MockInterviewView: View {
         let f = DateFormatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = "M月d日 HH:mm"; return f.string(from: date)
     }
     var body: some View {
+        Group {
+            if screen == "home" && !account.isEmpty { homeV2 }
+            else if screen == "records" && !account.isEmpty {
+                MockRecordsV2(back: { goHome() }, openReport: openV2, open: openV2)
+            } else if screen == "detail" && !account.isEmpty && !legacyReport {
+                // 面试中（准备、作答、结束）是无侧栏的全屏画面；完成的场次交给报告
+                MockSessionV2(id: selectedID, home: { goHome() }, report: { _ in legacyReport = true }, open: openV2).id(selectedID)
+            } else if screen == "detail" && !account.isEmpty {
+                // 面试复盘（Web ReportV2）：带侧栏
+                MockReportV2(id: selectedID, home: { goHome() }, records: { practiceFocus = nil; screen = "records" },
+                             practice: { focus in practiceFocus = focus; screen = "home" }, open: openV2).id(selectedID)
+            } else { content }
+        }
+        #if DEBUG
+        .onAppear { if ProcessInfo.processInfo.environment["DRAWOFFER_MOCK_FIXTURE"] != nil { openV2("fixture") } }
+        #endif
+        .onChange(of: screen == "detail" && !account.isEmpty && !legacyReport, initial: true) { _, value in fullScreen.wrappedValue = value }
+        .onDisappear { fullScreen.wrappedValue = false }
+        .onChange(of: incomingFocus.wrappedValue, initial: true) { _, focus in
+            guard let focus else { return }
+            incomingFocus.wrappedValue = nil
+            practiceFocus = focus
+            screen = "home"
+        }
+    }
+
+    private func openV2(_ id: String) {
+        guard !id.isEmpty else { return }
+        practiceFocus = nil; selectedID = id; detail = nil; legacyReport = false; repeatUnknown = false; draft = ""; uncertain = nil; screen = "detail"; error = nil; notice = nil
+    }
+
+    /// V2 首页（Web `MockHomeV2`）：带着「先问」进来时由首页对到图上的点。
+    private var homeV2: some View {
+        MockHomeV2(
+            focus: practiceFocus,
+            open: openV2, openReport: openV2,
+            showRecords: { practiceFocus = nil; screen = "records" },
+            showSchedule: showSchedule,
+            showResumes: { navigate(.resumes) },
+            showLibrary: { navigate(.datasets) },
+            showOpportunities: { navigate(.opportunities) })
+        .id(practiceFocus.map { "\($0.kind):\($0.ref)" } ?? "")
+    }
+
+    private var content: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 if screen == "home" { home }
@@ -143,7 +202,7 @@ struct MockInterviewView: View {
             ForEach(segments, id: \.self) { segment in Text("·").foregroundStyle(V3.fnt); Text(segment).foregroundStyle(V3.fnt).lineLimit(1) }
         }.font(V3.sans(12, weight: .medium)).frame(height: 13)
     }
-    private func goHome() { screen = "home"; detail = nil; uncertain = nil; draft = ""; selectedID = "" }
+    private func goHome() { practiceFocus = nil; screen = "home"; detail = nil; uncertain = nil; draft = ""; selectedID = "" }
     private func start(_ application: String? = nil, type preferred: String? = nil) {
         job = application ?? "__none"; createUnknown = false; error = nil; typeTouched = preferred != nil
         if let preferred { type = preferred }
@@ -1397,6 +1456,7 @@ struct MockInterviewView: View {
         busy = true; error = nil
         do {
             var body: [String:JSONValue] = ["resume_id": .string(resume), "interview_type": .string(type), "difficulty": .string(difficulty), "question_count": .number(Double(count)), "follow_up_enabled": .bool(follow), "language": .string(language), "answer_mode": .string(answerMode == "voice" && speechReady ? "voice" : "text"), "material_ids": .array(chosenMaterials.sorted().map(JSONValue.string)), "materials_in_questions": .bool(materialsInQuestions && !chosenMaterials.isEmpty)]
+            if let practiceFocus { body["practice_focus"] = .object(["kind": .string(practiceFocus.kind), "ref": .string(practiceFocus.ref), "label": .string(practiceFocus.label), "origin": .string("assistant")]) }
             if job == "__jd" { body["job_description_text"] = .string(jd.trimmingCharacters(in: .whitespacesAndNewlines)) } else if job != "__none" { body["job_application_id"] = .string(job) }
             let data = try await request("/api/mock-interviews", "POST", .object(body)); try Task.checkCancellation(); open(MockInterview(data["mock_interview"] ?? .null))
         } catch {

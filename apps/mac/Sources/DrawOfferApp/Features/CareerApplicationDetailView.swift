@@ -33,7 +33,9 @@ struct CareerApplicationDetailView: View {
     let api: any APIClient
     let back: () -> Void
     let perform: (String, CareerApplication) -> Void
-    private enum Route: Equatable { case stage(String), report(String), job(String) }
+    /// 从资料库「求职进程」进来时直接停在资料页，返回回到资料库。
+    var libraryMaterials = false
+    private enum Route: Equatable { case stage(String), report(String), job(String), materials(String?), record(String, paste: Bool, fromMaterials: String?) }
     @State private var route: Route?
     @State private var current: JSONValue?
     @State private var sessions: [JSONValue] = []
@@ -49,6 +51,15 @@ struct CareerApplicationDetailView: View {
     @State private var cancelling: JSONValue?
     @State private var refreshed = UUID()
     @State private var now = Date()
+    @State private var viewKey: String?
+    @State private var details: [String: JSONValue] = [:]
+    @State private var confirmReject = false
+    @State private var prepBusy: String?
+    @State private var prepFor: String?
+    @State private var adding: JSONValue?
+    @State private var addMode: CareerAddContentSheet.Mode = .upload
+    @State private var splits: [String: SplitJob] = [:]
+    private struct SplitJob { var running: Bool; var error: String? }
     @Environment(WorkspaceRouter.self) private var router: WorkspaceRouter?
     private var raw: JSONValue { current ?? application.raw }
     private var item: CareerApplication { CareerApplication(raw).includingSessions(sessions) }
@@ -56,38 +67,104 @@ struct CareerApplicationDetailView: View {
     private var active: Bool { raw.text("lifecycle_status") != "terminated" && raw.text("status") == "active" && raw.text("archived_at").isEmpty }
 
     var body: some View {
-        switch route {
+        switch route ?? (libraryMaterials ? .materials(nil) : nil) {
         case .stage(let id):
             CareerStageDetailView(sessionID: id, api: api, back: { route = nil; refreshed = UUID() }, openReport: { route = .report(id) })
         case .report(let id):
             CareerReviewReportView(sessionID: id, api: api, back: { route = .stage(id) })
         case .job(let id):
             JobDetailView(jobID: id, application: raw, back: { route = nil; refreshed = UUID() }, deleted: back)
+        case .materials(let id):
+            CareerMaterialsPage(application: raw, deck: CareerDeck(application: raw, sessions: sessions, now: now), details: details, initialSessionID: id, splitting: Set(splits.filter { $0.value.running }.keys),
+                                back: { if libraryMaterials { back() } else { route = nil } }, openRecord: { session, mode in route = .record(session, paste: mode == .paste, fromMaterials: session) },
+                                openReview: { route = .stage($0.text("id")) }, generateReview: { route = .stage($0.text("id")) }, add: { addMode = .upload; adding = $0 }, addFromLibrary: { addMode = .library; adding = $0 },
+                                openResume: { if !raw.text("resume_id").isEmpty { router?.jump(.editResume(raw.text("resume_id"))) } }, openJob: openJob,
+                                fromLibrary: libraryMaterials, openProgress: libraryMaterials ? { router?.jump(.application(application.id)) } : nil)
+                .task(id: refreshed) { await load() }
+                .sheet(item: Binding(get: { adding.map(CareerSessionRef.init) }, set: { if $0 == nil { adding = nil } })) { entry in
+                    CareerAddContentSheet(session: entry.value, recordKind: entry.value.text("stage_type") == "written_test" || entry.value.text("stage_type") == "assessment" ? "笔试" : "面试",
+                                          initialMode: addMode, api: api, close: { adding = nil }, saved: { adding = nil; refreshed = UUID() })
+                }
+        case .record(let id, let paste, let from):
+            let deck = CareerDeck(application: raw, sessions: sessions, now: now)
+            if let station = deck.stations.first(where: { $0.session?.text("id") == id }) {
+                let session = details[id]?["session"] ?? station.session ?? .null
+                CareerRecordPage(application: raw, station: station, session: session, mode: paste ? .paste : .record,
+                                 splitting: splits[id]?.running == true, splitError: splits[id]?.error, backLabel: from == nil ? "求职进度" : "资料",
+                                 back: { route = from.map { .materials($0) } },
+                                 split: { text in startSplit(id, text); route = from.map { .materials($0) } },
+                                 generateReview: { route = .stage(id) })
+            } else { progressPage }
         case nil:
             progressPage
         }
     }
 
-    private var progressPage: some View {
-        let model = self.model
-        return ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                header(model)
-                if loading && current == nil { ProgressView("正在读取求职记录…").font(LibraryTypography.sans(12)) }
-                if let error { HStack { Text(error).foregroundStyle(CareerPalette.red); Button("重试") { refreshed = UUID() }.buttonStyle(CareerActionStyle()) }.font(LibraryTypography.sans(12)) }
-                if let notice { Text(notice).font(LibraryTypography.sans(12)).foregroundStyle(CareerPalette.sub) }
-                pipeline(model)
-                nextCard(model.next)
-                HStack(alignment: .top, spacing: 24) {
-                    history(model).frame(maxWidth: .infinity, alignment: .leading)
-                    side(model).frame(width: 276)
-                }
+    /// 粘贴文字拆成问题（Web `recordSplit.ts`）：回到上一页后在后台跑，拆好直接存成这一站的面试记录。
+    private func startSplit(_ id: String, _ text: String) {
+        guard splits[id]?.running != true, !text.isEmpty else { return }
+        splits[id] = SplitJob(running: true, error: nil)
+        Task {
+            do {
+                let draft = try await api.careerRequest(path: "/api/interview-sessions/\(id)/record:structure", method: "POST", query: [:], body: .object(["source": .string("text"), "text": .string(text)]))
+                let latest = try await api.careerRequest(path: "/api/interview-sessions/\(id)", method: "GET", query: [:], body: nil)
+                let markdown = InterviewRecord.serialize(InterviewRecord.draft(draft))
+                _ = try await api.careerRequest(path: "/api/interview-sessions/\(id)", method: "PUT", query: [:],
+                                                body: .object(["questions_markdown": markdown.isEmpty ? .null : .string(markdown), "base_lock_version": latest["session"]?["lock_version"] ?? .number(1)]))
+                splits[id] = nil
+                refreshed = UUID()
+            } catch {
+                let code: String? = if case APIError.server(_, let code) = error { code } else { nil }
+                splits[id] = SplitJob(running: false, error: code == "INTERVIEW_QUESTIONS_NOT_FOUND" ? "这段文字里没找到面试问题，可以补几句再拆。" : CareerErrors.message(error))
             }
-            .padding(.top, 35).padding(.bottom, 64).frame(maxWidth: 860).padding(.horizontal, 32)
-            .frame(maxWidth: .infinity, alignment: .top)
         }
-        .foregroundStyle(CareerPalette.text).font(LibraryTypography.sans(13))
+    }
+
+    private func savePrep(_ session: JSONValue, _ items: [JSONValue]) async {
+        let id = session.text("id")
+        prepBusy = id; defer { prepBusy = nil }
+        let lock = details[id]?["session"]?["lock_version"] ?? session["lock_version"] ?? .number(1)
+        do {
+            _ = try await api.careerRequest(path: "/api/interview-sessions/\(id)", method: "PUT", query: [:], body: .object(["prep_items": .array(items), "base_lock_version": lock]))
+            refreshed = UUID()
+        } catch { notice = CareerErrors.message(error) }
+    }
+
+    private var progressPage: some View {
+        let deck = CareerDeck(application: raw, sessions: sessions, now: now)
+        let current = deck.current ?? deck.stations[deck.stations.count - 1]
+        let shown = viewKey.flatMap { key in deck.stations.first { $0.id == key } } ?? current
+        let viewing = shown.id != current.id
+        let shownIndex = deck.stations.firstIndex { $0.id == shown.id } ?? 0
+        return GeometryReader { geometry in
+            let gutter = V3Page<EmptyView>.gutter(card: geometry.size.width)
+            let width = max(0, geometry.size.width - gutter * 2)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    deckHeader(deck)
+                    if let error { HStack { Text(error).foregroundStyle(PD.red); Button("重试") { refreshed = UUID() }.buttonStyle(CareerActionStyle()) }.font(V3.sans(12)).padding(.top, 12) }
+                    if let notice { Text(notice).font(V3.sans(12)).foregroundStyle(PD.body).padding(.top, 12) }
+                    // 页头到主体 48；左栏 320、与右侧之间 64（窄屏按比例收）
+                    let rail = min(320, max(232, width * 0.29)), gap = min(64, max(28, width * 0.058))
+                    HStack(alignment: .top, spacing: gap) {
+                        CareerStationRail(deck: deck, application: raw, picked: viewing ? shownIndex : -1, now: now,
+                                          pick: { key in withAnimation(.easeOut(duration: 0.24)) { viewKey = key == current.id ? nil : key } },
+                                          next: { toApply in handle(toApply ? .recordApplied : .advance) })
+                            .frame(width: rail)
+                        CareerStationCard(application: raw, deck: deck, station: shown, previous: shownIndex > 0 ? deck.stations[shownIndex - 1] : nil,
+                                          details: details, viewing: viewing, now: now, busy: busy || loading, prepBusy: prepBusy == shown.session?.text("id"),
+                                          materialsCount: materialsCount, act: { deckAction($0, shown: shown) })
+                            .id(shown.id).transition(.opacity)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }.padding(.top, 48)
+                }
+                .frame(width: width, alignment: .leading)
+                .padding(.horizontal, gutter).padding(.top, 52).padding(.bottom, 72)
+            }
+        }
+        .foregroundStyle(PD.ink).font(V3.sans(13))
         .task(id: refreshed) { await load() }
+        .onExitCommand { if viewKey != nil { viewKey = nil } }
         .sheet(isPresented: $showJob) {
             CareerSheet(title: "岗位详情", subtitle: item.company + " · " + item.title, width: 720) {
                 Text(jobDescription ?? "原岗位资料已不可用。").font(LibraryTypography.sans(13)).foregroundStyle(CareerPalette.sub).textSelection(.enabled)
@@ -97,10 +174,126 @@ struct CareerApplicationDetailView: View {
         .sheet(item: Binding(get: { rescheduling.map(CareerSessionRef.init) }, set: { if $0 == nil { rescheduling = nil } })) { entry in
             CareerRescheduleSheet(session: entry.value, api: api, close: { rescheduling = nil }, saved: { rescheduling = nil; refreshed = UUID() })
         }
-        .confirmationDialog(cancelling.map { "取消「\($0.text("stage_label"))」这场安排？" } ?? "", isPresented: Binding(get: { cancelling != nil }, set: { if !$0 { cancelling = nil } }), titleVisibility: .visible) {
-            Button("取消本场", role: .destructive) { if let session = cancelling { Task { await cancel(session) } } }
-            Button("返回", role: .cancel) { cancelling = nil }
-        } message: { Text("取消后阶段回到“等待安排”，可以重新安排时间；已上传的资料会保留。") }
+        .sheet(item: Binding(get: { prepFor.flatMap { id in sessions.first { $0.text("id") == id } }.map(CareerSessionRef.init) }, set: { if $0 == nil { prepFor = nil } })) { entry in
+            let session = CareerSessions.withEffectiveStatus(details[entry.id]?["session"] ?? entry.value, now: now)
+            CareerPrepSheet(session: session, busy: prepBusy == entry.id, save: { items in Task { await savePrep(session, items) } },
+                            generate: { Task { await generatePrep(session) } }, close: { prepFor = nil })
+        }
+        .confirmationDialog("\(shown.short)没通过？", isPresented: $confirmReject, titleVisibility: .visible) {
+            Button("记为没通过", role: .destructive) { Task { await terminate("company_rejected") } }
+            Button("取消", role: .cancel) {}
+        } message: { Text("这条投递会结束，记录会一直保留，复盘可以在之后的投递里继续参考。") }
+    }
+
+    /// 页头（`.pd-head`）：返回、岗位详情与更多；公司、职位、标签；右侧三个数字。
+    private func deckHeader(_ deck: CareerDeck) -> some View {
+        let snapshot = raw["job_snapshot"] ?? .null
+        let employment = ["full_time": "正式", "campus": "校招", "internship": "实习"][snapshot.text("employment_type")]
+        let city = [snapshot.text("work_city"), snapshot.text("city"), snapshot.text("location")].first { !$0.isEmpty }
+        let salary = [snapshot.text("salary_text"), snapshot.text("salary")].first { !$0.isEmpty }
+        let summary = [city, salary].compactMap { $0 }.joined(separator: " · ")
+        let company = [item.company, snapshot.text("department").nonEmptyValue ?? snapshot.text("department_name")].filter { !$0.isEmpty }.joined(separator: " · ")
+        let ended = deck.ended != nil || !raw.text("archived_at").isEmpty
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top) {
+                Button(action: back) {
+                    HStack(spacing: 6) { Image(systemName: "arrow.left").font(.system(size: 13)); Text("投递看板") }
+                        .font(V3.sans(14)).foregroundStyle(V3.fnt).frame(height: 20).contentShape(Rectangle())
+                }.buttonStyle(.plain).accessibilityLabel("返回投递看板")
+                Spacer()
+                HStack(spacing: 4) {
+                    Button { openJob() } label: {
+                        HStack(spacing: 6) { Image(systemName: "briefcase").font(.system(size: 12)); Text("岗位详情") }
+                            .font(V3.sans(14)).foregroundStyle(PD.body).padding(.horizontal, 10).frame(height: 28).contentShape(Capsule())
+                    }.buttonStyle(.plain)
+                    Menu {
+                        Button(raw["is_favorite"]?.bool == true ? "取消收藏" : "收藏") { Task { await toggleFavorite() } }
+                        Menu("日历颜色") {
+                            ForEach([("blue", "蓝"), ("purple", "紫"), ("green", "绿"), ("orange", "橙"), ("yellow", "黄"), ("red", "红"), ("gray", "灰")], id: \.0) { color in
+                                Button(color.1 + (raw.text("calendar_color") == color.0 ? " ✓" : "")) { Task { await update(["calendar_color": .string(color.0)]) } }
+                            }
+                        }
+                        Button(raw.text("archived_at").isEmpty ? "归档" : "取消归档") { perform(raw.text("archived_at").isEmpty ? "archive" : "restore", item) }
+                        Divider()
+                        Button("删除这条记录", role: .destructive) { perform("delete", item) }.disabled(!ended)
+                    } label: { Image(systemName: "ellipsis").font(.system(size: 13, weight: .medium)).foregroundStyle(V3.fnt).frame(width: 28, height: 28) }
+                        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("这条投递的操作")
+                }.offset(y: -4)
+            }
+            HStack(alignment: .bottom, spacing: 24) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(company).font(V3.sans(13, weight: .medium)).foregroundStyle(PD.body).frame(height: 20)
+                    Text(item.title).font(V3.serif(30)).foregroundStyle(PD.ink).lineLimit(2).fixedSize(horizontal: false, vertical: true).frame(minHeight: 40)
+                        .accessibilityLabel(item.company + "，" + item.title)
+                    HStack(spacing: 8) {
+                        if let employment { Text(employment).font(V3.sans(12, weight: .medium)).foregroundStyle(PD.body).padding(.horizontal, 8).frame(height: 22).background(Color(hex: 0xF5F5F2), in: RoundedRectangle(cornerRadius: 6)) }
+                        if !summary.isEmpty { Text(summary).font(V3.sans(13)).foregroundStyle(PD.body) }
+                    }.frame(minHeight: 22).padding(.top, 6)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 28) {
+                    stat(deck.daysLabel, "\(deck.days)", "天", action: nil)
+                    stat("复盘", "\(deck.reviews)", "篇") { handleDeck(.review(deck.stations.reversed().compactMap(\.session).first { CareerDeck.hasReview($0) })) }
+                    stat("资料", "\(materialsCount)", "份") { route = .materials(nil) }
+                }.padding(.bottom, 16)
+            }.padding(.top, 8)
+        }
+    }
+
+    private func stat(_ label: String, _ value: String, _ unit: String, action: (() -> Void)?) -> some View {
+        let content = VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text(value).font(.system(size: 24, weight: .medium)).foregroundStyle(PD.ink).frame(height: 30)
+                Text(unit).font(V3.sans(12.5)).foregroundStyle(PD.mute)
+            }
+            Text(label).font(V3.sans(11.5)).foregroundStyle(PD.mute).frame(height: 16)
+        }
+        return Group {
+            if let action { Button(action: action) { content.contentShape(Rectangle()) }.buttonStyle(.plain) } else { content }
+        }
+    }
+
+    private var materialsCount: Int {
+        details.values.reduce(0) { $0 + ($1["assets"]?.items.count ?? 0) } + (raw.text("resume_id").isEmpty ? 0 : 1)
+    }
+
+    private func deckAction(_ action: CareerDeckAction, shown: CareerStation) {
+        switch action {
+        case .reschedule: rescheduling = shown.session
+        default: handleDeck(action)
+        }
+    }
+
+    private func handleDeck(_ action: CareerDeckAction) {
+        switch action {
+        case .recordApplied: perform("apply", item)
+        case .advance: perform("stage", item)
+        case .schedule: perform("schedule-current", item)
+        case .reschedule: rescheduling = CareerDetailModel(application: raw, sessions: sessions, now: now).currentSession
+        case .recordOffer, .editOffer, .uploadOffer: perform("offer", item)
+        case .handleOffer: perform("accept", item)
+        case .editJob: openJob()
+        case .editDelivery: perform("apply", item)
+        case .reopen: Task { await reopen() }
+        case .reject: confirmReject = true
+        case .materials(let id):
+            // 面试记录：有记录时直接看，否则到资料页
+            let markdown = details[id]?["session"]?.text("questions_markdown") ?? ""
+            route = InterviewRecord.parse(markdown).isEmpty ? .materials(id) : .record(id, paste: false, fromMaterials: nil)
+        case .allMaterials: route = .materials(nil)
+        case .review(let session):
+            if let id = session?.text("id"), !id.isEmpty { route = .stage(id) } else { notice = "这次求职还没有可查看的复盘记录。" }
+        case .generateReview(let session): route = .stage(session.text("id"))
+        case .prepOpen(let session): prepFor = session.text("id")
+        case .prepToggle(let session, let index):
+            let items = (session["prep_items"]?.items ?? []).enumerated().map { position, item -> JSONValue in
+                guard position == index, case .object(var fields) = item else { return item }
+                fields["done"] = .bool(item["done"]?.bool != true); return .object(fields)
+            }
+            Task { await savePrep(session, items) }
+        case .prepGenerate(let session): Task { await generatePrep(session) }
+        case .copy(let text):
+            NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string); notice = "已复制"
+        }
     }
 
     /// 有岗位记录时进入完整岗位详情（匹配度、字段编辑）；原岗位已删除时退回只读描述。
@@ -384,6 +577,40 @@ struct CareerApplicationDetailView: View {
         } catch { notice = CareerErrors.message(error) }
     }
 
+    private func update(_ fields: [String: JSONValue]) async {
+        busy = true; defer { busy = false }
+        var body = fields; body["base_lock_version"] = .number(Double(raw["lock_version"]?.integer ?? 0))
+        do {
+            let result = try await api.careerRequest(path: "/api/job-applications/\(application.id)", method: "PUT", query: [:], body: .object(body))
+            if let updated = result["application"] { current = updated }
+        } catch { notice = CareerErrors.message(error) }
+    }
+
+    private func reopen() async {
+        busy = true; defer { busy = false }
+        do {
+            _ = try await api.careerRequest(path: "/api/job-applications/\(application.id)/reopen", method: "POST", query: [:], body: .object(["base_lock_version": .number(Double(raw["lock_version"]?.integer ?? 0))]))
+            refreshed = UUID()
+        } catch { notice = CareerErrors.message(error) }
+    }
+
+    private func terminate(_ reason: String) async {
+        busy = true; defer { busy = false }
+        do {
+            _ = try await api.careerRequest(path: "/api/job-applications/\(application.id)/terminate", method: "POST", query: [:],
+                                            body: .object(["client_request_id": .string(UUID().uuidString.lowercased()), "reason": .string(reason), "base_lock_version": .number(Double(raw["lock_version"]?.integer ?? 0))]))
+            refreshed = UUID()
+        } catch { notice = CareerErrors.message(error) }
+    }
+
+    private func generatePrep(_ session: JSONValue) async {
+        prepBusy = session.text("id"); defer { prepBusy = nil }
+        do {
+            _ = try await api.careerRequest(path: "/api/interview-sessions/\(session.text("id"))/prep-items:generate", method: "POST", query: [:], body: nil)
+            refreshed = UUID()
+        } catch { notice = CareerErrors.message(error) }
+    }
+
     private func cancel(_ session: JSONValue) async {
         cancelling = nil; busy = true; defer { busy = false }
         do {
@@ -406,6 +633,11 @@ struct CareerApplicationDetailView: View {
             try Task.checkCancellation()
             let app = detail["application"] ?? .null
             current = app; sessions = all
+            var loaded: [String: JSONValue] = [:]
+            for session in all where session.text("status") != "cancelled" {
+                if let detail = try? await api.careerRequest(path: "/api/interview-sessions/\(session.text("id"))", method: "GET", query: [:], body: nil) { loaded[session.text("id")] = detail }
+            }
+            details = loaded
             let latest = CareerDetailModel(application: app, sessions: all, now: now).latestRecorded
             if let id = latest?.text("id"), !id.isEmpty, let session = try? await api.careerRequest(path: "/api/interview-sessions/\(id)", method: "GET", query: [:], body: nil) {
                 assets = session["assets"]?.items ?? []

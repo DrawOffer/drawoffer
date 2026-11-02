@@ -9,15 +9,33 @@ public enum AgentRequest {
         switch parts.count {
         case 1: return ["readiness", "model", "models", "contexts", "proposals"].contains(parts[0]) && method == "GET"
             || parts[0] == "sessions" && ["GET", "POST"].contains(method)
-        case 2: return parts[0] == "sessions" && id(parts[1]) && ["GET", "PATCH", "DELETE"].contains(method)
+        case 2:
+            if parts[0] == "sessions" { return id(parts[1]) && ["GET", "PATCH", "DELETE"].contains(method) }
+            // 对话里的额度卡与套餐卡、卡片按钮动作、支付票据（Web `ChatCard`）
+            if parts[0] == "cards" { return ["credit", "plans"].contains(parts[1]) && method == "GET" }
+            if parts[0] == "actions" { return id(parts[1]) && method == "POST" }
+            if parts[0] == "tickets" { return id(parts[1]) && method == "GET" }
+            return false
         case 3:
-            if parts[0] == "sessions", id(parts[1]) { return parts[2] == "active-run" && method == "GET" || parts[2] == "messages" && method == "POST" }
+            if parts[0] == "sessions", id(parts[1]) {
+                return parts[2] == "active-run" && method == "GET" || parts[2] == "messages" && method == "POST"
+                    || parts[2] == "attachments" && ["GET", "POST"].contains(method)
+                    || parts[2] == "compact" && method == "POST"
+                    || parts[2] == "memory" && method == "GET"
+            }
             if parts[0] == "runs", id(parts[1]) { return parts[2] == "events" && method == "GET" || ["cancel", "steer"].contains(parts[2]) && method == "POST" }
             if parts[0] == "proposals", id(parts[1]) { return ["confirm", "reject"].contains(parts[2]) && method == "POST" }
             return false
         case 4:
             if parts[0] == "sessions", id(parts[1]), parts[2] == "submissions" { return id(parts[3]) && method == "GET" }
+            if parts[0] == "sessions", id(parts[1]), parts[2] == "attachments" { return id(parts[3]) && method == "DELETE" }
+            if parts[0] == "sessions", id(parts[1]), parts[2] == "memory" { return parts[3] == "recorded" && method == "GET" }
             if parts[0] == "runs", id(parts[1]), parts[2] == "steer" { return id(parts[3]) && method == "GET" }
+            return false
+        case 5:
+            if parts[0] == "sessions", id(parts[1]), parts[2] == "attachments", id(parts[3]) {
+                return parts[4] == "retry" && method == "POST" || parts[4] == "file" && method == "GET"
+            }
             return false
         default: return false
         }
@@ -25,7 +43,7 @@ public enum AgentRequest {
 
     /// 流式接口：发送消息与重新接入进行中的运行。
     public static func streams(path: String, method: String) -> Bool {
-        allowed(path: path, method: method) && (method == "POST" && path.hasSuffix("/messages") || method == "GET" && path.hasSuffix("/events"))
+        allowed(path: path, method: method) && (method == "POST" && (path.hasSuffix("/messages") || path.hasSuffix("/compact")) || method == "GET" && path.hasSuffix("/events"))
     }
 
     public static func errorMessage(_ error: Error) -> String {

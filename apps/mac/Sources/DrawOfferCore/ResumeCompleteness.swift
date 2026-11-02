@@ -9,12 +9,36 @@ public struct ResumeCompleteness: Equatable, Sendable {
         public let label: String
         public let earned: Int
         public let max: Int
+        /// 未满分时的问题与建议（Web `issue` / `recommendation`）。
+        public var issue: String? = nil
+        public var recommendation: String? = nil
         public var passed: Bool { earned == max }
+        /// Web `category`：basics / experience / education / skills / structure（由检查 id 决定）。
+        public var category: String {
+            if ["name", "phone", "email", "positioning"].contains(id) { return "basics" }
+            if id.hasPrefix("experience") { return "experience" }
+            if id.hasPrefix("education") { return "education" }
+            if id.hasPrefix("skills") { return "skills" }
+            return "structure"
+        }
+        /// Web `status`：passed / partial / failed。
+        public var status: String { earned == max ? "passed" : earned > 0 ? "partial" : "failed" }
     }
+    public struct Cap: Equatable, Sendable { public let id: String; public let maxScore: Int; public let reason: String }
     public let score: Int
     public let checks: [Check]
+    public var caps: [Cap] = []
+    /// Web `scoreLevel`。
+    public var level: String { score >= 90 ? "完整" : score >= 70 ? "较完整" : score >= 40 ? "基本完整" : "待补充" }
     /// 第一项未满分的检查，首页“待完善”使用。
     public var missing: String? { checks.first { !$0.passed }?.label }
+    /// Web `pendingChecks`：未满分的检查数，工具卡片「检查」角标。
+    public var pendingCount: Int { checks.filter { !$0.passed }.count }
+    /// Web `flaggedSectionKinds`：未通过的检查影响到的模块类型，大纲行尾显示「待完善」。
+    public var flaggedKinds: Set<String> {
+        let map: [String: [String]] = ["basics": ["identity"], "experience": ["work", "project"], "education": ["education"], "skills": ["skills"], "structure": []]
+        return Set(checks.filter { !$0.passed }.flatMap { map[$0.category] ?? [] })
+    }
 
     // MARK: Markdown projection
 
@@ -177,23 +201,29 @@ public struct ResumeCompleteness: Equatable, Sendable {
         let entries = skillEntries(skill.text)
         let qualityCount = entries.filter(quality).count
         let tier = { (count: Int) in count >= 3 ? 4 : count == 2 ? 3 : count == 1 ? 2 : 0 }
+        func make(_ id: String, _ label: String, _ earned: Int, _ max: Int, _ issue: String, _ advice: String) -> Check {
+            Check(id: id, label: label, earned: earned, max: max, issue: earned == max ? nil : issue, recommendation: earned == max ? nil : advice)
+        }
         let checks = [
-            Check(id: "name", label: "姓名", earned: !name.isEmpty && !sample ? 8 : 0, max: 8),
-            Check(id: "phone", label: "联系电话", earned: phoneNumbers.contains { $0 != "13800000000" } ? 6 : 0, max: 6),
-            Check(id: "email", label: "联系邮箱", earned: !mail.isEmpty && !matches(regex("@example\\.(?:com|org|net)$"), mail) ? 6 : 0, max: 6),
-            Check(id: "positioning", label: "职业定位", earned: position.count >= 10 ? 10 : position.isEmpty ? 0 : 5, max: 10),
-            Check(id: "experience-section", label: "经历章节", earned: work.count > 0 && !visible(work.text).isEmpty ? 10 : 0, max: 10),
-            Check(id: "experience-basics", label: "经历基本信息", earned: workIdentity && workDate ? 10 : workIdentity || workDate ? 5 : 0, max: 10),
-            Check(id: "experience-details", label: "经历成果描述", earned: details >= 3 ? 15 : details == 2 ? 10 : details == 1 ? 5 : 0, max: 15),
-            Check(id: "education-section", label: "教育章节", earned: school.count > 0 && !visible(school.text).isEmpty ? 8 : 0, max: 8),
-            Check(id: "education-basics", label: "教育基本信息", earned: schoolIdentity && schoolDate ? 7 : schoolIdentity || schoolDate ? 3 : 0, max: 7),
-            Check(id: "skills-section", label: "技能内容", earned: entries.count >= 2 ? 7 : entries.count == 1 ? 4 : 0, max: 7),
-            Check(id: "skills-entries", label: "技能条目质量", earned: tier(entries.count) + tier(qualityCount), max: 8),
-            Check(id: "structure", label: "文档结构", earned: (h1.count == 1 && !name.isEmpty ? 2 : 0) + (h2.count >= 3 ? 3 : 0), max: 5),
+            make("name", "姓名", !name.isEmpty && !sample ? 8 : 0, 8, name.isEmpty ? "缺少唯一的一级标题姓名。" : "姓名仍是系统示例内容。", "把第一行一级标题改为你的真实姓名。"),
+            make("phone", "联系电话", phoneNumbers.contains { $0 != "13800000000" } ? 6 : 0, 6, "未识别到有效的非示例联系电话。", "补充常用联系电话，并检查区号和位数。"),
+            make("email", "联系邮箱", !mail.isEmpty && !matches(regex("@example\\.(?:com|org|net)$"), mail) ? 6 : 0, 6, "未识别到有效的非示例邮箱。", "补充用于求职联系的邮箱地址。"),
+            make("positioning", "职业定位", position.count >= 10 ? 10 : position.isEmpty ? 0 : 5, 10, position.isEmpty ? "姓名和联系方式后缺少职业定位。" : "职业定位过短，目标方向还不够明确。", "用一句话写明目标岗位、经验方向或核心优势。"),
+            make("experience-section", "经历章节", work.count > 0 && !visible(work.text).isEmpty ? 10 : 0, 10, "缺少工作、实习、项目或研究经历。", "至少补充一段与目标岗位相关的经历。"),
+            make("experience-basics", "经历基本信息", workIdentity && workDate ? 10 : workIdentity || workDate ? 5 : 0, 10, "经历中的单位、角色或起止时间不完整。", "为经历补齐单位或项目、角色以及起止时间。"),
+            make("experience-details", "经历成果描述", details >= 3 ? 15 : details == 2 ? 10 : details == 1 ? 5 : 0, 15, "可验证的经历成果条目不足。", "增加 3 条以上职责或成果，优先写行动、结果和数据。"),
+            make("education-section", "教育章节", school.count > 0 && !visible(school.text).isEmpty ? 8 : 0, 8, "缺少教育经历章节。", "补充学校、专业或学习经历。"),
+            make("education-basics", "教育基本信息", schoolIdentity && schoolDate ? 7 : schoolIdentity || schoolDate ? 3 : 0, 7, "教育经历中的学校、专业或时间不完整。", "补齐学校或专业，以及起止时间。"),
+            make("skills-section", "技能内容", entries.count >= 2 ? 7 : entries.count == 1 ? 4 : 0, 7, skill.count > 0 ? "技能章节缺少具体、有效的内容。" : "缺少技能章节及其具体内容。", "补充至少 2 项具体技能，可写明技术、工具、熟悉程度或应用场景。"),
+            make("skills-entries", "技能条目质量", tier(entries.count) + tier(qualityCount), 8, entries.count < 3 ? "具体技能条目不足 3 项。" : "已有 \(entries.count) 项技能，但只有 \(qualityCount) 项足够具体。", "列出至少 3 项岗位相关技能，并写明工具、熟悉程度或实际应用场景。"),
+            make("structure", "文档结构", (h1.count == 1 && !name.isEmpty ? 2 : 0) + (h2.count >= 3 ? 3 : 0), 5, "一级标题不唯一，或二级章节少于 3 个。", "保留一个姓名一级标题，并使用至少 3 个清晰的二级章节。"),
         ]
-        var score = min(100, checks.reduce(0) { $0 + $1.earned })
-        if sample { score = min(score, 20) }
-        if ["示例大学", "星河云科技有限公司", "青舟数据服务有限公司", "TaskFlow Lite"].contains(where: markdown.contains) { score = min(score, 60) }
-        return ResumeCompleteness(score: score, checks: checks)
+        var caps: [Cap] = []
+        if sample { caps.append(Cap(id: "sample-identity", maxScore: 20, reason: "姓名仍是系统示例内容，完整度最高按 20 分计算。")) }
+        if ["示例大学", "星河云科技有限公司", "青舟数据服务有限公司", "TaskFlow Lite"].contains(where: markdown.contains) {
+            caps.append(Cap(id: "sample-content", maxScore: 60, reason: "正文仍包含系统示例内容，完整度最高按 60 分计算。"))
+        }
+        let score = ([100, checks.reduce(0) { $0 + $1.earned }] + caps.map(\.maxScore)).min()!
+        return ResumeCompleteness(score: score, checks: checks, caps: caps)
     }
 }

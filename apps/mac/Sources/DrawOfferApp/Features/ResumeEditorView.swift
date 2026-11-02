@@ -4,10 +4,8 @@ import DrawOfferRender
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 原生结构化简历编辑（Web `ResumeWorkbench` 的对应页）：左侧编辑基本信息、头像、联系方式、模块、条目、
-/// 段落/列表/分栏行/图片，文字支持加粗、斜体、下划线、删除线、代码、字号、颜色、背景色、链接与图标；
-/// 顶部可切换模板、调整版式（字体、字号、行距、边距、智能一页）、调整板块顺序与按大纲跳转。
-/// 右侧纸面按本地编译的版式计划实时预览未保存内容，保存后以后端返回的 layout_plan 为准。
+/// 简历编辑（Web `ResumeWorkbench` 的对应页）：纸面即编辑器，与 Web 同一套 TipTap 编辑器、分页、斜杠菜单与选区工具栏
+/// （`ResumeEditorPaperView`）；顶栏、右侧工具轨与大纲 / 模板 / 排版 / 检查 / 引导面板由原生实现。
 /// 保存提交 `PUT /api/resumes/{id}` 的 data、style 与 base_lock_version；冲突时提示重新载入，不覆盖他处的修改。
 struct ResumeEditorView: View {
     @Environment(SessionStore.self) private var session
@@ -26,18 +24,35 @@ struct ResumeEditorView: View {
     @State private var saving = false
     @State private var conflict = false
     @State private var confirmLeave = false
-    @State private var paper: ResumeRenderRequest?
-    @State private var paperHeight: CGFloat = 1123
     @State private var paperNote: String?
-    @State private var renderTask: Task<Void, Never>?
     @State private var completeness: ResumeCompleteness?
-    @State private var rich = RichTextController()
-    @State private var showTemplates = false
+    /// 可编辑纸面：`paperSeed` 变化时重新载入（打开、换模板、重新载入）；版式在排版面板改动时按 `styleRevision` 下发。
+    @State private var paperSeed: JSONValue?
+    @State private var paperGeneration = 0
+    @State private var styleRevision = 0
+    /// 纸面最近一次回报的版式：与它相同的变化来自纸面本身，不再下发。
+    @State private var paperStyle: JSONValue?
+    @State private var channel = ResumeEditorChannel()
+    @State private var canUndo = false
+    @State private var canRedo = false
+    @State private var askIntent = ""
     @State private var showType = false
     @State private var showOrder = false
-    @State private var zoom = 0.6
+    @State private var zoom = 1.0
+    @State private var zoomBadge: Double?
+    /// Web 存在 localStorage 的「页面排列」，只影响编辑时浏览方向。
+    @AppStorage("workbench.pageArrangement") private var pageArrangement = "vertical"
     @State private var uploading = false
-    @State private var jump: String?
+    /// 右侧工具轨当前打开的面板（Web 大纲 / 模板 / 排版 / 检查）。
+    @State private var panel: String?
+    /// 自动保存：停顿后串行保存；失败时显示横幅和重试。
+    @State private var autosaveTask: Task<Void, Never>?
+    @State private var saveFailed = false
+    @State private var exporting = false
+    @State private var focusUnit: SectionFocus.Unit?
+    @State private var importWarnings: [String] = []
+    /// 这份简历的写作引导（Web：进入编辑器先读；没有引导时不显示入口，进行中时自动展开）。
+    @State private var guide: JSONValue?
 
     private var dirty: Bool { record != nil && (doc != saved || style != savedStyle || title != (record?.text("title") ?? "")) }
     private var sections: [JSONValue] { doc["sections"]?.items ?? [] }
@@ -47,75 +62,278 @@ struct ResumeEditorView: View {
     var body: some View {
         VStack(spacing: 0) {
             toolbar
-            Divider()
-            if loading && record == nil { ProgressView("正在读取简历…").frame(maxWidth: .infinity, maxHeight: .infinity) }
+            if !importWarnings.isEmpty { importBanner }
+            if loading && record == nil { ProgressView("正在读取简历…").frame(maxWidth: .infinity, maxHeight: .infinity).background(Self.canvas) }
             else if record == nil {
                 VStack(spacing: 10) {
                     Text(error ?? "简历读取失败。").font(V3.sans(13)).foregroundStyle(V3.red)
                     Button("重试") { Task { await load() } }.buttonStyle(V3ButtonStyle(kind: .ghost))
-                }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Self.canvas)
             } else {
-                HSplitView {
-                    VStack(spacing: 0) {
-                        RichTextToolbar(controller: rich).padding(.horizontal, 16).frame(height: 38).frame(maxWidth: .infinity, alignment: .leading)
-                        Divider()
-                        ScrollViewReader { proxy in
-                            ScrollView { form.padding(24) }
-                                .onChange(of: jump) { _, target in
-                                    guard let target else { return }
-                                    withAnimation { proxy.scrollTo(target, anchor: .top) }
-                                    jump = nil
-                                }
-                        }
-                    }.frame(minWidth: 480, idealWidth: 580)
-                    preview.frame(minWidth: 360)
-                }
+                canvasArea
             }
         }
-        .task { await load() }
-        .onChange(of: doc) { _, _ in schedulePreview() }
-        .onChange(of: style) { _, _ in schedulePreview() }
-        .onDisappear { renderTask?.cancel() }
+        .task { await load(); await loadGuide() }
+        .onExitCommand { if panel != nil { panel = nil } }
+        .onChange(of: doc) { _, _ in scheduleAutosave(); completeness = ResumeCompleteness.evaluate(doc) ?? completeness }
+        .onChange(of: style) { _, _ in
+            // 排版面板改的版式下发给纸面；纸面自己回报的（头像尺寸）不再回送
+            if style != paperStyle { styleRevision += 1 }
+            scheduleAutosave()
+        }
+        .onChange(of: title) { _, _ in scheduleAutosave() }
+        .onDisappear { autosaveTask?.cancel() }
         .confirmationDialog("放弃未保存的修改？", isPresented: $confirmLeave) {
             Button("放弃修改", role: .destructive, action: close)
             Button("继续编辑", role: .cancel) {}
         }
-        .sheet(isPresented: $showTemplates) {
-            TemplateSwitchSheet(currentKey: templateKey, apply: applyTemplate, close: { showTemplates = false })
+        .sheet(item: Binding(get: { focusUnit.map { FocusTarget(unit: $0) } }, set: { if $0 == nil { focusUnit = nil } })) { target in
+            SectionFocusSheet(resumeID: resumeID, unit: target.unit, intent: askIntent, adopt: { lineID, text in
+                guard let next = SectionFocus.replacing(doc, lineID: lineID, with: text) else { return false }
+                doc = next
+                channel.replaceData(next)
+                return true
+            }, close: { focusUnit = nil; askIntent = "" })
         }
         .sheet(isPresented: $showOrder) {
             SectionOrderSheet(sections: sections, columns: ResumeLayout.columns(data: doc, style: style),
-                              apply: { doc = doc.setting([.key("sections")], to: .array($0)) }, close: { showOrder = false })
+                              apply: { order in channel.send(.reorder(order.map(\.nodeKey))) }, close: { showOrder = false })
         }
+    }
+
+    // MARK: Canvas
+
+    /// `.workbench-canvas`：#f3f3f0 灰底；右侧工具卡片 56 宽（top 15 / right 16）浮在画布上，
+    /// 面板卡片在它左边 12（right 84、top 15、bottom 16、380 宽）；面板打开时画布右侧让出 464，否则 72。
+    static let canvas = Color(hex: 0xF3F3F0)
+    private var drawerOpen: Bool { panel != nil && panel != "guide" }
+
+    private var canvasArea: some View {
+        preview.frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.trailing, guideOpen ? 560 : drawerOpen ? 464 : 72)
+            .animation(.timingCurve(0.2, 0, 0, 1, duration: 0.22), value: drawerOpen || guideOpen)
+        .background(Self.canvas)
+        .overlay(alignment: .topLeading) {
+            // `.has-guide`：纸面与引导当成一组居中，引导从画布 50% + 120 开始（>1280 宽）；1101–1280 贴右 380 宽
+            if guideOpen, let guide {
+                GeometryReader { geometry in
+                    let wide = geometry.size.width > 1280
+                    ResumeGuidePanel(resumeID: resumeID, guide: Binding(get: { guide }, set: { self.guide = $0 }), data: doc,
+                                     templateID: record?["template_id"]?.stringValue,
+                                     saveFirst: { await saveBeforeWrite() },
+                                     applied: { resume in Task { await apply(resume) } },
+                                     undo: { before in doc = before; channel.replaceData(before) },
+                                     exportPDF: { Task { await exportPDF() } },
+                                     close: { panel = nil })
+                        .frame(width: wide ? 440 : 380)
+                        .padding(.top, 15)
+                        .offset(x: wide ? geometry.size.width / 2 + 120 : geometry.size.width - 88 - 380)
+                }
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            HStack(alignment: .top, spacing: 12) {
+                if drawerOpen && !guideOpen {
+                    drawerCard { panelView }
+                }
+                toolRail
+            }.padding(.top, 15).padding(.trailing, 16).padding(.bottom, 16)
+        }
+        .overlay(alignment: .top) { if saveFailed { saveNotice.padding(.top, 15).padding(.trailing, guideOpen ? 560 : drawerOpen ? 464 : 72) } }
+        .overlay { if let zoomBadge { zoomFeedback(zoomBadge) } }
+    }
+
+    /// `.wb3-drawer`：380 宽、圆角 14、#e4e4e0 描边、白底、0 8 24 rgba(0,0,0,.08)。
+    private func drawerCard<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(spacing: 0) { content() }
+            .frame(width: 380).frame(maxHeight: .infinity, alignment: .top)
+            .background(.white, in: RoundedRectangle(cornerRadius: 14))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(V3.cl))
+            .shadow(color: .black.opacity(0.08), radius: 12, y: 8)
+            .accessibilityElement(children: .contain)
+    }
+
+    /// `.wb3-save-notice`：420×64 白卡，圆角 12，红色 16 圆圈「!」、标题与原因、重试保存。
+    private var saveNotice: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text("!").font(V3.number(10, weight: .bold)).foregroundStyle(V3.red)
+                .frame(width: 16, height: 16).overlay(Circle().stroke(V3.red, lineWidth: 1.4)).padding(.top, 2)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("保存失败").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
+                Text(error ?? "修改仍保留在本页，可以重试保存。").font(V3.sans(11.5)).foregroundStyle(V3.sub).lineLimit(1)
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            Button("重试保存") { Task { await save() } }.buttonStyle(V3ButtonStyle(kind: .ghost, height: 30)).disabled(saving)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 13).frame(width: 420, height: 64, alignment: .topLeading)
+        .background(.white, in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(V3.cl))
+        .shadow(color: .black.opacity(0.1), radius: 12, y: 8)
+    }
+
+    /// `.workbench-zoom-feedback`：居中 104×68 的深色半透明块，等宽数字百分比。
+    private func zoomFeedback(_ value: Double) -> some View {
+        Text("\(Int((value * 100).rounded()))%").font(.system(size: 20, weight: .semibold, design: .monospaced)).foregroundStyle(.white)
+            .padding(.horizontal, 18).frame(minWidth: 104, minHeight: 68)
+            .background(Color(red: 15 / 255, green: 18 / 255, blue: 22 / 255).opacity(0.84), in: RoundedRectangle(cornerRadius: 12))
+            .shadow(color: Color(red: 15 / 255, green: 18 / 255, blue: 22 / 255).opacity(0.22), radius: 21, y: 16)
+            .allowsHitTesting(false).accessibilityLabel("缩放 \(Int((value * 100).rounded()))%")
+    }
+
+    /// Web `previewScale`：0.5–1.6；按钮与快捷键按 0.1 取整，滚轮按页面给的步进。
+    private func setZoom(_ value: Double, step: Bool = true) {
+        zoom = min(1.6, max(0.5, step ? (value * 10).rounded() / 10 : value))
+        zoomBadge = zoom
+        Task { try? await Task.sleep(for: .milliseconds(900)); if zoomBadge == zoom { zoomBadge = nil } }
+    }
+
+    private var importBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle").foregroundStyle(V3.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("请检查导入结果").font(V3.sans(12.5, weight: .semibold))
+                Text(importWarnings.map(Self.importWarningText).joined(separator: "；")).font(V3.sans(12)).foregroundStyle(V3.sub).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button { importWarnings = [] } label: { Image(systemName: "xmark") }.buttonStyle(.plain).accessibilityLabel("关闭导入质量提示")
+        }.padding(12).background(V3.orangeSoft).accessibilityElement(children: .contain)
     }
 
     // MARK: Toolbar & preview
 
+    /// Web 顶栏的保存状态：编辑中 / 保存中 / 已保存 / 保存失败。
+    private var saveStatus: (text: String, color: Color) {
+        if saving { return ("保存中…", V3.fnt) }
+        if saveFailed { return ("保存失败", V3.red) }
+        if dirty { return ("编辑中", V3.fnt) }
+        return ("已保存", V3.green)
+    }
+
+    /// `.wb3-head`：57 高（含 1px 下边线）、左右 16、三栏网格。左：32 圆角 8 的主页钮、13/500「简历编辑」、
+    /// 1×16 分隔（左 20 右 6）、28×28 撤销/重做；中：14.5/500 居中标题（随内容伸缩，最宽 420）与保存状态；
+    /// 右：32 高完整度胶囊（迷你仪表盘 + 分数 + 等级）与 104 宽「导出 PDF」。
     private var toolbar: some View {
-        HStack(spacing: 10) {
-            Button { if dirty { confirmLeave = true } else { close() } } label: { Label("返回我的简历", systemImage: "chevron.left") }.buttonStyle(.plain)
-            TextField("简历名称", text: $title).textFieldStyle(.roundedBorder).frame(maxWidth: 240)
-            if let completeness { Text("完整度 \(completeness.score)%").font(V3.number(12, weight: .medium)).foregroundStyle(completeness.score >= 90 ? V3.green : V3.orange).help(completeness.missing.map { "待完善：\($0)" } ?? "主要信息已完整") }
-            Spacer()
-            if let notice { Text(notice).font(V3.sans(12)).foregroundStyle(V3.green) }
-            if let error, record != nil { Text(error).font(V3.sans(12)).foregroundStyle(V3.red).lineLimit(2) }
-            if conflict { Button("重新载入") { Task { await load() } }.buttonStyle(V3ButtonStyle(kind: .ghost)) }
-            if record != nil {
-                Menu {
-                    Button("个人信息") { jump = "identity" }
-                    ForEach(sections, id: \.nodeKey) { section in
-                        Button(sectionLabel(section)) { jump = section.nodeKey }
-                    }
-                } label: { Label("大纲", systemImage: "list.bullet.indent") }.fixedSize().help("跳转到模块")
-                Button { showOrder = true } label: { Label("顺序", systemImage: "arrow.up.arrow.down") }.help("调整板块顺序").disabled(sections.count < 2)
-                Button { showType = true } label: { Label("版式", systemImage: "textformat") }.help("字体、字号、行距与页边距")
-                    .disabled(ResumeTypeSettings.read(style) == nil)
-                    .popover(isPresented: $showType, arrowEdge: .bottom) { TypeSettingsPanel(settings: typeBinding, disabled: busy) }
-                Button { showTemplates = true } label: { Label("模板", systemImage: "rectangle.on.rectangle") }.help("切换简历模板").disabled(busy || conflict)
+        ZStack {
+            HStack(spacing: 0) {
+                Button { leave() } label: {
+                    Image(systemName: "house").font(.system(size: 13)).foregroundStyle(V3.sub).frame(width: 32, height: 32).contentShape(Rectangle())
+                }.buttonStyle(HeadIconStyle(radius: 8)).help("返回全部简历").accessibilityLabel("返回全部简历")
+                Text("简历编辑").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.sub).padding(.leading, 8)
+                Rectangle().fill(V3.line).frame(width: 1, height: 16).padding(.leading, 20).padding(.trailing, 6)
+                HStack(spacing: 2) {
+                    Button { channel.send(.undo) } label: { Image(systemName: "arrow.uturn.backward").font(.system(size: 12)).frame(width: 28, height: 28).contentShape(Rectangle()) }
+                        .buttonStyle(HeadIconStyle(radius: 7)).disabled(!canUndo || busy).help("撤销（⌘Z）").accessibilityLabel("撤销（⌘Z）")
+                        .keyboardShortcut("z", modifiers: .command)
+                    Button { channel.send(.redo) } label: { Image(systemName: "arrow.uturn.forward").font(.system(size: 12)).frame(width: 28, height: 28).contentShape(Rectangle()) }
+                        .buttonStyle(HeadIconStyle(radius: 7)).disabled(!canRedo || busy).help("重做（⌘Y）").accessibilityLabel("重做（⌘Y）")
+                        .keyboardShortcut("y", modifiers: .command)
+                }
+                Spacer(minLength: 16)
+                if conflict { Button("重新载入") { Task { await load() } }.buttonStyle(V3ButtonStyle(kind: .ghost)).padding(.trailing, 8) }
+                if let completeness {
+                    Button { togglePanel("check") } label: {
+                        HStack(spacing: 0) {
+                            MiniGauge(score: completeness.score).padding(.trailing, 7)
+                            Text("\(completeness.score)").font(V3.number(12.5, weight: .semibold)).foregroundStyle(V3.txt)
+                            Text(completeness.level).font(V3.sans(11.5)).foregroundStyle(V3.sub).padding(.leading, 6)
+                        }
+                        .padding(.leading, 10).padding(.trailing, 14).frame(height: 32)
+                        .background(panel == "check" ? V3.field : .white, in: Capsule())
+                        .overlay(Capsule().stroke(panel == "check" ? Color(hex: 0xDCDCD8) : V3.cl)).contentShape(Capsule())
+                    }.buttonStyle(.plain).accessibilityLabel("简历完整度 \(completeness.score) 分，\(completeness.level)，打开简历检查")
+                        .accessibilityAddTraits(panel == "check" ? .isSelected : [])
+                }
+                Button(exporting ? "导出中…" : "导出 PDF") { Task { await exportPDF() } }
+                    .buttonStyle(V3ButtonStyle(kind: .dark, height: 32, width: 104)).disabled(exporting || record == nil).padding(.leading, 8)
             }
-            Button(saving ? "保存中…" : dirty ? "保存" : "已保存") { Task { await save() } }
-                .buttonStyle(V3ButtonStyle(kind: .dark)).disabled(!dirty || busy || conflict).keyboardShortcut("s", modifiers: .command)
-        }.buttonStyle(.borderless).padding(.horizontal, 20).frame(height: 54)
+            HStack(spacing: 14) {
+                TitleField(title: $title)
+                saveStatusView
+            }.frame(maxWidth: 560)
+        }
+        .padding(.horizontal, 16).frame(height: 56)
+        .background(.white).overlay(alignment: .bottom) { Rectangle().fill(V3.line).frame(height: 1) }.frame(height: 57, alignment: .top)
+    }
+
+    /// `WorkbenchSaveStatus`：已保存 绿色勾 / 编辑中 橙点 / 保存中… 转圈 / 保存失败 · 原因 红点；11.5px #6c6c65。
+    private var saveStatusView: some View {
+        HStack(spacing: 5) {
+            if saving { ProgressView().controlSize(.mini).frame(width: 13, height: 13) }
+            else if saveFailed { Circle().fill(V3.red).frame(width: 7, height: 7).padding(.horizontal, 3) }
+            else if dirty { Circle().fill(V3.orange).frame(width: 7, height: 7).padding(.horizontal, 3) }
+            else { Image(systemName: "checkmark.circle").font(.system(size: 11)).foregroundStyle(V3.green) }
+            Text(saving ? "保存中…" : saveFailed ? "保存失败 · \(conflict ? "简历已在其他地方修改" : "请重试")" : dirty ? "编辑中" : "已保存")
+        }
+        .font(V3.sans(11.5)).foregroundStyle(saveFailed ? V3.red : V3.fnt).fixedSize()
+        .accessibilityElement(children: .combine)
+    }
+
+    /// `.wb3-rail`：56 宽白卡、圆角 14、内边距 5/3、间距 2、0 6 20 rgba(0,0,0,.06)；每项 48×52、圆角 10、上 9，
+    /// 18 号图标与 10.5px 文字间距 4，选中 #f4f4f2 底与 500 字重；「检查」右上 16 高橙色待完善数角标。
+    private var toolRail: some View {
+        VStack(spacing: 2) {
+            railButton("outline", "大纲", "list.bullet.indent")
+            railButton("template", "模板", "rectangle.on.rectangle", label: "简历模板")
+            railButton("type", "排版", "textformat", label: "排版")
+            railButton("check", "检查", "checkmark.circle", label: "简历检查", badge: completeness.map { $0.pendingCount } ?? 0)
+            if guide != nil { railButton("guide", "引导", "bubble.left", label: "引导创建简历") }
+        }
+        .padding(.vertical, 5).padding(.horizontal, 3).frame(width: 56)
+        .background(.white, in: RoundedRectangle(cornerRadius: 14)).overlay(RoundedRectangle(cornerRadius: 14).stroke(V3.cl))
+        .shadow(color: .black.opacity(0.06), radius: 10, y: 6)
+        .accessibilityElement(children: .contain).accessibilityLabel("编辑工具")
+    }
+
+    private var guideOpen: Bool { panel == "guide" && guide != nil }
+
+    private func railButton(_ key: String, _ label: String, _ symbol: String, label accessibility: String? = nil, badge: Int = 0) -> some View {
+        let active = panel == key
+        return Button { togglePanel(key) } label: {
+            VStack(spacing: 4) {
+                Image(systemName: symbol).font(.system(size: 15)).frame(width: 18, height: 18)
+                Text(label).font(V3.sans(10.5, weight: active ? .medium : .regular)).frame(height: 13)
+            }
+            .padding(.top, 9).frame(width: 48, height: 52, alignment: .top)
+            .contentShape(Rectangle())
+            .overlay(alignment: .topLeading) {
+                if badge > 0 {
+                    Text("\(badge)").font(V3.number(9.5, weight: .bold)).foregroundStyle(.white).padding(.horizontal, 4)
+                        .frame(minWidth: 16, minHeight: 16).background(V3.orange, in: Capsule()).offset(x: 30, y: 4).accessibilityHidden(true)
+                }
+            }
+        }
+        .buttonStyle(RailItemStyle(active: active))
+        .accessibilityLabel(accessibility ?? label).accessibilityAddTraits(active ? .isSelected : [])
+        .disabled(key == "template" && (busy || conflict))
+    }
+
+    @ViewBuilder private var panelView: some View {
+        switch panel {
+        case "outline":
+            OutlinePanel(sections: sections, identity: doc["identity"], label: sectionLabel, columns: ResumeLayout.columns(data: doc, style: style),
+                         flagged: completeness?.flaggedKinds ?? [], disabled: busy,
+                         jump: { channel.send(.jump($0 == "identity" ? nil : $0)) },
+                         move: { from, to in channel.send(.reorder(doc.moving([.key("sections")], from: from, to: to)["sections"]?.items.map(\.nodeKey) ?? [])) },
+                         reorder: { order in channel.send(.reorder(order.map(\.nodeKey))) },
+                         rename: { index, value in if let id = (sections.indices.contains(index) ? sections[index].nodeKey : nil) { channel.send(.rename(id, value)) } },
+                         remove: { index in if let id = (sections.indices.contains(index) ? sections[index].nodeKey : nil) { channel.send(.remove(id)) } },
+                         add: { kind in channel.send(.add(kind: kind.key, title: kind.label)) },
+                         close: { panel = nil })
+        case "type":
+            VStack(alignment: .leading, spacing: 0) {
+                WorkbenchPanelHeader(title: "设置", closeLabel: "关闭排版面板") { panel = nil }
+                if ResumeTypeSettings.read(style) != nil { ScrollView { TypeSettingsPanel(settings: typeBinding, arrangement: $pageArrangement, disabled: busy) } }
+                else { Text("当前模板不支持调整排版").font(V3.sans(12.5)).foregroundStyle(V3.fnt).padding(24) }
+            }
+        case "template":
+            TemplateSwitchSheet(currentKey: templateKey, disabled: busy || conflict, apply: applyTemplate, close: { panel = nil })
+        case "check":
+            if let completeness { CompletenessPanel(result: completeness, close: { panel = nil }) }
+        default: EmptyView()
+        }
+    }
+
+    private func panelHeader(_ title: String, subtitle: String) -> some View {
+        WorkbenchPanelHeader(title: title, subtitle: subtitle, closeLabel: "关闭\(title)") { panel = nil }
     }
 
     private var typeBinding: Binding<ResumeTypeSettings> {
@@ -123,322 +341,72 @@ struct ResumeEditorView: View {
                 set: { style = $0.apply(to: style) })
     }
 
-    private var preview: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Text(paperNote ?? (dirty ? "实时预览 · 尚未保存" : "最终排版以 PDF 为准")).font(V3.sans(11.5)).foregroundStyle(paperNote == nil ? V3.fnt : V3.orange).lineLimit(1)
-                Spacer()
-                Button { zoom = max(0.4, zoom - 0.1) } label: { Image(systemName: "minus.magnifyingglass") }.disabled(zoom <= 0.4).help("缩小")
-                Button("\(Int((zoom * 100).rounded()))%") { zoom = 0.6 }.font(V3.number(11.5, weight: .regular)).help("恢复默认缩放")
-                Button { zoom = min(1.2, zoom + 0.1) } label: { Image(systemName: "plus.magnifyingglass") }.disabled(zoom >= 1.2).help("放大")
-            }.buttonStyle(.borderless).padding(.horizontal, 12).frame(height: 32)
-            ScrollView([.vertical, .horizontal]) {
-                if let paper {
-                    ResumePaperView(request: paper, onRendered: { paperHeight = max(1123, $0) }, onError: { paperNote = $0 })
-                        .frame(width: 794, height: paperHeight).scaleEffect(zoom, anchor: .topLeading)
-                        .frame(width: 794 * zoom + 24, height: paperHeight * zoom + 24, alignment: .topLeading).padding(12)
-                } else { ProgressView().padding(40) }
-            }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Tokens.Color.stage)
+    /// 可编辑纸面：`.workbench-paper-scroll` 与纸面缩放都在页面里按 Web 规则实现（⌘ + 滚轮缩放回报给原生）；
+    /// ⌘+ / ⌘− / ⌘0 缩放并显示百分比。
+    @ViewBuilder private var preview: some View {
+        if let paperSeed, let record {
+            ResumeEditorPaperView(resumeID: resumeID, data: paperSeed["data"] ?? .null, style: paperSeed["style"] ?? .null, layoutPlan: record["layout_plan"],
+                                  liveStyle: style, styleRevision: styleRevision, zoom: zoom, horizontal: pageArrangement == "horizontal",
+                                  channel: channel, api: session.api, onEvent: handlePaper)
+                .id(paperGeneration)
+                .overlay(alignment: .bottom) {
+                    if let paperNote { Text(paperNote).font(V3.sans(11.5)).foregroundStyle(V3.orange).padding(8).background(.white, in: Capsule()).padding(.bottom, 16) }
+                }
+                .background {
+                    Group {
+                        Button("") { setZoom(zoom + 0.1) }.keyboardShortcut("=", modifiers: .command)
+                        Button("") { setZoom(zoom - 0.1) }.keyboardShortcut("-", modifiers: .command)
+                        Button("") { setZoom(1) }.keyboardShortcut("0", modifiers: .command)
+                    }.opacity(0).accessibilityHidden(true)
+                }
+        } else { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
+    }
+
+    private func handlePaper(_ event: ResumeEditorEvent) {
+        switch event {
+        case .changed(let data, let next):
+            paperNote = nil
+            doc = data
+            paperStyle = next
+            if next != style { style = next }
+        case .history(let undo, let redo): canUndo = undo; canRedo = redo
+        case .zoom(let value): setZoom(value, step: false)
+        case .ask(let unitID, _, _, let instruction):
+            guard let unit = focusUnit(unitID) else { paperNote = "这一行暂时不能聚焦修改"; return }
+            askIntent = instruction
+            focusUnit = unit
+        case .error(let message): paperNote = message
         }
+    }
+
+    /// 选区所在的聚焦单元：条目或没有条目的模块。
+    private func focusUnit(_ id: String) -> SectionFocus.Unit? {
+        for section in sections {
+            if section.nodeKey == id { return SectionFocus.unit(section: section) }
+            if let entry = section["entries"]?.items.first(where: { $0.nodeKey == id }) { return SectionFocus.unit(entry: entry) }
+        }
+        return nil
+    }
+
+    /// 与 Web `importWarningMessage` 相同的导入质量提示文案。
+    static func importWarningText(_ code: String) -> String {
+        [
+            "pdf_ocr_applied": "PDF 已使用 OCR，请核对姓名、日期和数字",
+            "pdf_low_text_quality": "PDF 文本质量偏低，请重点核对遗漏和错字",
+            "docx_embedded_images_omitted": "DOCX 中的图片未导入",
+            "docx_textbox_order_may_change": "DOCX 文本框的阅读顺序可能发生变化",
+            "document_heading_structure_missing": "原文缺少明确章节标题，已按全文识别",
+            "source_quote_not_found": "部分结构化内容无法定位到原文短句",
+            "unparsed_work_start_date": "部分工作开始日期未能识别",
+            "unparsed_work_end_date": "部分工作结束日期未能识别",
+            "unmapped_fragments_preserved": "部分原文已按自定义章节保留，请人工整理",
+            "structure_enhancement_unavailable": "自动分段未完成，请检查板块和经历条目",
+        ][code] ?? "部分内容需要人工核对"
     }
 
     private func sectionLabel(_ section: JSONValue) -> String {
         let title = ResumeDocument.value(section["title"])
         return title.isEmpty ? (ResumeDocument.sectionKinds.first { $0.key == section.text("semantic_kind") }?.label ?? "模块") : title
-    }
-
-    // MARK: Form
-
-    private var form: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            group("基本信息") {
-                textValueField("姓名", path: [.key("identity"), .key("name")])
-                textValueField("一句话介绍", path: [.key("identity"), .key("headline")])
-                avatarRow
-                Text("联系方式").font(V3.sans(12, weight: .medium)).foregroundStyle(V3.sub).padding(.top, 4)
-                ForEach(Array((doc["identity"]?["contacts"]?.items ?? []).enumerated()), id: \.offset) { index, contact in contactRow(index, contact) }
-                Button { doc = doc.appending([.key("identity"), .key("contacts")], ResumeDocument.newContact(kind: "phone", value: "")) } label: { Label("添加联系方式", systemImage: "plus") }
-                    .buttonStyle(.link).font(V3.sans(12.5)).disabled((doc["identity"]?["contacts"]?.items.count ?? 0) >= 32)
-            }.id("identity")
-            ForEach(Array(sections.enumerated()), id: \.element.nodeKey) { index, section in sectionEditor(index, section).id(section.nodeKey) }
-            Menu {
-                ForEach(ResumeDocument.sectionKinds, id: \.key) { kind in
-                    Button(kind.label) { doc = doc.appending([.key("sections")], ResumeDocument.newSection(kind: kind.key, title: kind.label)) }
-                }
-            } label: { Label("添加模块", systemImage: "plus.rectangle.on.rectangle") }.fixedSize().disabled(sections.count >= 100)
-        }
-    }
-
-    private func group<Content: View>(_ title: String, trailing: AnyView? = nil, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack { Text(title).font(V3.sans(15, weight: .medium)); Spacer(); trailing }
-            content()
-        }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
-            .background(.white, in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(V3.cl))
-    }
-
-    private func fieldFrame<Content: View>(_ content: Content) -> some View {
-        content.background(.white, in: RoundedRectangle(cornerRadius: 6)).overlay(RoundedRectangle(cornerRadius: 6).stroke(V3.cl))
-    }
-
-    /// textValue 字段：单行富文本；清空时置 null（identity/标题）或删除键（条目字段）。
-    private func textValueField(_ label: String, path: [JSONPathPart], removeWhenEmpty: Bool = false) -> some View {
-        let binding = Binding<[JSONValue]>(get: { ResumeDocument.textRuns(doc[path: path]) }, set: { runs in
-            doc = doc.setting(path, to: ResumeDocument.setTextRuns(doc[path: path], runs) ?? (removeWhenEmpty ? nil : .null))
-        })
-        return HStack(alignment: .firstTextBaseline) {
-            Text(label).font(V3.sans(12)).foregroundStyle(V3.sub).frame(width: 76, alignment: .leading)
-            fieldFrame(RichTextField(runs: binding, placeholder: label, singleLine: true, controller: rich))
-        }
-    }
-
-    private var avatarRow: some View {
-        let avatar = doc["identity"]?["avatar"] ?? .null
-        let path: [JSONPathPart] = [.key("identity"), .key("avatar")]
-        return HStack(spacing: 10) {
-            Text("头像").font(V3.sans(12)).foregroundStyle(V3.sub).frame(width: 76, alignment: .leading)
-            if avatar == .null {
-                Text("未设置，模板可能显示默认头像").font(V3.sans(12.5)).foregroundStyle(V3.fnt)
-                Spacer()
-                Button(uploading ? "上传中…" : "上传头像") { Task { if let url = await uploadImage() { doc = doc.setting(path, to: ResumeDocument.avatar(nil, src: url)) } } }.disabled(busy)
-            } else {
-                Label("已设置", systemImage: "person.crop.circle.fill").font(V3.sans(12.5)).foregroundStyle(V3.green)
-                Text("尺寸").font(V3.sans(12)).foregroundStyle(V3.sub)
-                Slider(value: Binding(get: { avatar["width"]?.numberValue ?? 96 }, set: { doc = doc.setting(path + [.key("width")], to: .number($0.rounded())) }),
-                       in: ResumeDocument.avatarSizeRange.min...ResumeDocument.avatarSizeRange.max).frame(maxWidth: 140)
-                Text("\(Int(avatar["width"]?.numberValue ?? 96))px").font(V3.number(11.5, weight: .regular)).foregroundStyle(V3.fnt)
-                Spacer()
-                Button("更换") { Task { if let url = await uploadImage() { doc = doc.setting(path, to: ResumeDocument.avatar(avatar, src: url)) } } }.disabled(busy)
-                Button("移除", role: .destructive) { doc = doc.setting(path, to: .null) }
-            }
-        }.buttonStyle(.link).font(V3.sans(12.5))
-    }
-
-    private func contactRow(_ index: Int, _ contact: JSONValue) -> some View {
-        let base: [JSONPathPart] = [.key("identity"), .key("contacts"), .index(index)]
-        let binding = Binding<[JSONValue]>(get: { ResumeDocument.textRuns(doc[path: base]) }, set: { runs in
-            if let next = ResumeDocument.setTextRuns(doc[path: base], runs, limit: 2048) { doc = doc.setting(base, to: next) }
-            else if case .object(var fields) = doc[path: base] ?? .null {
-                fields["value"] = .string(""); fields.removeValue(forKey: "runs")
-                doc = doc.setting(base, to: .object(fields))
-            }
-        })
-        return HStack(spacing: 8) {
-            Picker("类型", selection: Binding(get: { contact.text("contact_kind") }, set: { doc = doc.setting(base + [.key("contact_kind")], to: .string($0)) })) {
-                ForEach(ResumeDocument.contactKinds, id: \.key) { Text($0.label).tag($0.key) }
-            }.labelsHidden().frame(width: 100)
-            fieldFrame(RichTextField(runs: binding, placeholder: "内容", singleLine: true, controller: rich))
-            Button { doc = doc.setting(base, to: nil) } label: { Image(systemName: "minus.circle") }.buttonStyle(.plain).foregroundStyle(V3.fnt).accessibilityLabel("删除联系方式")
-        }
-    }
-
-    private func sectionEditor(_ index: Int, _ section: JSONValue) -> some View {
-        let base: [JSONPathPart] = [.key("sections"), .index(index)]
-        let controls = AnyView(HStack(spacing: 10) {
-            Picker("类型", selection: Binding(get: { section.text("semantic_kind") }, set: { doc = doc.setting(base + [.key("semantic_kind")], to: .string($0)) })) {
-                ForEach(ResumeDocument.sectionKinds, id: \.key) { Text($0.label).tag($0.key) }
-            }.labelsHidden().frame(width: 120).help("模块类型决定它在模板中的位置")
-            Button { doc = doc.moving([.key("sections")], from: index, to: index - 1) } label: { Image(systemName: "arrow.up") }.disabled(index == 0)
-            Button { doc = doc.moving([.key("sections")], from: index, to: index + 1) } label: { Image(systemName: "arrow.down") }.disabled(index == sections.count - 1)
-            Button { doc = doc.setting(base, to: nil) } label: { Image(systemName: "trash") }.foregroundStyle(V3.red)
-        }.buttonStyle(.plain))
-        return group(sectionLabel(section), trailing: controls) {
-            textValueField("模块标题", path: base + [.key("title")])
-            ForEach(Array((section["entries"]?.items ?? []).enumerated()), id: \.element.nodeKey) { entryIndex, entry in
-                entryEditor(base + [.key("entries")], entryIndex, entry, count: section["entries"]?.items.count ?? 0)
-            }
-            blocksEditor(base + [.key("blocks")])
-            HStack(spacing: 16) {
-                Button { doc = doc.appending(base + [.key("entries")], ResumeDocument.newEntry()) } label: { Label("添加条目", systemImage: "plus") }
-                    .disabled((section["entries"]?.items.count ?? 0) >= 200)
-                addBlockMenu(base + [.key("blocks")])
-            }.buttonStyle(.link).font(V3.sans(12.5))
-        }
-    }
-
-    private func entryEditor(_ listPath: [JSONPathPart], _ index: Int, _ entry: JSONValue, count: Int) -> some View {
-        let base = listPath + [.index(index)]
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("条目 \(index + 1)").font(V3.sans(12.5, weight: .medium))
-                Spacer()
-                Button { doc = doc.moving(listPath, from: index, to: index - 1) } label: { Image(systemName: "arrow.up") }.disabled(index == 0)
-                Button { doc = doc.moving(listPath, from: index, to: index + 1) } label: { Image(systemName: "arrow.down") }.disabled(index == count - 1)
-                Button { doc = doc.setting(base, to: nil) } label: { Image(systemName: "trash") }.foregroundStyle(V3.red)
-            }.buttonStyle(.plain)
-            ForEach(ResumeDocument.entryFields, id: \.key) { field in
-                textValueField(field.label, path: base + [.key("fields"), .key(field.key)], removeWhenEmpty: true)
-            }
-            blocksEditor(base + [.key("blocks")])
-            addBlockMenu(base + [.key("blocks")]).buttonStyle(.link).font(V3.sans(12.5))
-        }.padding(12).background(V3.stage.opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    private func addBlockMenu(_ path: [JSONPathPart]) -> some View {
-        Menu {
-            Button("段落") { doc = doc.appending(path, ResumeDocument.newParagraph()) }
-            Button("项目符号列表") { doc = doc.appending(path, ResumeDocument.newList(ordered: false)) }
-            Button("编号列表") { doc = doc.appending(path, ResumeDocument.newList(ordered: true)) }
-            Divider()
-            Button("两栏") { doc = doc.appending(path, ResumeDocument.newRow(kind: "pair")) }
-            Button("三栏") { doc = doc.appending(path, ResumeDocument.newRow(kind: "trio")) }
-            Button("四栏信息行") { doc = doc.appending(path, ResumeDocument.newRow(kind: "meta")) }
-            Divider()
-            Button("图片…") { Task { if let url = await uploadImage() { doc = doc.appending(path, ResumeDocument.newImage(src: url, alt: nil)) } } }.disabled(busy)
-        } label: { Label("添加内容", systemImage: "text.badge.plus") }.fixedSize().disabled((doc[path: path]?.items.count ?? 0) >= 500)
-    }
-
-    @ViewBuilder
-    private func blocksEditor(_ path: [JSONPathPart]) -> some View {
-        let blocks = doc[path: path]?.items ?? []
-        ForEach(Array(blocks.enumerated()), id: \.element.nodeKey) { index, block in
-            let base = path + [.index(index)]
-            HStack(alignment: .top, spacing: 6) {
-                VStack(alignment: .leading, spacing: 6) { blockEditor(base, block) }
-                VStack(spacing: 6) {
-                    Button { doc = doc.moving(path, from: index, to: index - 1) } label: { Image(systemName: "arrow.up") }.disabled(index == 0)
-                    Button { doc = doc.moving(path, from: index, to: index + 1) } label: { Image(systemName: "arrow.down") }.disabled(index == blocks.count - 1)
-                    Button { doc = doc.setting(base, to: nil) } label: { Image(systemName: "trash") }.foregroundStyle(V3.red)
-                }.buttonStyle(.plain).font(.system(size: 11))
-            }
-        }
-    }
-
-    private func runsBinding(_ path: [JSONPathPart]) -> Binding<[JSONValue]> {
-        Binding(get: { doc[path: path]?["runs"]?.items ?? [] }, set: { doc = doc.setting(path, to: ResumeDocument.setBlockRuns(doc[path: path] ?? .null, $0)) })
-    }
-
-    @ViewBuilder
-    private func blockEditor(_ base: [JSONPathPart], _ block: JSONValue) -> some View {
-        switch block.text("block_type") {
-        case "paragraph":
-            HStack(alignment: .top, spacing: 6) {
-                fieldFrame(RichTextField(runs: runsBinding(base), placeholder: "输入内容，输入 / 插入其他内容", allowsInline: true, minHeight: 52, controller: rich))
-                alignMenu(base, block)
-            }
-            if ResumeDocument.runsText(block["runs"]) == "/" { slashMenu(base) }
-        case "bullet_list", "ordered_list":
-            let ordered = block.text("block_type") == "ordered_list"
-            let items = block["items"]?.items ?? []
-            ForEach(Array(items.enumerated()), id: \.element.nodeKey) { itemIndex, item in
-                let itemPath = base + [.key("items"), .index(itemIndex)]
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(ordered ? "\(itemIndex + Int(block["start"]?.numberValue ?? 1))." : "•").font(V3.sans(13)).foregroundStyle(V3.fnt).frame(width: 22)
-                    fieldFrame(RichTextField(runs: runsBinding(itemPath), placeholder: "列表项", singleLine: true, allowsInline: true,
-                                             onReturn: { insertListItem(base, after: itemIndex) }, controller: rich))
-                    Button { doc = items.count > 1 ? doc.setting(itemPath, to: nil) : doc.setting(base, to: nil) } label: { Image(systemName: "minus.circle") }
-                        .buttonStyle(.plain).foregroundStyle(V3.fnt)
-                }
-            }
-            HStack(spacing: 14) {
-                Button { doc = doc.appending(base + [.key("items")], ResumeDocument.newListItem()) } label: { Label("添加一项", systemImage: "plus") }.disabled(items.count >= 500)
-                Button(ordered ? "改为项目符号" : "改为编号") { toggleListKind(base, block) }
-            }.buttonStyle(.link).font(V3.sans(12))
-        case "row":
-            rowEditor(base, block)
-        case "media":
-            mediaEditor(base, block)
-        default:
-            Text("暂不支持的内容，保存时原样保留").font(V3.sans(12)).foregroundStyle(V3.fnt)
-        }
-    }
-
-    private func alignMenu(_ base: [JSONPathPart], _ block: JSONValue) -> some View {
-        let current = block["align"]?.stringValue
-        let symbol = ["center": "text.aligncenter", "right": "text.alignright"][current ?? ""] ?? "text.alignleft"
-        return Menu {
-            Button("左对齐") { doc = doc.setting(base, to: ResumeDocument.setAlign(doc[path: base] ?? .null, nil)) }
-            Button("居中对齐") { doc = doc.setting(base, to: ResumeDocument.setAlign(doc[path: base] ?? .null, "center")) }
-            Button("右对齐") { doc = doc.setting(base, to: ResumeDocument.setAlign(doc[path: base] ?? .null, "right")) }
-        } label: { Image(systemName: symbol) }.menuIndicator(.hidden).fixedSize().help("对齐方式")
-    }
-
-    /// Web 斜杠命令：段落里只输入“/”时，在下方列出可转换的内容类型。
-    private func slashMenu(_ base: [JSONPathPart]) -> some View {
-        HStack(spacing: 6) {
-            Text("插入").font(V3.sans(11.5)).foregroundStyle(V3.fnt)
-            ForEach([("项目符号列表", "list"), ("编号列表", "ordered"), ("两栏", "pair"), ("三栏", "trio"), ("四栏信息行", "meta"), ("图片", "image")], id: \.1) { label, kind in
-                Button(label) { Task { await convertSlash(base, kind) } }.buttonStyle(V3ButtonStyle(kind: .ghost)).controlSize(.small)
-            }
-            Button("取消") { doc = doc.setting(base, to: ResumeDocument.setBlockRuns(doc[path: base] ?? .null, [])) }.buttonStyle(.link).font(V3.sans(11.5))
-        }
-    }
-
-    private func convertSlash(_ base: [JSONPathPart], _ kind: String) async {
-        let next: JSONValue?
-        switch kind {
-        case "list": next = ResumeDocument.newList(ordered: false)
-        case "ordered": next = ResumeDocument.newList(ordered: true)
-        case "image": next = await uploadImage().map { ResumeDocument.newImage(src: $0, alt: nil) }
-        default: next = ResumeDocument.newRow(kind: kind)
-        }
-        if let next { doc = doc.setting(base, to: next) }
-    }
-
-    private func insertListItem(_ base: [JSONPathPart], after index: Int) {
-        var items = doc[path: base + [.key("items")]]?.items ?? []
-        guard items.count < 500 else { return }
-        items.insert(ResumeDocument.newListItem(), at: min(items.count, index + 1))
-        doc = doc.setting(base + [.key("items")], to: .array(items))
-    }
-
-    private func toggleListKind(_ base: [JSONPathPart], _ block: JSONValue) {
-        let ordered = block.text("block_type") == "ordered_list"
-        doc = doc.setting(base + [.key("block_type")], to: .string(ordered ? "bullet_list" : "ordered_list"))
-            .setting(base + [.key("start")], to: ordered ? .null : .number(1))
-    }
-
-    private func rowEditor(_ base: [JSONPathPart], _ block: JSONValue) -> some View {
-        let cells = block["cells"]?.items ?? []
-        let kind = block.text("row_kind")
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(["pair": "两栏", "trio": "三栏", "meta": "四栏信息行", "equal": "等分栏"][kind] ?? "分栏").font(V3.sans(11.5)).foregroundStyle(V3.fnt)
-                if kind == "pair" {
-                    Spacer()
-                    Text("左栏宽度").font(V3.sans(11.5)).foregroundStyle(V3.fnt)
-                    Slider(value: Binding(get: { block["left_width_percent"]?.numberValue ?? 50 }, set: { doc = doc.setting(base + [.key("left_width_percent")], to: .number($0.rounded())) }),
-                           in: 30...80).frame(maxWidth: 140)
-                    Text("\(Int(block["left_width_percent"]?.numberValue ?? 50))%").font(V3.number(11.5, weight: .regular)).foregroundStyle(V3.fnt)
-                }
-            }
-            HStack(alignment: .top, spacing: 6) {
-                ForEach(Array(cells.enumerated()), id: \.element.nodeKey) { cellIndex, _ in
-                    fieldFrame(RichTextField(runs: runsBinding(base + [.key("cells"), .index(cellIndex), .key("blocks"), .index(0)]),
-                                             placeholder: "第 \(cellIndex + 1) 栏", allowsInline: true, controller: rich))
-                }
-            }
-        }.padding(8).background(V3.stage.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    private func mediaEditor(_ base: [JSONPathPart], _ block: JSONValue) -> some View {
-        let percent = block["width_unit"]?.stringValue == "%"
-        let width = block["width"]?.numberValue ?? 100
-        let shown = percent ? width : min(100, width / 7.94)
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Label("图片", systemImage: "photo").font(V3.sans(12.5, weight: .medium))
-                Spacer()
-                Button(uploading ? "上传中…" : "更换图片") { Task { if let url = await uploadImage() { doc = doc.setting(base + [.key("src")], to: .string(url)) } } }
-                    .buttonStyle(.link).font(V3.sans(12)).disabled(busy)
-            }
-            HStack {
-                Text("说明").font(V3.sans(12)).foregroundStyle(V3.sub).frame(width: 40, alignment: .leading)
-                TextField("图片说明（可选）", text: Binding(get: { block.text("alt") }, set: {
-                    doc = doc.setting(base + [.key("alt")], to: $0.isEmpty ? .null : .string(String($0.prefix(300))))
-                })).textFieldStyle(.roundedBorder)
-            }
-            HStack {
-                Text("宽度").font(V3.sans(12)).foregroundStyle(V3.sub).frame(width: 40, alignment: .leading)
-                Slider(value: Binding(get: { shown }, set: {
-                    doc = doc.setting(base + [.key("width")], to: .number($0.rounded())).setting(base + [.key("width_unit")], to: .string("%"))
-                }), in: 10...100)
-                Text("\(Int(shown))%").font(V3.number(11.5, weight: .regular)).foregroundStyle(V3.fnt).frame(width: 40)
-                Picker("对齐", selection: Binding(get: { block["align"]?.stringValue ?? "center" }, set: { doc = doc.setting(base + [.key("align")], to: .string($0)) })) {
-                    Text("左").tag("left"); Text("中").tag("center"); Text("右").tag("right"); Text("通栏").tag("full")
-                }.pickerStyle(.segmented).frame(width: 180).labelsHidden()
-            }
-        }.padding(10).background(V3.stage.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
     }
 
     // MARK: Actions
@@ -451,32 +419,98 @@ struct ResumeEditorView: View {
         style = savedStyle
         title = resume.text("title")
         paperNote = nil
+        importWarnings = (resume["import"]?["warnings"]?.items ?? resume["import_warnings"]?.items ?? []).compactMap(\.stringValue)
         completeness = ResumeCompleteness.evaluate(saved)
-        let request = ResumeRenderRequest(title: resume.text("title"), data: saved, style: savedStyle, layoutPlan: resume["layout_plan"])
-        renderTask?.cancel()
-        paper = (try? await session.api.preparePaper(request))?.request ?? request
+        saveFailed = false; canUndo = false; canRedo = false
+        paperSeed = .object(["data": saved, "style": savedStyle])
+        paperStyle = savedStyle
+        paperGeneration += 1
     }
 
-    /// 未保存内容的实时纸面：停顿 0.4 秒后用本地编译的版式计划重新渲染。
-    private func schedulePreview() {
-        guard record != nil, doc != saved || style != savedStyle else { return }
-        renderTask?.cancel()
-        let data = ResumeDocument.prepareForSave(doc, previous: saved)
-        let style = style, title = title
-        let hash = record?["layout_plan"]?.text("content_sha256") ?? ""
-        renderTask = Task {
-            try? await Task.sleep(for: .milliseconds(400))
-            guard !Task.isCancelled else { return }
-            guard let plan = ResumeLayout.compile(data: data, style: style, contentHash: hash) else {
-                paperNote = "当前模板放不下某个模块类型，请调整模块类型或换一个模板"
-                return
-            }
-            let request = ResumeRenderRequest(title: title, data: data, style: style, layoutPlan: plan)
-            let prepared = (try? await session.api.preparePaper(request))?.request ?? request
-            guard !Task.isCancelled else { return }
-            paperNote = nil
-            paper = prepared
+    /// 保存成功：更新已保存的基线与记录；保存期间用户继续编辑的内容保留，等下一次自动保存。
+    private func applySaved(_ resume: JSONValue, keeping pending: (JSONValue, JSONValue, String)) async {
+        let editedDuringSave = doc != pending.0 || style != pending.1 || title != pending.2
+        let current = (doc, style, title)
+        record = resume
+        saved = resume["data"] ?? .null
+        savedStyle = resume["style"] ?? .null
+        completeness = ResumeCompleteness.evaluate(saved)
+        if editedDuringSave {
+            doc = current.0; style = current.1; title = current.2
+            scheduleAutosave()
+        } else {
+            // 已保存的正文以服务端为准，但不重载纸面（保留光标与撤销历史）
+            doc = saved; title = resume.text("title")
+            if style != savedStyle { paperStyle = savedStyle; style = savedStyle }
         }
+    }
+
+    /// 自动保存（Web 串行保存队列）：停顿 1.5 秒后保存；正在保存时等这次完成再排下一次。
+    private func scheduleAutosave() {
+        guard record != nil, dirty, !conflict else { return }
+        autosaveTask?.cancel()
+        autosaveTask = Task {
+            try? await Task.sleep(for: .milliseconds(1500))
+            guard !Task.isCancelled else { return }
+            while saving { try? await Task.sleep(for: .milliseconds(200)) }
+            guard !Task.isCancelled, dirty else { return }
+            await save()
+        }
+    }
+
+    /// 离开编辑器：有未保存修改时先保存，保存失败再询问是否放弃。
+    private func leave() {
+        guard dirty else { close(); return }
+        Task {
+            autosaveTask?.cancel()
+            await save()
+            if dirty { confirmLeave = true } else { close() }
+        }
+    }
+
+    /// 编辑器顶栏“导出 PDF”：先保存当前修改，再按最新 lock_version 导出。
+    private func exportPDF() async {
+        if dirty { autosaveTask?.cancel(); await save() }
+        guard !dirty, let record, let version = record["lock_version"]?.integer else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.pdf]
+        panel.nameFieldStringValue = ResumesView.fileName(title)
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        exporting = true; error = nil
+        defer { exporting = false }
+        do {
+            let data = try await session.api.downloadResumePDF(id: resumeID, lockVersion: version)
+            try data.write(to: destination, options: .atomic)
+            notice = "已导出 PDF"
+        } catch {
+            if case APIError.unauthorized = error { session.reportAuthenticationFailure(); return }
+            if case APIError.server(_, "RESUME_PDF_SNAPSHOT_STALE") = error { self.error = "简历已在其他设备更新，请重新载入后再导出。"; conflict = true }
+            else if error is CocoaError { self.error = "PDF 已生成，但保存到所选位置失败，请换个位置重试。" }
+            else { self.error = "导出 PDF 失败，请稍后重试。" }
+        }
+    }
+
+    /// 引导写入前：有未保存修改先保存；保存失败不写。
+    private func saveBeforeWrite() async -> Bool {
+        if dirty { autosaveTask?.cancel(); await save() }
+        return !dirty
+    }
+
+    /// Web `toggleGuide`：已结束的引导再次打开时请求重新开启；Esc 关闭当前面板。
+    private func togglePanel(_ key: String) {
+        if panel == key { panel = nil; return }
+        panel = key
+        if key == "guide", guide?.text("status") == "dismissed" {
+            Task {
+                if let reopened = try? await session.api.careerRequest(path: "/api/resumes/\(resumeID)/guide", method: "PUT", query: [:], body: nil)["guide"] { guide = reopened }
+            }
+        }
+    }
+
+    private func loadGuide() async {
+        guard let loaded = try? await session.api.careerRequest(path: "/api/resumes/\(resumeID)/guide", method: "GET", query: [:], body: nil)["guide"] else { return }
+        guide = loaded
+        if loaded.text("status") == "active" { panel = "guide" }
     }
 
     private func load() async {
@@ -505,12 +539,14 @@ struct ResumeEditorView: View {
         do {
             let result = try await session.api.careerRequest(path: "/api/resumes/\(resumeID)", method: "PUT", query: [:], body: .object(body))
             guard let resume = result["resume"] else { throw APIError.invalidResponse }
-            await apply(resume)
-            notice = "已保存"
+            let pending = (doc, style, title)
+            await applySaved(resume, keeping: pending)
+            saveFailed = false; notice = nil
         } catch {
             if case APIError.unauthorized = error { session.reportAuthenticationFailure() }
             if case APIError.server(409, "RESUME_EDIT_CONFLICT") = error { conflict = true }
             self.error = ResumeDocument.saveError(error)
+            saveFailed = true
         }
     }
 
@@ -533,36 +569,131 @@ struct ResumeEditorView: View {
             return nil
         } catch {
             if case APIError.unauthorized = error { session.reportAuthenticationFailure() }
-            if case APIError.server(409, "RESUME_EDIT_CONFLICT") = error { conflict = true; showTemplates = false }
+            if case APIError.server(409, "RESUME_EDIT_CONFLICT") = error { conflict = true }
             let message = ResumeDocument.saveError(error)
             self.error = message
             return message
         }
     }
 
-    /// 选择 PNG/JPEG（≤10 MB）上传到 `POST /api/resumes/{id}/assets`，返回可写入简历的地址。
-    private func uploadImage() async -> String? {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.png, .jpeg]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        guard panel.runModal() == .OK, let url = panel.url else { return nil }
-        guard let data = try? Data(contentsOf: url) else { error = "图片读取失败，请重新选择。"; return nil }
-        guard data.count <= 10 * 1024 * 1024 else { error = "图片不能超过 10 MB。"; return nil }
-        let type = url.pathExtension.lowercased() == "png" ? "image/png" : "image/jpeg"
-        uploading = true; error = nil
-        defer { uploading = false }
-        do {
-            let result = try await session.api.careerRequest(path: "/api/resumes/\(resumeID)/assets", method: "POST", query: [:], body: .object([
-                "file_name": .string(String(url.lastPathComponent.prefix(120))),
-                "data_url": .string("data:\(type);base64,\(data.base64EncodedString())"),
-            ]))
-            guard let src = result["asset"]?["url"]?.stringValue, ResumeDocument.validImageSource(src) else { throw APIError.invalidResponse }
-            return src
-        } catch {
-            if case APIError.unauthorized = error { session.reportAuthenticationFailure() }
-            self.error = ResumeRequest.errorMessage(error, fallback: "图片上传失败，请稍后重试。")
-            return nil
+}
+
+
+private struct FocusTarget: Identifiable { let unit: SectionFocus.Unit; var id: String { unit.id } }
+
+
+/// 顶栏 32 / 28 的图标钮：悬停 #f4f4f2 底、文字转 txt；禁用时 fnt2。
+private struct HeadIconStyle: ButtonStyle {
+    var radius: CGFloat
+    @Environment(\.isEnabled) private var enabled
+    @State private var hover = false
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(!enabled ? V3.fnt2 : hover ? V3.txt : V3.sub)
+            .background(enabled && (hover || configuration.isPressed) ? V3.field : .clear, in: RoundedRectangle(cornerRadius: radius))
+            .onHover { hover = $0 }
+    }
+}
+
+/// 工具卡片的一项：悬停与选中 #f4f4f2 底、文字 txt；默认 sub、禁用 fnt2。
+private struct RailItemStyle: ButtonStyle {
+    let active: Bool
+    @Environment(\.isEnabled) private var enabled
+    @State private var hover = false
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(!enabled ? V3.fnt2 : active || hover ? V3.txt : V3.sub)
+            .background(active || (enabled && hover) ? V3.field : .clear, in: RoundedRectangle(cornerRadius: 10))
+            .onHover { hover = $0 }
+    }
+}
+
+/// `.workbench-title`：标题随内容伸缩（最宽 420、最窄 40），28 高、内边距 6、14.5/500 居中；悬停灰底，编辑时白底描边。
+private struct TitleField: View {
+    @Binding var title: String
+    @FocusState private var focused: Bool
+    @State private var hover = false
+    var body: some View {
+        TextField("", text: $title).textFieldStyle(.plain).font(V3.sans(14.5, weight: .medium)).foregroundStyle(V3.txt)
+            .multilineTextAlignment(.center).focused($focused).accessibilityLabel("简历标题")
+            .padding(.horizontal, 6).frame(height: 28)
+            .frame(width: min(420, max(40, (title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 14.5, weight: .medium)]).width + 14)))
+            .background(focused ? .white : hover ? V3.field : .clear, in: RoundedRectangle(cornerRadius: 7))
+            .overlay(RoundedRectangle(cornerRadius: 7).stroke(focused ? V3.cl : .clear))
+            .onHover { hover = $0 }
+    }
+}
+
+/// `WorkbenchGauge mini`：18×16，半径 7、线宽 3 的 240° 圆弧，浅灰轨道 + 灰到黑渐变弧 + 末端白色旋钮。
+struct MiniGauge: View {
+    let score: Int
+    var body: some View { WorkbenchGaugeShape(score: score, mini: true) }
+}
+
+/// Web `WorkbenchGauge`：起点 150°、扫过 240°；大号半径 78、线宽 10，带每 5 分一格的刻度（20 的倍数与 40/70/90 加长）。
+struct WorkbenchGaugeShape: View {
+    let score: Int
+    var mini = false
+    var extra: CGFloat = 0
+    static func geometry(mini: Bool, extra: CGFloat = 0) -> (r: CGFloat, sw: CGFloat, width: CGFloat, height: CGFloat, cx: CGFloat, cy: CGFloat) {
+        let r: CGFloat = mini ? 7 : 78, sw: CGFloat = mini ? 3 : 10, pad: CGFloat = mini ? 2 : 18
+        let width = ceil(2 * (r + pad)), cy = r + pad
+        return (r, sw, width, ceil(cy + r * 0.5 + sw / 2 + 2 + extra), width / 2, cy)
+    }
+    var body: some View {
+        let g = Self.geometry(mini: mini, extra: extra)
+        Canvas { context, _ in
+            func point(_ angle: Double, _ radius: CGFloat) -> CGPoint {
+                CGPoint(x: g.cx + radius * cos(angle * .pi / 180), y: g.cy + radius * sin(angle * .pi / 180))
+            }
+            func arc(_ from: Double, _ to: Double) -> Path {
+                var path = Path()
+                path.addArc(center: CGPoint(x: g.cx, y: g.cy), radius: g.r, startAngle: .degrees(from), endAngle: .degrees(to), clockwise: false)
+                return path
+            }
+            let end = 150 + 240 * max(0.5, min(100, Double(score))) / 100
+            context.stroke(arc(150, 390), with: .color(Color(hex: 0xECECEA)), style: StrokeStyle(lineWidth: g.sw, lineCap: .round))
+            context.stroke(arc(150, end), with: .linearGradient(Gradient(colors: [Color(hex: 0xA3A39C), Color(hex: 0x1D1D1B)]),
+                                                                startPoint: .zero, endPoint: CGPoint(x: g.width, y: 0)),
+                           style: StrokeStyle(lineWidth: g.sw, lineCap: .round))
+            if !mini {
+                for index in 0...20 {
+                    let value = index * 5, angle = 150 + 240 * Double(value) / 100
+                    let level = value == 40 || value == 70 || value == 90, major = value % 20 == 0 || level
+                    let r1 = g.r + g.sw / 2 + 5
+                    var tick = Path(); tick.move(to: point(angle, r1)); tick.addLine(to: point(angle, r1 + (major ? 6 : 3)))
+                    context.stroke(tick, with: .color(Color(hex: level ? 0x96968F : major ? 0xC4C4BE : 0xDCDCD8)),
+                                   style: StrokeStyle(lineWidth: level ? 1.4 : 1, lineCap: .round))
+                }
+                let halo = g.sw * 1.05, knob = point(end, g.r)
+                context.fill(Path(ellipseIn: CGRect(x: knob.x - halo, y: knob.y - halo, width: halo * 2, height: halo * 2)), with: .color(Color(hex: 0x1D1D1B).opacity(0.08)))
+            }
+            let knob = point(end, g.r), kr = g.sw * (mini ? 0.62 : 0.78)
+            let circle = Path(ellipseIn: CGRect(x: knob.x - kr, y: knob.y - kr, width: kr * 2, height: kr * 2))
+            context.fill(circle, with: .color(.white))
+            context.stroke(circle, with: .color(Color(hex: 0x1D1D1B)), lineWidth: g.sw * (mini ? 0.34 : 0.3))
         }
+        .frame(width: g.width, height: g.height).accessibilityHidden(true)
+    }
+}
+
+/// `WorkbenchPanelHeader`：73 高（含 1px 下边线）、内边距 20/24；标题 16/500 行高 19、说明 11.5 行高 14、间距 6；右上 28 关闭钮（-4/-6）。
+struct WorkbenchPanelHeader: View {
+    let title: String
+    var subtitle: String? = nil
+    var closeLabel: String
+    let close: () -> Void
+    var body: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title).font(V3.sans(16, weight: .medium)).foregroundStyle(V3.txt).frame(height: 19)
+                if let subtitle { Text(subtitle).font(V3.sans(11.5)).foregroundStyle(V3.fnt).frame(height: 14) }
+            }
+            Spacer()
+            Button(action: close) { Image(systemName: "xmark").font(.system(size: 12, weight: .medium)).frame(width: 28, height: 28).contentShape(Rectangle()) }
+                .buttonStyle(HeadIconStyle(radius: 7)).accessibilityLabel(closeLabel).padding(.top, -4).padding(.trailing, -6)
+        }
+        .padding(.horizontal, 24).padding(.top, 20).frame(height: 72, alignment: .top)
+        .overlay(alignment: .bottom) { Rectangle().fill(V3.line).frame(height: 1) }.frame(height: 73, alignment: .top)
     }
 }

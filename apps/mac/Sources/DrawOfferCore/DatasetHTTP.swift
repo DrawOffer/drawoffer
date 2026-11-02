@@ -54,3 +54,69 @@ extension DesktopTransport {
         guard count > 0 else { throw APIError.invalidResponse }; try output.write(contentsOf:buffer)
     }
 }
+
+/// 对话附件（Web `ChatAttachments`）：图片、文档与录音，单个 10 MiB，一次最多 10 个、合计 30 MiB。
+public struct AgentAttachmentUpload: Sendable {
+    public static let maxBytes = 10 * 1024 * 1024
+    public static let maxFiles = 10
+    public static let maxTotalBytes = 30 * 1024 * 1024
+    public static let extensions = ["png", "jpg", "jpeg", "webp", "pdf", "docx", "md", "txt", "mp3", "wav", "m4a", "ogg", "webm"]
+
+    public let session: String
+    public let file: URL
+    public let name: String
+    public let id: String
+
+    public init(session: String, file: URL) throws {
+        let name = file.lastPathComponent
+        guard Self.extensions.contains(file.pathExtension.lowercased()), !name.contains(where: { "\r\n\"\\/".contains($0) }) else {
+            throw APIError.server(status: 415, code: "AGENT_ATTACHMENT_TYPE_UNSUPPORTED")
+        }
+        let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+        guard size > 0 else { throw APIError.server(status: 400, code: "AGENT_ATTACHMENT_EMPTY") }
+        guard size <= Self.maxBytes else { throw APIError.server(status: 413, code: "AGENT_ATTACHMENT_TOO_LARGE") }
+        self.session = session; self.file = file; self.name = name; self.id = UUID().uuidString.lowercased()
+    }
+
+    /// 与 Web `chatFileKind` 相同的分类。
+    public static func kind(_ name: String) -> String {
+        let ext = (name as NSString).pathExtension.lowercased()
+        return ["png", "jpg", "jpeg", "webp"].contains(ext) ? "image" : ["mp3", "wav", "m4a", "ogg", "webm"].contains(ext) ? "audio" : "document"
+    }
+
+    public static func errorMessage(_ error: Error) -> String {
+        guard case APIError.server(_, let code) = error else { return "上传失败，请重试。" }
+        switch code {
+        case "AGENT_ATTACHMENT_TYPE_UNSUPPORTED": return "不支持这种文件类型。"
+        case "AGENT_ATTACHMENT_TOO_LARGE": return "单个文件不能超过 10 MB。"
+        case "AGENT_ATTACHMENT_EMPTY": return "文件是空的。"
+        case "AGENT_ATTACHMENT_LIMIT_REACHED": return "一次最多附加 10 个文件。"
+        default: return "上传失败，请重试。"
+        }
+    }
+}
+
+extension DesktopTransport {
+    func uploadAgentAttachment(_ upload: AgentAttachmentUpload, access: String?) async throws -> JSONValue {
+        let path = "/api/agent/sessions/\(upload.session)/attachments"
+        guard AgentRequest.allowed(path: path, method: "POST") else { throw APIError.invalidResponse }
+        let data = try Data(contentsOf: upload.file)
+        guard data.count <= AgentAttachmentUpload.maxBytes else { throw APIError.server(status: 413, code: "AGENT_ATTACHMENT_TOO_LARGE") }
+        let boundary = "DrawOffer-" + UUID().uuidString
+        var body = Data()
+        body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(upload.name)\"\r\nContent-Type: application/octet-stream\r\n\r\n".utf8))
+        body.append(data)
+        body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+        var request = URLRequest(url: origin.appending(path: path)); request.httpMethod = "POST"; request.timeoutInterval = 300
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.setValue(upload.id, forHTTPHeaderField: "Idempotency-Key")
+        if let access { request.setValue("Bearer \(access)", forHTTPHeaderField: "Authorization") }
+        let (result, response) = try await session.upload(for: request, from: body)
+        guard let http = response as? HTTPURLResponse, result.count <= 1024 * 1024 else { throw APIError.invalidResponse }
+        if http.statusCode == 401 { throw APIError.unauthorized }
+        guard (200..<300).contains(http.statusCode) else {
+            throw APIError.server(status: http.statusCode, code: (try? JSONDecoder().decode(JSONValue.self, from: result))?.text("error") ?? "HTTP_\(http.statusCode)")
+        }
+        return try JSONDecoder().decode(JSONValue.self, from: result)
+    }
+}

@@ -21,6 +21,11 @@ public struct DatasetRecord: Identifiable, Sendable {
     public init(_ raw: JSONValue) { self.raw = raw }
     public var id: String { raw.text("id") }
     public var name: String { raw.text("file_name") }
+    /// `datasetDisplayName`：去掉与格式相同的扩展名。
+    public var displayName: String {
+        let suffix = "." + raw.text("file_format")
+        return raw.text("file_format").isEmpty || !name.lowercased().hasSuffix(suffix.lowercased()) ? name : String(name.dropLast(suffix.count))
+    }
     public var folder: String { raw.text("folder_id") }
     public var format: String { raw.text("file_format").uppercased() }
     public var media: Bool { ["audio", "video"].contains(raw.text("asset_kind")) }

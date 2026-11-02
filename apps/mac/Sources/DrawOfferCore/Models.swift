@@ -6,10 +6,17 @@ public struct User: Codable, Equatable, Sendable {
     public let email: String?
     public let nickname: String
     public let isAdmin: Bool
+    /// 头像地址（`/api/auth/default-avatar` 或本人私有资源），经桌面会话下载显示。
+    public let avatarURL: String?
+
+    public init(id: String, email: String?, nickname: String, isAdmin: Bool, avatarURL: String? = nil) {
+        self.id = id; self.email = email; self.nickname = nickname; self.isAdmin = isAdmin; self.avatarURL = avatarURL
+    }
 
     enum CodingKeys: String, CodingKey {
         case id, email, nickname
         case isAdmin = "is_admin"
+        case avatarURL = "avatar_url"
     }
 }
 
@@ -124,7 +131,7 @@ public struct ResumeSummary: Decodable, Identifiable, Equatable, Sendable {
         return "\(pad(parts.month ?? 0))-\(pad(parts.day ?? 0))"
     }
 
-    static func parseTimestamp(_ value: String) -> Date? {
+    public static func parseTimestamp(_ value: String) -> Date? {
         let hasZone = value.hasSuffix("Z") || value.range(of: #"[+-]\d{2}:\d{2}$"#, options: .regularExpression) != nil
         let text = hasZone ? value : value + "Z"
         let formatter = ISO8601DateFormatter()
