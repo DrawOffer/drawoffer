@@ -50,7 +50,7 @@ public static class ScheduleCalendar
     /// <summary>所在周的周一零点（按 <paramref name="zone"/>）。</summary>
     public static DateTimeOffset WeekStart(DateTimeOffset date, TimeZoneInfo? zone = null)
     {
-        var tz = zone ?? TimeZoneInfo.Local;
+        var tz = zone ?? Beijing.Zone;
         var day = SwiftCalendar.StartOfDay(date, tz);
         var weekday = SwiftCalendar.Weekday(day, tz);
         return SwiftCalendar.AddDays(day, -((weekday + 5) % 7), tz);
@@ -59,7 +59,7 @@ public static class ScheduleCalendar
     /// <summary>月历格子：从包含 1 日的那周周一到包含月末那周的周日，实际为 4、5 或 6 周。</summary>
     public static List<DateTimeOffset> MonthDays(DateTimeOffset date, TimeZoneInfo? zone = null)
     {
-        var tz = zone ?? TimeZoneInfo.Local;
+        var tz = zone ?? Beijing.Zone;
         var local = SwiftCalendar.Local(date, tz);
         var monthStart = SwiftCalendar.Resolve(new DateTime(local.Year, local.Month, 1), tz);
         var next = local.Month == 12 ? new DateTime(local.Year + 1, 1, 1) : new DateTime(local.Year, local.Month + 1, 1);
@@ -74,7 +74,7 @@ public static class ScheduleCalendar
 
     /// <summary>本地某天某时刻（UI 用），按 <paramref name="zone"/> 解析墙钟时间。</summary>
     public static DateTimeOffset LocalDate(DateOnly date, TimeSpan time = default, TimeZoneInfo? zone = null) =>
-        SwiftCalendar.Resolve(date.ToDateTime(TimeOnly.MinValue).Add(time), zone ?? TimeZoneInfo.Local);
+        SwiftCalendar.Resolve(date.ToDateTime(TimeOnly.MinValue).Add(time), zone ?? Beijing.Zone);
 
     public static List<ScheduledInterview> Conflicts(IEnumerable<ScheduledInterview> items, string? excluding, DateTimeOffset start, DateTimeOffset end) =>
         items.Where(x => x.Id != excluding && x.Editable && !x.OpenWindow && x.Overlaps(start, end)).ToList();

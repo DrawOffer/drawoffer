@@ -32,7 +32,7 @@ public static class PD
     public const double Axis = 68;
 
     /// <summary>把日期换到本机时区取年月日（Swift `Calendar.current.component`）。</summary>
-    internal static DateTime Local(DateTimeOffset date) => TimeZoneInfo.ConvertTime(date, TimeZoneInfo.Local).DateTime;
+    internal static DateTime Local(DateTimeOffset date) => TimeZoneInfo.ConvertTime(date, Beijing.Zone).DateTime;
 
     /// <summary>在 Canvas 上以中心对齐放一个元素（Swift `.position(x:y:)`）。</summary>
     internal static Canvas At(FrameworkElement child, double x, double y)

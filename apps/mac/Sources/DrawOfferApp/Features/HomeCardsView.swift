@@ -195,7 +195,7 @@ struct HomeCardView: View {
 
     private func clock(_ value: String) -> String {
         guard let date = HomeDashboard.date(value) else { return "--:--" }
-        let formatter = DateFormatter(); formatter.dateFormat = "HH:mm"
+        let formatter = Beijing.formatter(); formatter.dateFormat = "HH:mm"
         return formatter.string(from: date)
     }
 
@@ -206,7 +206,7 @@ struct HomeCardView: View {
         var seen: [Int] = []
         for session in sessions {
             guard let date = HomeDashboard.date(session.text("start_at")) else { continue }
-            let day = Calendar.current.component(.weekday, from: date) - 1
+            let day = Beijing.calendar.component(.weekday, from: date) - 1
             if !seen.contains(day) { seen.append(day) }
         }
         return seen.sorted { ($0 + 6) % 7 < ($1 + 6) % 7 }.map { "周" + names[$0] }.joined(separator: "、")

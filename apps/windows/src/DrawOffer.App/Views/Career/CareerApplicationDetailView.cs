@@ -87,7 +87,7 @@ public sealed partial class CareerApplicationDetailView : UserControl
     string? _jobDescription;
     bool _showAllHistory;
     JsonNode? _cancelling;
-    DateTimeOffset _now = DateTimeOffset.Now;
+    DateTimeOffset _now = Beijing.Now;
     string? _viewKey;
     Dictionary<string, JsonNode> _details = [];
     string? _prepBusy;
@@ -259,7 +259,7 @@ public sealed partial class CareerApplicationDetailView : UserControl
 
     async Task LoadAsync(int generation)
     {
-        _loading = true; _error = null; _now = DateTimeOffset.Now;
+        _loading = true; _error = null; _now = Beijing.Now;
         var id = _application.Id;
         try
         {

@@ -81,7 +81,7 @@ public static class CareerBoard
     /// <summary>`applicationScheduleStatusLabel`：已排期阶段的倒计时文案。</summary>
     public static string? ScheduleLabel(JsonNode raw, bool completed, DateTimeOffset? now = null)
     {
-        var at = now ?? DateTimeOffset.Now;
+        var at = now ?? Beijing.Now;
         if (!Scheduled.Contains(Projection(raw).Column)) return null;
         if (completed) return "已完成";
         if (CareerApplication.Date(raw.Text("next_session_start_at")) is not { } start || CareerApplication.Date(raw.Text("next_session_end_at")) is not { } end || end <= start) return null;
@@ -132,7 +132,7 @@ public static class CareerBoard
     /// <summary>`applicationCardTimeLabel`：卡片状态下方的悬停文字。</summary>
     public static string CardTime(JsonNode raw, TimeZoneInfo? zone = null)
     {
-        var tz = zone ?? TimeZoneInfo.Local;
+        var tz = zone ?? Beijing.Zone;
         var value = Projection(raw);
         string? Stamp(string field) => CareerApplication.Date(raw.Text(field)) is { } date ? DateTime(date, tz) : null;
         switch (value.Column)
@@ -154,7 +154,7 @@ public static class CareerBoard
     /// <summary>`formatApplicationSessionRange`：列表视图的「最近安排」单元格。</summary>
     public static string SessionRange(JsonNode session, TimeZoneInfo? zone = null)
     {
-        var tz = zone ?? TimeZoneInfo.Local;
+        var tz = zone ?? Beijing.Zone;
         if (CareerApplication.Date(session.Text("start_at")) is not { } start || CareerApplication.Date(session.Text("end_at")) is not { } end) return "—";
         return DateTime(start, tz) + "–" + (SwiftCalendar.SameDay(start, end, tz) ? HourMinute(end, tz) : DateTime(end, tz));
     }
@@ -162,7 +162,7 @@ public static class CareerBoard
     /// <summary>`todayScheduleLabel`：今天稍后开始的阶段显示黑色「今天 HH:mm」。</summary>
     public static string? Today(JsonNode raw, DateTimeOffset? now = null, TimeZoneInfo? zone = null)
     {
-        var at = now ?? DateTimeOffset.Now; var tz = zone ?? TimeZoneInfo.Local;
+        var at = now ?? Beijing.Now; var tz = zone ?? Beijing.Zone;
         if (!Scheduled.Contains(Projection(raw).Column) || CareerApplication.Date(raw.Text("next_session_start_at")) is not { } start || start <= at || !SwiftCalendar.SameDay(start, at, tz)) return null;
         return "今天 " + HourMinute(start, tz);
     }
@@ -170,7 +170,7 @@ public static class CareerBoard
     /// <summary>`formatApplicationUpdatedAt`：今天 / 昨天 / M月d日。</summary>
     public static string? RelativeDay(string text, DateTimeOffset? now = null, TimeZoneInfo? zone = null)
     {
-        var at = now ?? DateTimeOffset.Now; var tz = zone ?? TimeZoneInfo.Local;
+        var at = now ?? Beijing.Now; var tz = zone ?? Beijing.Zone;
         if (CareerApplication.Date(text) is not { } date) return null;
         var time = HourMinute(date, tz);
         if (SwiftCalendar.SameDay(date, at, tz)) return "今天 " + time;

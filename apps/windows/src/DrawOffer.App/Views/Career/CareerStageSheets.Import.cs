@@ -195,7 +195,7 @@ public sealed class CareerPlanSheet : CareerSheetControl
     public CareerPlanSheet(JsonNode session, Action close, Action saved)
     {
         (_session, _close, _saved) = (session, close, saved);
-        var windowStart = CareerApplication.Date(session.Text("start_at")) ?? DateTimeOffset.Now;
+        var windowStart = CareerApplication.Date(session.Text("start_at")) ?? Beijing.Now;
         _start = CareerApplication.Date(session.Text("answer_plan_start_at")) ?? windowStart;
         _end = CareerApplication.Date(session.Text("answer_plan_end_at")) ?? _start.AddSeconds(3600);
         Render();

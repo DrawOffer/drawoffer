@@ -21,7 +21,7 @@ sealed class ScheduleDetailDialog : UserControl
     readonly Border _footer = new() { BorderBrush = Brush(V3.Line), BorderThickness = new Thickness(0, 1, 0, 0) };
     ScheduledInterview? _item;
     bool _planSet, _busy;
-    DateTimeOffset _planStart = DateTimeOffset.Now;
+    DateTimeOffset _planStart = Beijing.Now;
     int _planMinutes = 120;
     string? _error;
 
@@ -44,7 +44,7 @@ sealed class ScheduleDetailDialog : UserControl
     bool IsAI => Stage.Contains("ai", StringComparison.OrdinalIgnoreCase);
     bool Cancelled => Current.Text("status") == "cancelled";
     bool Completed => Current.Text("status") == "completed";
-    bool Active => !Cancelled && !Completed && Current.Start <= DateTimeOffset.Now && Current.End > DateTimeOffset.Now;
+    bool Active => !Cancelled && !Completed && Current.Start <= Beijing.Now && Current.End > Beijing.Now;
     bool CanEdit => Current.Editable;
     string KindWord => IsExam ? "笔试" : IsTest ? "测评" : "面试";
 
@@ -61,13 +61,13 @@ sealed class ScheduleDetailDialog : UserControl
     }
 
     static string Format(DateTimeOffset date, string pattern) =>
-        TimeZoneInfo.ConvertTime(date, TimeZoneInfo.Local).ToString(pattern, System.Globalization.CultureInfo.GetCultureInfo("zh-CN"));
+        TimeZoneInfo.ConvertTime(date, Beijing.Zone).ToString(pattern, System.Globalization.CultureInfo.GetCultureInfo("zh-CN"));
 
     string Relative
     {
         get
         {
-            var until = (Current.Start - DateTimeOffset.Now).TotalSeconds;
+            var until = (Current.Start - Beijing.Now).TotalSeconds;
             if (!IsWindow && !Cancelled && !Completed && until > 0)
                 return until < 86400 ? $" · 还有 {(int)(until / 3600)} 小时 {(int)(until % 3600 / 60)} 分" : $" · {(int)Math.Ceiling(until / 86400)} 天后";
             return IsWindow && !Cancelled && !Completed ? " · 截止前任选时间完成" : "";
@@ -94,7 +94,7 @@ sealed class ScheduleDetailDialog : UserControl
             _planSet = true; _planStart = start;
             if (CareerApplication.Date(_interview.Text("answer_plan_end_at")) is { } end) _planMinutes = Math.Max(1, (int)((end - start).TotalSeconds / 60));
         }
-        else _planStart = _interview.Start > DateTimeOffset.Now ? _interview.Start : DateTimeOffset.Now;
+        else _planStart = _interview.Start > Beijing.Now ? _interview.Start : Beijing.Now;
         _busy = true; Render();
         try
         {
@@ -175,14 +175,14 @@ sealed class ScheduleDetailDialog : UserControl
         FrameworkElement control;
         if (CanEdit)
         {
-            var local = TimeZoneInfo.ConvertTime(_planStart, TimeZoneInfo.Local);
+            var local = TimeZoneInfo.ConvertTime(_planStart, Beijing.Zone);
             var date = new CalendarDatePicker { Date = local, MinDate = Current.Start, MaxDate = Current.End > Current.Start ? Current.End : Current.Start, FontSize = 12, Width = 120 };
             var time = new TimePicker { Time = local.TimeOfDay, ClockIdentifier = "24HourClock", MinWidth = 0, FontSize = 12 };
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(date, "计划作答时间");
             void Push()
             {
                 var day = (date.Date ?? local).Date + time.Time;
-                _planStart = new DateTimeOffset(day, TimeZoneInfo.Local.GetUtcOffset(day)); _planSet = true; _error = null;
+                _planStart = new DateTimeOffset(day, Beijing.Zone.GetUtcOffset(day)); _planSet = true; _error = null;
             }
             date.DateChanged += (_, _) => Push();
             time.TimeChanged += (_, _) => Push();
@@ -207,7 +207,7 @@ sealed class ScheduleDetailDialog : UserControl
     /// <summary>`ScheduleArt`：一张日期卡与一张按阶段类型的时段卡。</summary>
     FrameworkElement Art()
     {
-        var local = TimeZoneInfo.ConvertTime(Current.Start, TimeZoneInfo.Local);
+        var local = TimeZoneInfo.ConvertTime(Current.Start, Beijing.Zone);
         var date = new Border
         {
             Width = 82, Height = 100, CornerRadius = new CornerRadius(10), Background = Brush(V3.White), BorderBrush = Brush(Cl), BorderThickness = new Thickness(1),
@@ -224,9 +224,9 @@ sealed class ScheduleDetailDialog : UserControl
         if (IsWindow)
         {
             var total = Math.Max(1, (Current.End - Current.Start).TotalSeconds);
-            var ratio = Math.Min(1, Math.Max(0, (DateTimeOffset.Now - Current.Start).TotalSeconds / total));
+            var ratio = Math.Min(1, Math.Max(0, (Beijing.Now - Current.Start).TotalSeconds / total));
             slot.Children.Add(Layer(Fill(Field, 2, 120, 4), Fill(V3.Orange, 2, 120 * ratio, 4).Align(HorizontalAlignment.Left)).Align(HorizontalAlignment.Left));
-            slot.Children.Add(Sans(Current.End > DateTimeOffset.Now ? $"还剩 {Math.Max(1, (int)Math.Ceiling((Current.End - DateTimeOffset.Now).TotalSeconds / 86400))} 天" : "已截止", 10, Sub));
+            slot.Children.Add(Sans(Current.End > Beijing.Now ? $"还剩 {Math.Max(1, (int)Math.Ceiling((Current.End - Beijing.Now).TotalSeconds / 86400))} 天" : "已截止", 10, Sub));
         }
         var slotCard = new Border { Child = slot, Padding = new Thickness(14), MinWidth = 140, CornerRadius = new CornerRadius(10), Background = Brush(V3.White), BorderBrush = Brush(Cl), BorderThickness = new Thickness(1) };
         var art = HStack(18, date, slotCard).Align(HorizontalAlignment.Center, VerticalAlignment.Center);
@@ -311,7 +311,7 @@ sealed class ScheduleSessionForm : UserControl
             return frame;
         }, dismissible: true);
 
-    static string Display(DateTimeOffset date) => TimeZoneInfo.ConvertTime(date, TimeZoneInfo.Local).ToString("M月d日 HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+    static string Display(DateTimeOffset date) => TimeZoneInfo.ConvertTime(date, Beijing.Zone).ToString("M月d日 HH:mm", System.Globalization.CultureInfo.InvariantCulture);
 
     async Task StartAsync()
     {
@@ -352,7 +352,7 @@ sealed class ScheduleSessionForm : UserControl
         if (_item is { } item)
         {
             _content.Children.Add(Label(item.Company + " · " + item.Title, 15, Txt, Semibold));
-            _content.Children.Add(Label(item.Label + " · " + item.Status(DateTimeOffset.Now), 13, Fnt));
+            _content.Children.Add(Label(item.Label + " · " + item.Status(Beijing.Now), 13, Fnt));
             _content.Children.Add(Label(item.OpenWindow ? "开放作答窗口" : "固定面试场次", 12, Fnt));
             if (_kind == "detail")
             {
@@ -461,13 +461,13 @@ sealed class ScheduleSessionForm : UserControl
 
     static FrameworkElement DateTime(DateTimeOffset value, Action<DateTimeOffset> changed, bool enabled)
     {
-        var local = TimeZoneInfo.ConvertTime(value, TimeZoneInfo.Local);
+        var local = TimeZoneInfo.ConvertTime(value, Beijing.Zone);
         var date = new CalendarDatePicker { Date = local, FontSize = 13, IsEnabled = enabled };
         var time = new TimePicker { Time = local.TimeOfDay, ClockIdentifier = "24HourClock", MinWidth = 0, IsEnabled = enabled };
         void Push()
         {
             var day = (date.Date ?? local).Date + time.Time;
-            changed(new DateTimeOffset(day, TimeZoneInfo.Local.GetUtcOffset(day)));
+            changed(new DateTimeOffset(day, Beijing.Zone.GetUtcOffset(day)));
         }
         date.DateChanged += (_, _) => Push();
         time.TimeChanged += (_, _) => Push();

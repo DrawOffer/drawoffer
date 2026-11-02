@@ -102,7 +102,7 @@ public sealed partial class InterviewScheduleView
             for (var index = 0; index < 7; index++) DayEvents(canvas, Plus(week, index), index, width);
             if (Enumerable.Range(0, 7).Cast<int?>().FirstOrDefault(i => IsToday(Plus(week, i!.Value))) is { } todayIndex)
             {
-                var now = Local(DateTimeOffset.Now);
+                var now = Local(Beijing.Now);
                 Put(canvas, new Rectangle { Width = width, Height = 1.5, Fill = Brush(Red) }, Gutter + todayIndex * width, (now.Hour * 60 + now.Minute) / 60.0 * HourHeight);
             }
         }

@@ -29,6 +29,20 @@ public class InterviewScheduleTests
     }
 
     [Fact]
+    public void DefaultCalendarAndUnzonedInputUseBeijingTime()
+    {
+        var date = ScheduleCalendar.LocalDate(new DateOnly(2030, 1, 2), TimeSpan.FromHours(9));
+        Assert.Equal(TimeSpan.FromHours(8), date.Offset);
+        Assert.Equal(new DateTimeOffset(2030, 1, 2, 1, 0, 0, TimeSpan.Zero), date.ToUniversalTime());
+        Assert.Equal(date, CareerApplication.Date("2030-01-02T09:00:00"));
+        Assert.All(ScheduleCalendar.MonthDays(date), day =>
+        {
+            Assert.Equal(TimeSpan.FromHours(8), day.Offset);
+            Assert.Equal(0, day.Hour);
+        });
+    }
+
+    [Fact]
     public void MonthCalendarPreservesLocalMidnightAcrossDaylightSaving()
     {
         var zone = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");

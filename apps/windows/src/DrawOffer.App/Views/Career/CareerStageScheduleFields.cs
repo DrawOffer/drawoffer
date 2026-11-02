@@ -108,7 +108,7 @@ public sealed class CareerStageScheduleFields : UserControl
                         Background = Brush(chosen ? Stage : V3.White), BorderBrush = Brush(chosen ? Txt : Cl), BorderThickness = new Thickness(1),
                     };
                     var value = days;
-                    chips.Children.Add(chip.OnTap(() => { End = DateTimeOffset.Now.AddSeconds(value * 86400.0); EndSet = true; _deadlineDays = value; Render(); }, days == 1 ? "24 小时" : $"{days} 天后"));
+                    chips.Children.Add(chip.OnTap(() => { End = Beijing.Now.AddSeconds(value * 86400.0); EndSet = true; _deadlineDays = value; Render(); }, days == 1 ? "24 小时" : $"{days} 天后"));
                 }
                 stack.Children.Add(chips.Top(8));
             }
@@ -248,7 +248,7 @@ public sealed class CareerStageScheduleFields : UserControl
 
     static string Stamp(DateTimeOffset date, bool weekday)
     {
-        var local = date.ToLocalTime();
+        var local = date.ToBeijing();
         var culture = CultureInfo.GetCultureInfo("zh-CN");
         return weekday ? local.ToString("MM月dd日 ddd HH:mm", culture) : local.ToString("MM月dd日 HH:mm", culture);
     }
@@ -258,9 +258,9 @@ public sealed class CareerStageScheduleFields : UserControl
         var input = Input("clock", _planSet ? Stamp(_planStart, false) + $" · {_planDuration} 分钟" : "选一段打算作答的时间", !_planSet);
         return Tappable(input, () =>
         {
-            if (!_planSet) { PlanStart = Max(_startSet ? _start : DateTimeOffset.Now, DateTimeOffset.Now); PlanDuration = 60; }
-            var lower = _startSet ? _start : DateTimeOffset.Now;
-            var upper = Max(lower, _endSet ? _end : DateTimeOffset.Now.AddSeconds(86400.0 * 365));
+            if (!_planSet) { PlanStart = Max(_startSet ? _start : Beijing.Now, Beijing.Now); PlanDuration = 60; }
+            var lower = _startSet ? _start : Beijing.Now;
+            var upper = Max(lower, _endSet ? _end : Beijing.Now.AddSeconds(86400.0 * 365));
             var draft = _planStart;
             var duration = _planDuration;
             var minutes = new[] { 30, 60, 90, 120, 180 };
@@ -311,7 +311,7 @@ public sealed class CareerStageScheduleFields : UserControl
     /// <summary>第一次选时从下一个半点开始（Web `defaultInterviewStartAt`）。</summary>
     void Seed(string key)
     {
-        var baseDate = DateTimeOffset.Now.AddSeconds(key == "end" ? 3 * 86400 : 86400).LocalDateTime;
+        var baseDate = Beijing.Now.AddSeconds(key == "end" ? 3 * 86400 : 86400).LocalDateTime;
         var hour = new DateTime(baseDate.Year, baseDate.Month, baseDate.Day, baseDate.Hour, 0, 0);
         var date = Local(hour).AddSeconds(baseDate.Minute < 30 ? 30 * 60 : 3600);
         if (key == "end") End = date; else Start = date;

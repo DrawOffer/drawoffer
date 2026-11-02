@@ -41,18 +41,18 @@ public static class CareerDeckFormat
     public static string MonthDay(DateTimeOffset? date, TimeZoneInfo? zone = null)
     {
         if (date is not { } value) return "—";
-        var local = SwiftCalendar.Local(value, zone ?? TimeZoneInfo.Local);
+        var local = SwiftCalendar.Local(value, zone ?? Beijing.Zone);
         return Two(local.Month) + "." + Two(local.Day);
     }
 
     public static string Clock(DateTimeOffset date, TimeZoneInfo? zone = null)
     {
-        var local = SwiftCalendar.Local(date, zone ?? TimeZoneInfo.Local);
+        var local = SwiftCalendar.Local(date, zone ?? Beijing.Zone);
         return Two(local.Hour) + ":" + Two(local.Minute);
     }
 
     public static string Weekday(DateTimeOffset date, TimeZoneInfo? zone = null) =>
-        "周" + new[] { "日", "一", "二", "三", "四", "五", "六" }[(SwiftCalendar.Weekday(date, zone ?? TimeZoneInfo.Local) - 1) % 7];
+        "周" + new[] { "日", "一", "二", "三", "四", "五", "六" }[(SwiftCalendar.Weekday(date, zone ?? Beijing.Zone) - 1) % 7];
 
     public static int DayCount(DateTimeOffset from, DateTimeOffset to, TimeZoneInfo? zone = null) => Math.Max(0, CareerFormat.Days(from, to, zone));
 
@@ -167,8 +167,8 @@ public sealed class CareerDeck
 
     public CareerDeck(JsonNode app, IEnumerable<JsonNode> all, DateTimeOffset? now = null, TimeZoneInfo? zone = null)
     {
-        var at = now ?? DateTimeOffset.Now;
-        _zone = zone ?? TimeZoneInfo.Local;
+        var at = now ?? Beijing.Now;
+        _zone = zone ?? Beijing.Zone;
         DateTimeOffset Date(string field, string fallback) => CareerApplication.Date(app.Text(field)) ?? CareerApplication.Date(app.Text(fallback)) ?? at;
         var pending = CareerDetailModel.Column(app) == "pending";
         var terminated = app.Text("lifecycle_status") == "terminated" || app.Text("status") != "active";

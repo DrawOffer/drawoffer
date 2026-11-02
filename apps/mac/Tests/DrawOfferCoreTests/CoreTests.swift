@@ -71,7 +71,7 @@ private actor DelayedIdentityAPI: APIClient {
 }
 
 @Test func navigationMatchesWebOrder() {
-    #expect(WorkspaceSection.sidebar.map(\.title) == ["首页", "我的简历", "简历模板", "岗位看板", "面试日程", "模拟面试", "资料库"])
+    #expect(WorkspaceSection.sidebar.map(\.title) == ["首页", "我的简历", "简历模板", "投递看板", "面试日程", "模拟面试", "岗位广场", "资料库"])
 }
 
 @Test func guestExamplesWorkWithoutGrantingAccountAccess() async throws {
@@ -85,4 +85,19 @@ private actor DelayedIdentityAPI: APIClient {
     }
     await #expect(throws: APIError.unauthorized) { try await api.listResumeTemplates() }
     #expect(try await api.currentUser() == nil)
+}
+
+@Test func parityAllowlistMatchesBackendDesktopRoutes() {
+    #expect(CareerRequest.allowed(path: "/api/memory/home", method: "GET"))
+    #expect(CareerRequest.allowed(path: "/api/memory/home/disclosures", method: "POST"))
+    #expect(CareerRequest.allowed(path: "/api/announcements/read-all", method: "POST"))
+    #expect(CareerRequest.allowed(path: "/api/billing/summary", method: "GET"))
+    // Clearing memory and sharing grants stay Web-only.
+    #expect(!CareerRequest.allowed(path: "/api/memory/clear", method: "POST"))
+    #expect(!CareerRequest.allowed(path: "/api/memory/grants", method: "GET"))
+    #expect(!CareerRequest.allowed(path: "/api/billing/summary", method: "POST"))
+    #expect(CareerRequest.allowed(path: "/api/job-pool/companies/12", method: "GET"))
+    #expect(CareerRequest.allowed(path: "/api/job-pool/34/join", method: "POST"))
+    #expect(!CareerRequest.allowed(path: "/api/admin/job-pool/sources", method: "GET"))
+    #expect(!CareerRequest.allowed(path: "/api/job-pool/abc", method: "GET"))
 }

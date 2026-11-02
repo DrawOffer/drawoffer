@@ -26,7 +26,7 @@ public sealed partial class CareerReviewReportView : UserControl
     int _selected;
     (string Id, int Version)? _attempt;
     List<JsonNode> _targets = [];
-    DateTimeOffset _now = DateTimeOffset.Now;
+    DateTimeOffset _now = Beijing.Now;
     int _request;
     bool _alive = true;
     DispatcherTimer? _poll;

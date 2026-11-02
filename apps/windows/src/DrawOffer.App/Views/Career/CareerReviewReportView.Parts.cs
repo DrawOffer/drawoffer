@@ -23,7 +23,7 @@ public sealed partial class CareerReviewReportView
             if (request != _request || !_alive) return;
             if (result.Get("session") is not { } loaded || loaded.Text("id").Length == 0) throw new InvalidDataException();
             var wasGenerating = Generating;
-            _detail = result; _now = DateTimeOffset.Now;
+            _detail = result; _now = Beijing.Now;
             if (loaded.Text("review_status") != "generating" && _attempt?.Id == loaded.Text("review_request_id")) _attempt = null;
             if (quiet && wasGenerating && loaded.Text("review_status") == "failed") _notice = "复盘生成失败，原记录和已有报告已保留。";
         }
@@ -44,7 +44,7 @@ public sealed partial class CareerReviewReportView
         if (!(_alive && Generating)) { StopPolling(); return; }
         if (_poll is not null) return;
         _poll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
-        _poll.Tick += (_, _) => { _now = DateTimeOffset.Now; _ = LoadAsync(quiet: true); };
+        _poll.Tick += (_, _) => { _now = Beijing.Now; _ = LoadAsync(quiet: true); };
         _poll.Start();
     }
 

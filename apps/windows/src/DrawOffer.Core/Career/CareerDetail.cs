@@ -62,20 +62,20 @@ public static class CareerFormat
     public static string MonthDay(string raw, TimeZoneInfo? zone = null)
     {
         if (CareerApplication.Date(raw) is not { } date) return "—";
-        var local = SwiftCalendar.Local(date, zone ?? TimeZoneInfo.Local);
+        var local = SwiftCalendar.Local(date, zone ?? Beijing.Zone);
         return Two(local.Month) + "." + Two(local.Day);
     }
 
     public static string Clock(string raw, TimeZoneInfo? zone = null)
     {
         if (CareerApplication.Date(raw) is not { } date) return "—";
-        var local = SwiftCalendar.Local(date, zone ?? TimeZoneInfo.Local);
+        var local = SwiftCalendar.Local(date, zone ?? Beijing.Zone);
         return Two(local.Hour) + ":" + Two(local.Minute);
     }
 
     public static string Range(string start, string end, TimeZoneInfo? zone = null)
     {
-        var tz = zone ?? TimeZoneInfo.Local;
+        var tz = zone ?? Beijing.Zone;
         if (CareerApplication.Date(start) is not { } s || CareerApplication.Date(end) is not { } e) return "—";
         return SwiftCalendar.SameDay(s, e, tz)
             ? $"{MonthDay(start, tz)} {Clock(start, tz)}–{Clock(end, tz)}"
@@ -85,7 +85,7 @@ public static class CareerFormat
     /// <summary>Offer 日期是日历日期（`YYYY-MM-DD`），不经过 UTC 换算。</summary>
     public static DateTimeOffset? OfferDate(string raw, TimeZoneInfo? zone = null)
     {
-        var tz = zone ?? TimeZoneInfo.Local;
+        var tz = zone ?? Beijing.Zone;
         // Swift `split(separator:)` 省略空段，`compactMap { Int($0) }` 丢掉非数字段。
         var parts = raw.Split('-', StringSplitOptions.RemoveEmptyEntries).Select(SwiftText.Int).OfType<int>().ToArray();
         if (SwiftText.Count(raw) != 10 || parts.Length != 3 || parts[0] < 1000) return null;
@@ -95,7 +95,7 @@ public static class CareerFormat
 
     public static string? OfferDay(string raw, TimeZoneInfo? zone = null)
     {
-        var tz = zone ?? TimeZoneInfo.Local;
+        var tz = zone ?? Beijing.Zone;
         if (OfferDate(raw, tz) is not { } date) return null;
         var local = SwiftCalendar.Local(date, tz);
         return Two(local.Month) + "." + Two(local.Day);
@@ -103,7 +103,7 @@ public static class CareerFormat
 
     public static string? OfferLong(string raw, TimeZoneInfo? zone = null)
     {
-        var tz = zone ?? TimeZoneInfo.Local;
+        var tz = zone ?? Beijing.Zone;
         if (OfferDate(raw, tz) is not { } date) return null;
         var local = SwiftCalendar.Local(date, tz);
         return $"{local.Year}年{local.Month}月{local.Day}日";
@@ -112,7 +112,7 @@ public static class CareerFormat
     /// <summary>两天之间相差的日历天数（按当天零点）。</summary>
     public static int Days(DateTimeOffset start, DateTimeOffset end, TimeZoneInfo? zone = null)
     {
-        var tz = zone ?? TimeZoneInfo.Local;
+        var tz = zone ?? Beijing.Zone;
         return SwiftCalendar.Days(SwiftCalendar.StartOfDay(start, tz), SwiftCalendar.StartOfDay(end, tz), tz);
     }
 }
@@ -123,7 +123,7 @@ public static class CareerSessions
     public static string EffectiveStatus(JsonNode session, DateTimeOffset? now = null)
     {
         var status = session.Text("status");
-        if (status == "scheduled" && CareerApplication.Date(session.Text("end_at")) is { } end && end <= (now ?? DateTimeOffset.Now)) return "completed";
+        if (status == "scheduled" && CareerApplication.Date(session.Text("end_at")) is { } end && end <= (now ?? Beijing.Now)) return "completed";
         return status;
     }
 
@@ -247,8 +247,8 @@ public sealed class CareerDetailModel
 
     public CareerDetailModel(JsonNode app, IEnumerable<JsonNode> all, DateTimeOffset? now = null, TimeZoneInfo? zone = null)
     {
-        var at = now ?? DateTimeOffset.Now;
-        var tz = zone ?? TimeZoneInfo.Local;
+        var at = now ?? Beijing.Now;
+        var tz = zone ?? Beijing.Zone;
         string Md(string raw) => CareerFormat.MonthDay(raw, tz);
         int Days(string raw) => CareerApplication.Date(raw) is { } date ? Math.Max(0, CareerFormat.Days(date, at, tz)) : 0;
         var columnKey = Column(app);

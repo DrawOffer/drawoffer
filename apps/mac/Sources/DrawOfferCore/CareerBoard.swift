@@ -26,7 +26,7 @@ public enum CareerBoard {
         return label == "待投递" ? "待投递" : "筛选中"
     }
 
-    static func stableType(_ raw: JSONValue) -> String {
+    public static func stableType(_ raw: JSONValue) -> String {
         if let current = raw["current_stage"], current != .null, !current.text("stage_type").isEmpty { return current.text("stage_type") }
         let type = raw.text("current_stage_type")
         if type == "hr" { return "interview" }
@@ -130,7 +130,7 @@ public enum CareerBoard {
     }
 
     /// `applicationCardTimeLabel`: hover text under the card status.
-    public static func cardTime(_ raw: JSONValue, calendar: Calendar = .current) -> String {
+    public static func cardTime(_ raw: JSONValue, calendar: Calendar = Beijing.calendar) -> String {
         let value = projection(raw)
         func stamp(_ field: String) -> String? { CareerApplication.date(raw.text(field)).map { dateTime($0, calendar: calendar) } }
         switch value.column {
@@ -153,7 +153,7 @@ public enum CareerBoard {
     }
 
     /// `formatApplicationSessionRange`: the list view's 最近安排 cell.
-    public static func sessionRange(_ session: JSONValue, calendar: Calendar = .current) -> String {
+    public static func sessionRange(_ session: JSONValue, calendar: Calendar = Beijing.calendar) -> String {
         guard let start = CareerApplication.date(session.text("start_at")), let end = CareerApplication.date(session.text("end_at")) else { return "—" }
         let tail = calendar.isDate(start, inSameDayAs: end)
             ? CareerFormat.two(calendar.component(.hour, from: end)) + ":" + CareerFormat.two(calendar.component(.minute, from: end))
@@ -162,7 +162,7 @@ public enum CareerBoard {
     }
 
     /// `todayScheduleLabel`: the black “今天 HH:mm” pill for a stage that starts later today.
-    public static func today(_ raw: JSONValue, now: Date = Date(), calendar: Calendar = .current) -> String? {
+    public static func today(_ raw: JSONValue, now: Date = Date(), calendar: Calendar = Beijing.calendar) -> String? {
         guard scheduled.contains(projection(raw).column),
               let start = CareerApplication.date(raw.text("next_session_start_at")), start > now,
               calendar.isDate(start, inSameDayAs: now) else { return nil }
@@ -170,7 +170,7 @@ public enum CareerBoard {
     }
 
     /// `formatApplicationUpdatedAt`: 今天 / 昨天 / M月d日.
-    public static func relativeDay(_ text: String, now: Date = Date(), calendar: Calendar = .current) -> String? {
+    public static func relativeDay(_ text: String, now: Date = Date(), calendar: Calendar = Beijing.calendar) -> String? {
         guard let date = CareerApplication.date(text) else { return nil }
         let time = CareerFormat.two(calendar.component(.hour, from: date)) + ":" + CareerFormat.two(calendar.component(.minute, from: date))
         if calendar.isDate(date, inSameDayAs: now) { return "今天 " + time }

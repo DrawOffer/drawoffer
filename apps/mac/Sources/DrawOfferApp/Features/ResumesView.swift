@@ -14,8 +14,13 @@ struct ResumesView: View {
     @Binding var editResumeID: String?
     let browse: () -> Void
     let login: () -> Void
+    /// 首页“选择文件”：每次变化打开一次导入。
+    var importRequest: UUID? = nil
 
     @State private var resumes: [ResumeSummary] = []
+    @State private var defaultID: String?
+    @State private var creating = false
+    @State private var importSheet = false
     @State private var loadedAccount: String?
     @State private var loading = false
     @State private var loadError = false
@@ -48,17 +53,17 @@ struct ResumesView: View {
     }
 
     private var listPage: some View {
-        ScrollView {
+        // `.hv3-page`：顶部 51（内容卡自带 1px 描边，合起来是画板的 52）
+        V3Page(top: 51) {
             VStack(alignment: .leading, spacing: 0) {
                 V3PageHead(eyebrow: ["RESUMES", account.isEmpty ? "游客预览" : loaded ? "\(resumes.count) 份" : "个人工作区"],
-                           title: "我的简历", subtitle: atLimit ? "已达到 \(ResumeRequest.maximumPerUser) 份上限。删除不用的简历后，才能新建或复制。" : "每份简历独立编辑，需要时复制一份按岗位修改。") {
-                    if !account.isEmpty {
-                        Button { Task { await importFile() } } label: { Label(importing ? "正在上传…" : "导入简历", systemImage: "square.and.arrow.up") }
-                            .buttonStyle(V3ButtonStyle(kind: .ghost)).disabled(atLimit || importing)
-                            .help(atLimit ? "已达 \(ResumeRequest.maximumPerUser) 份上限" : "导入 Markdown、DOCX 或 PDF 简历")
-                        Button(action: browse) { Label("新建简历", systemImage: "plus") }
-                            .buttonStyle(V3ButtonStyle(kind: .dark)).disabled(atLimit)
-                            .help(atLimit ? "已达 \(ResumeRequest.maximumPerUser) 份上限" : "选择模板新建简历")
+                           title: "我的简历", subtitle: "每份简历独立编辑，需要时复制一份按岗位修改。", compact: true) {
+                    // Web 空列表时不显示头部按钮（空态里有同样的两个入口）
+                    if !account.isEmpty && !(loaded && resumes.isEmpty && imports.isEmpty) {
+                        Button { importSheet = true } label: { Label(importing ? "正在上传…" : "导入简历", systemImage: "square.and.arrow.up") }
+                            .buttonStyle(V3ButtonStyle(kind: .ghost)).disabled(importing)
+                        Button(action: checkCapacityThenBrowse) { Label("新建简历", systemImage: "plus") }
+                            .buttonStyle(V3ButtonStyle(kind: .dark))
                     }
                 }
                 if account.isEmpty { GuestResumesEmpty(browse: browse, login: login) }
@@ -74,11 +79,18 @@ struct ResumesView: View {
                             .buttonStyle(.plain).foregroundStyle(V3.fnt).accessibilityLabel("关闭提示")
                     }.padding(.top, 16)
                 }
-            }.frame(maxWidth: 860, alignment: .leading).padding(.horizontal, 52).padding(.vertical, 20)
-                .frame(maxWidth: .infinity)
+            }
         }
         .task(id: "\(account)|\(reload)") { await load() }
         .task(id: importPoll) { if importPoll != nil { await pollImports() } }
+        .task(id: importRequest) { if importRequest != nil, !account.isEmpty { importSheet = true } }
+        .sheet(isPresented: $importSheet) {
+            ResumeImportSheet(close: { importSheet = false }, accepted: { title in
+                importSheet = false
+                notice = ("已开始导入「\(title)」，解析完成后会出现在列表中。", false)
+                Task { await loadImports(owner: account) }
+            })
+        }
         .onChange(of: account) { _, _ in
             // 退出或切换账号：清理上一账号的列表、预览与提示
             resumes = []; loadedAccount = nil; preview = nil; exportingID = nil; notice = nil; query = ""; loadError = false; imports = []
@@ -99,6 +111,12 @@ struct ResumesView: View {
                 copying = nil; notice = ("已复制为「\(title)」", false); reload = UUID()
             })
         }
+        .sheet(isPresented: $creating) {
+            ResumeCreateSheet(close: { creating = false }, created: { id in
+                creating = false; reload = UUID()
+                if !id.isEmpty { editResumeID = id }
+            })
+        }
         .sheet(item: $sharing) { resume in
             ResumeShareSheet(resume: resume, close: { sharing = nil })
         }
@@ -112,20 +130,26 @@ struct ResumesView: View {
 
     private var list: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // `.hv3-toolbar`：距头部 26、高 30；标题 16px 半粗，数字 11px；搜索 220×30、圆角 7、输入 12px
             HStack {
-                Text("全部简历 ").font(V3.sans(14, weight: .medium)) + Text("\(resumes.count)").font(V3.number(14))
+                (Text("全部简历 ").font(.system(size: 16, weight: .semibold)).foregroundStyle(V3.txt)
+                 + Text("\(resumes.count)").font(V3.number(11, weight: .medium)).foregroundStyle(V3.fnt))
                 Spacer()
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(V3.fnt)
-                    TextField("搜索简历…", text: $query).textFieldStyle(.plain).font(V3.sans(13))
-                }.padding(.horizontal, 10).frame(width: 220, height: 30)
-                    .background(V3.field, in: RoundedRectangle(cornerRadius: 8))
-                    .accessibilityLabel("搜索简历")
-            }.padding(.top, 28)
-            Divider().padding(.top, 12)
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(V3.fnt)
+                    TextField("搜索简历…", text: $query).textFieldStyle(.plain).font(V3.sans(12)).accessibilityLabel("搜索简历")
+                }.padding(.horizontal, 12).frame(width: 220, height: 30)
+                    .background(V3.field, in: RoundedRectangle(cornerRadius: 7))
+            }.frame(height: 30).padding(.top, 26)
+            Rectangle().fill(V3.line).frame(height: 1).padding(.top, 2)
             if visible.isEmpty {
-                Text("没有找到「\(query)」相关的简历").font(V3.sans(13)).foregroundStyle(V3.fnt)
-                    .frame(maxWidth: .infinity, minHeight: 160)
+                // Web `.hv3-empty.is-search`
+                VStack(spacing: 8) {
+                    Text("没有找到「\(query.trimmingCharacters(in: .whitespaces))」").font(V3.serif(18)).foregroundStyle(V3.txt)
+                    Text("试试更短的关键词，比如公司名或岗位名；也可以回到「全部」查看所有简历。").font(V3.sans(13)).foregroundStyle(V3.sub)
+                    Button { query = "" } label: { Label("清除搜索", systemImage: "magnifyingglass") }
+                        .buttonStyle(V3ButtonStyle(kind: .ghost)).padding(.top, 8)
+                }.frame(maxWidth: .infinity, minHeight: 200)
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 199), spacing: 20)], alignment: .leading, spacing: 37) {
                     if query.isEmpty {
@@ -133,19 +157,22 @@ struct ResumesView: View {
                     }
                     ForEach(visible) { resume in
                         ResumeCard(resume: resume, exporting: exportingID == resume.id, atLimit: atLimit,
+                                   isDefault: ResumeRequest.defaultResume(resumes, defaultID)?.id == resume.id,
+                                   setDefault: { Task { await setDefault(resume) } },
                                    open: { editResumeID = resume.id }, preview: { preview = resume }, export: { Task { await exportPDF(resume) } },
-                                   rename: { renaming = resume }, copy: { copying = resume },
+                                   rename: { renaming = resume }, copy: { checkCapacity { copying = resume } },
                                    share: { sharing = resume }, delete: { deleting = resume })
                     }
-                    if query.isEmpty && !atLimit {
-                        Button(action: browse) {
+                    if query.isEmpty {
+                        Button(action: checkCapacityThenBrowse) {
                             VStack(spacing: 10) {
                                 Image(systemName: "plus").font(.system(size: 20))
-                                Text("新建空白简历").font(V3.sans(13))
+                                Text("新建空白简历").font(V3.sans(12))
                             }.foregroundStyle(V3.fnt).frame(maxWidth: .infinity).aspectRatio(210.0 / 297, contentMode: .fit)
-                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(V3.cl, style: StrokeStyle(lineWidth: 1, dash: [4])))
+                                .background(.white, in: RoundedRectangle(cornerRadius: 6))
+                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(hex: 0xC9C9C3), style: StrokeStyle(lineWidth: 1, dash: [4])))
                                 .contentShape(Rectangle())
-                        }.buttonStyle(.plain).accessibilityLabel("新建简历：选择模板")
+                        }.buttonStyle(.plain).accessibilityLabel("新建空白简历")
                     }
                 }.padding(.top, 27)
             }
@@ -164,26 +191,38 @@ struct ResumesView: View {
         }.padding(.top, 55).accessibilityLabel("正在加载我的简历…")
     }
 
+    /// `.hv3-load-error`：分隔线距头部 58，下方 55 处 480 宽的卡片，150 高点阵舞台，112×36 的「重新加载」。
     private var loadFailure: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "exclamationmark.arrow.triangle.2.circlepath").font(.system(size: 30)).foregroundStyle(V3.fnt)
-            Text("简历列表没能加载出来").font(V3.serif(18))
-            Text("网络不稳定或服务暂时不可用，你的简历都还在，刷新一下试试。").font(V3.sans(13)).foregroundStyle(V3.sub)
-            Button { reload = UUID() } label: { Label("重新加载", systemImage: "arrow.clockwise") }
-                .buttonStyle(V3ButtonStyle(kind: .ghost)).disabled(loading).padding(.top, 4)
-        }.frame(maxWidth: .infinity).padding(.top, 80)
+        VStack(alignment: .leading, spacing: 0) {
+            Rectangle().fill(V3.line).frame(height: 1).padding(.top, 58)
+            V3EmptyCard(title: "简历列表没能加载出来", message: "网络不稳定或服务暂时不可用，你的简历都还在，刷新一下试试。",
+                        stageHeight: 150, width: 480, inset: 8, messageTop: 8, actionsTop: 13) {
+                Image(systemName: "exclamationmark.arrow.triangle.2.circlepath").font(.system(size: 18)).foregroundStyle(V3.sub)
+                    .frame(width: 56, height: 48).background(.white, in: RoundedRectangle(cornerRadius: 14))
+                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(V3.cl)).shadow(color: .black.opacity(0.08), radius: 6, y: 4)
+            } actions: {
+                Button { reload = UUID() } label: { Label("重新加载", systemImage: "arrow.clockwise") }
+                    .buttonStyle(V3ButtonStyle(kind: .ghost, height: 36, width: 112)).disabled(loading)
+            }.padding(.top, 55)
+        }.accessibilityElement(children: .contain)
     }
 
+    /// `.hv3-empty.is-list`：分隔线距头部 24，下方 53 处 520 宽的卡片，236 高点阵舞台，120×36 的深色「新建简历 →」与文字链「导入简历」。
     private var emptyList: some View {
-        VStack(spacing: 12) {
-            EmptyResumeArt().frame(width: 504, height: 236)
-            Text("从第一份简历开始").font(V3.serif(18))
-            Text("新建时选一套模板、起个名字；已有简历文件可以用「导入简历」。").font(V3.sans(13)).foregroundStyle(V3.sub)
-            HStack(spacing: 20) {
-                Button("新建简历 →", action: browse).buttonStyle(WebActionStyle())
-                Button("导入简历", systemImage: "square.and.arrow.up") { Task { await importFile() } }.buttonStyle(.plain).disabled(importing)
-            }.padding(.top, 8)
-        }.frame(maxWidth: .infinity).padding(.top, 42)
+        VStack(alignment: .leading, spacing: 0) {
+            Rectangle().fill(V3.line).frame(height: 1).padding(.top, 24)
+            V3EmptyCard(title: "从第一份简历开始", message: "新建时选一套模板、起个名字；已有简历文件可以用「导入简历」。",
+                        stageHeight: 236, inset: 8, messageTop: 8, actionsTop: 32) {
+                EmptyResumeArt().frame(width: 504, height: 236)
+            } actions: {
+                Button(action: checkCapacityThenBrowse) { Text("新建简历"); Image(systemName: "arrow.right").font(.system(size: 10, weight: .semibold)) }
+                    .buttonStyle(V3ButtonStyle(kind: .dark, height: 36, width: 120))
+                Button { importSheet = true } label: {
+                    HStack(spacing: 5) { Image(systemName: "square.and.arrow.up").font(.system(size: 11)); Text("导入简历") }
+                        .font(V3.sans(14, weight: .medium)).foregroundStyle(V3.sub).contentShape(Rectangle())
+                }.buttonStyle(.plain).disabled(importing)
+            }.padding(.top, 53).frame(maxWidth: .infinity)
+        }.accessibilityElement(children: .contain)
     }
 
     private func load() async {
@@ -192,10 +231,12 @@ struct ResumesView: View {
         loading = true; loadError = false
         defer { if owner == account { loading = false } }
         do {
-            let result = try await session.api.listResumes()
+            guard let client = session.api as? HTTPAPIClient else { return }
+            let page = try await client.listResumePage()
+            let result = page.resumes
             try Task.checkCancellation()
             guard owner == account else { return }
-            resumes = result; loadedAccount = owner
+            resumes = result; defaultID = page.defaultID; loadedAccount = owner
             await loadImports(owner: owner)
             if let current = preview { preview = result.first { $0.id == current.id } }
             if let focus = focusResumeID {
@@ -338,6 +379,38 @@ struct ResumesView: View {
         }
     }
 
+    /// 设为默认简历（`PUT /api/resumes/{id}/default`）：模拟面试、岗位匹配等默认用它。
+    private func setDefault(_ resume: ResumeSummary) async {
+        let owner = account
+        do {
+            _ = try await session.api.careerRequest(path: "/api/resumes/\(resume.id)/default", method: "PUT", query: [:], body: nil)
+            guard owner == account else { return }
+            defaultID = resume.id
+            notice = ("已将「\(resume.title)」设为默认简历", false)
+        } catch {
+            guard owner == account else { return }
+            if case APIError.unauthorized = error { session.reportAuthenticationFailure(); return }
+            notice = ("设为默认简历失败，请稍后重试。", true)
+        }
+    }
+
+    /// 新建前的容量预检（`GET /api/resumes/capacity`）：已达上限时提示，不进入模板页。
+    private func checkCapacityThenBrowse() { checkCapacity { creating = true } }
+
+    /// Web `requestCreation`：新建与复制前先查容量，已满或查询失败都只提示、不继续。
+    private func checkCapacity(_ proceed: @escaping @MainActor () -> Void) {
+        Task {
+            do {
+                _ = try await session.api.careerRequest(path: "/api/resumes/capacity", method: "GET", query: [:], body: nil)
+                proceed()
+            } catch APIError.server(_, "RESUME_LIMIT_REACHED") {
+                notice = ("简历数量已达上限（\(ResumeRequest.maximumPerUser) 份），请删除不需要的简历后重试。", true)
+            } catch {
+                notice = ("暂时无法检查简历数量，请稍后重试。", true)
+            }
+        }
+    }
+
     /// 与后端 Content-Disposition 一致：保留中文标题，只替换文件系统不接受的字符。
     static func fileName(_ title: String) -> String {
         let cleaned = title.map { "/:\\\0".contains($0) ? "-" : $0 }.reduce(into: "") { $0.append($1) }
@@ -352,6 +425,8 @@ private struct ResumeCard: View {
     let resume: ResumeSummary
     let exporting: Bool
     let atLimit: Bool
+    var isDefault = false
+    var setDefault: () -> Void = {}
     let open: () -> Void
     let preview: () -> Void
     let export: () -> Void
@@ -362,29 +437,36 @@ private struct ResumeCard: View {
     @State private var hovered = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        // `.hv3-card-meta`：纸面下 14、名称与时间间隔 6
+        VStack(alignment: .leading, spacing: 6) {
             ZStack(alignment: .topTrailing) {
                 Button(action: open) { ResumeThumbnail(resume: resume) }
-                    .buttonStyle(.plain).accessibilityLabel("编辑 \(resume.title)")
+                    .buttonStyle(.plain).accessibilityLabel("打开 \(resume.title)")
+                // 与 Web 同一组菜单：点卡片本身就能打开编辑，这里放「设为默认简历」（已是默认时不显示）
                 Menu {
-                    Button("编辑", systemImage: "pencil", action: open)
-                    Button("预览", systemImage: "eye", action: preview)
-                    Button("在 Web 编辑器打开", systemImage: "safari") { WebBridge.openEditor(resume.id, api: session.api) }
+                    if !isDefault { Button("设为默认简历", systemImage: "pin", action: setDefault) }
                     Button("重命名", systemImage: "character.cursor.ibeam", action: rename)
-                    Button(atLimit ? "复制为新简历（已达上限）" : "复制为新简历", systemImage: "doc.on.doc", action: copy).disabled(atLimit)
+                    Button("复制为新简历", systemImage: "doc.on.doc", action: copy)
                     Button("分享链接", systemImage: "link", action: share)
                     Button(exporting ? "正在导出…" : "导出 PDF", systemImage: "arrow.down.doc", action: export).disabled(exporting)
                     Divider()
                     Button("删除", systemImage: "trash", role: .destructive, action: delete)
-                } label: { Image(systemName: "ellipsis").font(.system(size: 12)).frame(width: 26, height: 26) }
+                } label: { Image(systemName: "ellipsis").font(.system(size: 12)).frame(width: 28, height: 28) }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                     .background(.white, in: RoundedRectangle(cornerRadius: 6))
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(V3.cl))
                     .padding(8).opacity(hovered || exporting ? 1 : 0)
                     .accessibilityLabel("更多简历操作 \(resume.title)")
             }
-            Text(resume.title).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1).help(resume.title)
-            Text(exporting ? "正在导出 PDF…" : "\(resume.updatedLabel()) · 已保存").font(V3.number(11, weight: .regular)).foregroundStyle(V3.fnt)
+            Text(resume.title).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1).frame(height: 16).help(resume.title)
+                .padding(.top, 4)
+            HStack(spacing: 6) {
+                if isDefault {
+                    Text("默认").font(V3.sans(10.5, weight: .medium)).foregroundStyle(V3.blue)
+                        .padding(.horizontal, 5).frame(height: 16).background(V3.blueSoft, in: RoundedRectangle(cornerRadius: 4))
+                }
+                Text(exporting ? "正在导出 PDF…" : "\(resume.updatedLabel()) · 已保存").font(V3.number(11, weight: .regular)).foregroundStyle(V3.fnt)
+            }
         }.onHover { hovered = $0 }
     }
 }

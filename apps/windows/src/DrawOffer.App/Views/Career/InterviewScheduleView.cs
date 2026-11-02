@@ -24,7 +24,7 @@ public sealed partial class InterviewScheduleView : UserControl
 
     readonly Action _requireAccount;
     readonly Grid _root = new();
-    DateTimeOffset _anchor = DateTimeOffset.Now;
+    DateTimeOffset _anchor = Beijing.Now;
     string _mode = "week";
     List<ScheduledInterview> _interviews = [];
     List<CareerApplication> _applications = [];
@@ -35,7 +35,7 @@ public sealed partial class InterviewScheduleView : UserControl
     string? _failure;
     int _generation;
 
-    static TimeZoneInfo Zone => TimeZoneInfo.Local;
+    static TimeZoneInfo Zone => Beijing.Zone;
     static string Account => App.Session.Phase == Core.Session.SessionViewModel.SessionPhase.SignedIn ? App.Session.User?.Id ?? "" : "";
 
     public InterviewScheduleView(Action requireAccount)
@@ -58,7 +58,7 @@ public sealed partial class InterviewScheduleView : UserControl
     static DateTimeOffset StartOfDay(DateTimeOffset date) => Resolve(Local(date).Date);
     static DateTimeOffset Plus(DateTimeOffset date, int days) => Resolve(Local(date).AddDays(days));
     static DateTimeOffset At(DateTimeOffset day, int minute) => Resolve(Local(day).Date.AddMinutes(minute));
-    static bool IsToday(DateTimeOffset date) => Local(date).Date == Local(DateTimeOffset.Now).Date;
+    static bool IsToday(DateTimeOffset date) => Local(date).Date == Local(Beijing.Now).Date;
     static string Format(DateTimeOffset date, string pattern) => Local(date).ToString(pattern, System.Globalization.CultureInfo.GetCultureInfo("zh-CN"));
 
     DateTimeOffset Week => ScheduleCalendar.WeekStart(_anchor, Zone);
@@ -141,7 +141,7 @@ public sealed partial class InterviewScheduleView : UserControl
         mode.Changed += value => { _mode = value; Render(); };
         var nav = HStack(4,
             NavButton(Icon("chevron.left", 11, Txt).Also(i => i.FontWeight = Semibold), true, "上一周期", () => Shift(-1)),
-            NavButton(Sans("今天", 12.5, Txt), false, "今天", () => { _anchor = DateTimeOffset.Now; Render(); }),
+            NavButton(Sans("今天", 12.5, Txt), false, "今天", () => { _anchor = Beijing.Now; Render(); }),
             NavButton(Icon("chevron.right", 11, Txt).Also(i => i.FontWeight = Semibold), true, "下一周期", () => Shift(1)));
         var right = HStack(8, mode, nav).Top(32);
         return Spread(left, right, 24, VerticalAlignment.Top);

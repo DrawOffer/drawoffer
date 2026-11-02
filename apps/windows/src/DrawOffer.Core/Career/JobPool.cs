@@ -33,12 +33,12 @@ public static class JobPool
     public static string? Attribute(JsonNode job, string key) => job.Get("source_attributes").Get(key).String() is { } value ? SwiftText.TrimAll(value).NonEmpty() : null;
 
     public static bool IsToday(string value, DateTimeOffset? now = null, TimeZoneInfo? zone = null) =>
-        CareerApplication.Date(value) is { } date && SwiftCalendar.SameDay(date, now ?? DateTimeOffset.Now, zone ?? TimeZoneInfo.Local);
+        CareerApplication.Date(value) is { } date && SwiftCalendar.SameDay(date, now ?? Beijing.Now, zone ?? Beijing.Zone);
 
     /// <summary>`poolRelative`：今天 / N 天前 / N 周前，之后为「10月29日」，非今年带年份。</summary>
     public static string Relative(string value, DateTimeOffset? now = null, TimeZoneInfo? zone = null)
     {
-        var at = now ?? DateTimeOffset.Now; var tz = zone ?? TimeZoneInfo.Local;
+        var at = now ?? Beijing.Now; var tz = zone ?? Beijing.Zone;
         if (CareerApplication.Date(value) is not { } date) return "";
         var days = CareerFormat.Days(date, at, tz);
         if (days <= 0) return "今天";
@@ -52,7 +52,7 @@ public static class JobPool
     /// <summary>`poolDate`：今天 / 昨天 / 2026/10/29，后接 24 小时制时间。</summary>
     public static string Date(string value, DateTimeOffset? now = null, TimeZoneInfo? zone = null)
     {
-        var at = now ?? DateTimeOffset.Now; var tz = zone ?? TimeZoneInfo.Local;
+        var at = now ?? Beijing.Now; var tz = zone ?? Beijing.Zone;
         if (CareerApplication.Date(value) is not { } date) return "尚无记录";
         var local = SwiftCalendar.Local(date, tz);
         var day = SwiftCalendar.SameDay(date, at, tz) ? "今天"

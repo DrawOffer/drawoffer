@@ -11,8 +11,13 @@ struct DesktopImage: Sendable {
     let contentType: String
 }
 
+extension PaperAssets {
+    /// 随包的模板示例头像（`/templates/avatar-*.png|svg|jpg`）。
+    public static func isBundledTemplate(_ path: String) -> Bool { bundled.contains(path) }
+}
+
 // No global/disk cache. These bytes live only in the current prepared request.
-enum PaperAssets {
+public enum PaperAssets {
     static let maximumBytes = 10 * 1024 * 1024
     static let maximumImages = 32
     static let placeholder = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGM4c+bMfwAIMANkhLK+mwAAAABJRU5ErkJggg=="

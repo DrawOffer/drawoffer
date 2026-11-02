@@ -6,7 +6,13 @@ public enum ResumeRequest {
     public static func allowed(path: String, method: String) -> Bool {
         guard path.hasPrefix("/api/"), !path.contains("//"), !path.hasSuffix("/"), !path.contains("?"), !path.contains("#"), !path.contains("..") else { return false }
         if path == "/api/resumes" { return method == "GET" || method == "POST" }
+        if path == "/api/resumes/capacity" { return method == "GET" }
         if path == "/api/resume-overview" { return method == "GET" }
+        // 单个模板（引导按模板示例的写法写新条目）
+        if path.hasPrefix("/api/resume-templates/") {
+            let id = path.dropFirst("/api/resume-templates/".count)
+            return method == "GET" && !id.isEmpty && id.count <= 20 && id.allSatisfy { $0.isASCII && $0.isNumber }
+        }
         if path.hasPrefix("/api/resume-imports/") {
             let id = path.dropFirst("/api/resume-imports/".count)
             return !id.isEmpty && id.count <= 20 && id.allSatisfy { $0.isASCII && $0.isNumber } && ["GET", "DELETE"].contains(method)
@@ -16,10 +22,26 @@ public enum ResumeRequest {
               parts[2].allSatisfy({ $0.isASCII && $0.isNumber }) else { return false }
         if parts.count == 3 { return ["GET", "PUT", "DELETE"].contains(method) }
         if parts.count == 5, parts[3] == "assets" { return method == "DELETE" && !parts[4].isEmpty && parts[4].count <= 255 }
+        if parts.count == 5, parts[3] == "guide" { return method == "POST" && ["writes", "skills:compose", "experience:compose", "profile:compose"].contains(parts[4]) }
+        if parts.count == 7, parts[3] == "section-reviews", parts[5] == "items" {
+            let id = { (value: String) in !value.isEmpty && value.count <= 64 && value.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") } }
+            return method == "PATCH" && id(parts[4]) && id(parts[6])
+        }
         guard parts.count == 4 else { return false }
         if parts[3] == "copy" || parts[3] == "apply-template" || parts[3] == "assets" { return method == "POST" }
         if parts[3] == "share" { return ["GET", "POST", "PATCH", "DELETE"].contains(method) }
+        if parts[3] == "default" { return method == "PUT" }
+        // 写作引导与段落聚焦（与后端 get_current_resume_user 白名单一致）
+        if parts[3] == "guide" { return ["GET", "PUT", "PATCH"].contains(method) }
+        if ["section-review:analyze", "section-review:rewrite"].contains(parts[3]) { return method == "POST" }
+        if parts[3] == "section-reviews" { return method == "GET" }
         return false
+    }
+
+    /// 与 Web `defaultResumeOf` 相同：服务端指定的默认简历；没有时取 id 最小（最早创建）的一份。
+    public static func defaultResume(_ resumes: [ResumeSummary], _ defaultID: String?) -> ResumeSummary? {
+        if let defaultID, let chosen = resumes.first(where: { $0.id == defaultID }) { return chosen }
+        return resumes.min { ($0.id.count, $0.id) < ($1.id.count, $1.id) }
     }
 
     /// Web `RETIRED_RESUME_TEMPLATE_KEYS`：已退出产品目录的模板不出现在可选列表。
@@ -98,7 +120,8 @@ public struct ResumeImportUpload: Sendable {
     public static let types = ["md": "text/markdown", "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "pdf": "application/pdf"]
 
     /// 读取用户选择的文件并做与后端一致的前置校验；不通过时抛出对应错误码。
-    public init(file: URL, templateID: String?, idempotencyKey: String = UUID().uuidString.lowercased()) throws {
+    /// `title` 不为空时与 Web `buildNamedImportFile` 一致：上传文件名改为“标题 + 原扩展名”，后端据此命名简历。
+    public init(file: URL, templateID: String?, title: String? = nil, idempotencyKey: String = UUID().uuidString.lowercased()) throws {
         let ext = file.pathExtension.lowercased()
         guard let type = Self.types[ext] else { throw APIError.server(status: 415, code: "UNSUPPORTED_IMPORT_FORMAT") }
         let handle = try FileHandle(forReadingFrom: file)
@@ -106,8 +129,17 @@ public struct ResumeImportUpload: Sendable {
         let data = try handle.read(upToCount: Self.maximumBytes + 1) ?? Data()
         guard !data.isEmpty else { throw APIError.server(status: 400, code: "EMPTY_IMPORT_FILE") }
         guard data.count <= Self.maximumBytes else { throw APIError.server(status: 413, code: "IMPORT_FILE_TOO_LARGE") }
-        fileName = file.lastPathComponent; contentType = type; content = data
+        let named = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        fileName = named.isEmpty ? file.lastPathComponent : named + "." + ext; contentType = type; content = data
         self.templateID = templateID; self.idempotencyKey = idempotencyKey
+    }
+
+    /// 与 Web `validateImportTitle` 相同：不能为空，不能含路径符号或控制字符。
+    public static func titleError(_ title: String) -> String? {
+        let value = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.isEmpty { return "请输入简历名称。" }
+        if value.contains("/") || value.contains("\\") || value.unicodeScalars.contains(where: { $0.value < 32 }) { return "简历名称不能包含路径符号或控制字符。" }
+        return nil
     }
 
     public static func errorMessage(_ error: Error) -> String {

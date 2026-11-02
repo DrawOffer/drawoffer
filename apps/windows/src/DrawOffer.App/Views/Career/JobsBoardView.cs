@@ -164,7 +164,7 @@ public sealed partial class JobsBoardView : UserControl
         get
         {
             // Calendar.firstWeekday = 2：周一为一周开始
-            var today = DateTimeOffset.Now;
+            var today = Beijing.Now;
             var start = new DateTimeOffset(today.Date, today.Offset);
             return start.AddDays(-(((int)today.DayOfWeek + 6) % 7));
         }
@@ -720,7 +720,7 @@ public sealed partial class JobsBoardView : UserControl
 
     /// <summary>`TimeZone.current.identifier`：后端要 IANA 名；Windows 时区先转 IANA，转不了时用原名。</summary>
     internal static string TimeZoneId() =>
-        TimeZoneInfo.TryConvertWindowsIdToIanaId(TimeZoneInfo.Local.Id, out var iana) ? iana : TimeZoneInfo.Local.Id;
+        TimeZoneInfo.TryConvertWindowsIdToIanaId(Beijing.Zone.Id, out var iana) ? iana : Beijing.Zone.Id;
 }
 
 /// <summary>`EmptyBoardArt`（Mac `CareerEmptyBoardArt`）：544×216，四个迷你栏目、一张示例卡与插件角标。</summary>

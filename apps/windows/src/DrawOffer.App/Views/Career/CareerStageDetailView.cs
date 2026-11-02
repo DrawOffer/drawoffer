@@ -29,7 +29,7 @@ public sealed partial class CareerStageDetailView : UserControl
     string? _notice;
     bool _expanded;
     bool _busy;
-    DateTimeOffset _now = DateTimeOffset.Now;
+    DateTimeOffset _now = Beijing.Now;
     int _request;
     bool _alive = true;
     DispatcherTimer? _poll;

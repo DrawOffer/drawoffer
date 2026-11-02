@@ -156,7 +156,7 @@ public sealed partial class CareerForm
                     row.Children.Add(SystemButton(title, () =>
                     {
                         _editingSession = session; _sessionCommand = key; _commandPayload = null;
-                        _start = CareerApplication.Date(session.Text("start_at")) ?? DateTimeOffset.Now;
+                        _start = CareerApplication.Date(session.Text("start_at")) ?? Beijing.Now;
                         _end = CareerApplication.Date(session.Text("end_at")) ?? _start.AddSeconds(3600);
                         Render();
                     }, !_busy));

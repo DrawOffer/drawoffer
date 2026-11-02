@@ -28,7 +28,7 @@ public sealed class CareerRescheduleSheet : UserControl
         _session = session;
         _close = close;
         _saved = saved;
-        var start = CareerApplication.Date(session.Text("start_at")) ?? DateTimeOffset.Now;
+        var start = CareerApplication.Date(session.Text("start_at")) ?? Beijing.Now;
         var end = CareerApplication.Date(session.Text("end_at")) ?? start.AddHours(1);
         Set(_startDate, _startTime, start);
         Set(_endDate, _endTime, end);
@@ -37,16 +37,16 @@ public sealed class CareerRescheduleSheet : UserControl
 
     static void Set(CalendarDatePicker date, TimePicker time, DateTimeOffset value)
     {
-        var local = TimeZoneInfo.ConvertTime(value, TimeZoneInfo.Local);
+        var local = TimeZoneInfo.ConvertTime(value, Beijing.Zone);
         date.Date = local.Date;
         time.Time = local.TimeOfDay;
     }
 
     static DateTimeOffset Read(CalendarDatePicker date, TimePicker time)
     {
-        var day = (date.Date ?? DateTimeOffset.Now).Date;
+        var day = (date.Date ?? Beijing.Now).Date;
         var local = DateTime.SpecifyKind(day + time.Time, DateTimeKind.Unspecified);
-        return new DateTimeOffset(local, TimeZoneInfo.Local.GetUtcOffset(local));
+        return new DateTimeOffset(local, Beijing.Zone.GetUtcOffset(local));
     }
 
     void Render()
@@ -83,7 +83,7 @@ public sealed class CareerRescheduleSheet : UserControl
             ["base_lock_version"] = _session.Get("lock_version")?.DeepClone() ?? 1,
             ["start_at"] = start.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture),
             ["end_at"] = end.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture),
-            ["timezone"] = TimeZoneInfo.TryConvertWindowsIdToIanaId(TimeZoneInfo.Local.Id, out var iana) ? iana : TimeZoneInfo.Local.Id,
+            ["timezone"] = TimeZoneInfo.TryConvertWindowsIdToIanaId(Beijing.Zone.Id, out var iana) ? iana : Beijing.Zone.Id,
         };
         try
         {

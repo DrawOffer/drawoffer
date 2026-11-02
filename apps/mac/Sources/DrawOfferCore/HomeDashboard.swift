@@ -30,7 +30,7 @@ public struct HomeDashboard: Sendable {
     static let resumeTodoThreshold = 90
     static let day: TimeInterval = 86_400
 
-    public static func build(now: Date, resumes: [ResumeSummary], sessions: [JSONValue], applications: [JSONValue], calendar: Calendar = .current) -> HomeDashboard {
+    public static func build(now: Date, resumes: [ResumeSummary], sessions: [JSONValue], applications: [JSONValue], calendar: Calendar = Beijing.calendar) -> HomeDashboard {
         guard let recent = latestResume(resumes) else {
             return HomeDashboard(variant: .new, cards: [.firstResume, .target, .plugin], todayCount: 0, offerCompany: nil, deadline: nil)
         }
@@ -105,7 +105,7 @@ public struct HomeDashboard: Sendable {
         resumes.max { (date($0.updatedAt) ?? .distantPast) < (date($1.updatedAt) ?? .distantPast) }
     }
 
-    public static func startOfWeek(_ date: Date, calendar: Calendar = .current) -> Date {
+    public static func startOfWeek(_ date: Date, calendar: Calendar = Beijing.calendar) -> Date {
         let start = calendar.startOfDay(for: date)
         let weekday = calendar.component(.weekday, from: start) // 1 = Sunday
         let offset = (weekday + 5) % 7 // Monday = 0
@@ -131,7 +131,7 @@ public struct HomeDashboard: Sendable {
     static func offerDate(_ value: String) -> Date? {
         let parts = value.split(separator: "-").compactMap { Int($0) }
         guard parts.count == 3 else { return nil }
-        return Calendar.current.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
+        return Beijing.calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
     }
 
     static func pipelineHint(_ active: [JSONValue], now: Date) -> String {

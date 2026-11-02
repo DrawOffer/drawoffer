@@ -140,7 +140,7 @@ public sealed partial class CareerStageDetailView
             var result = await App.Session.Api.CareerRequestAsync($"/api/interview-sessions/{_sessionId}");
             if (request != _request || !_alive) return;
             if (result.Get("session").Text("id").Length == 0) throw new InvalidDataException();
-            _detail = result; _now = DateTimeOffset.Now;
+            _detail = result; _now = Beijing.Now;
         }
         catch (OperationCanceledException) { return; }
         catch (Exception error)

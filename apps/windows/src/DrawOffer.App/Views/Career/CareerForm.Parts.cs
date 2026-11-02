@@ -246,14 +246,14 @@ public sealed partial class CareerForm
     /// <summary>`DatePicker(selection:)`：日期 + 时间。</summary>
     static FrameworkElement DateTimeField(DateTimeOffset value, Action<DateTimeOffset> changed, bool enabled = true)
     {
-        var current = value.ToLocalTime();
+        var current = value.ToBeijing();
         var date = new CalendarDatePicker { Date = current, Height = 40, FontSize = 13, IsEnabled = enabled };
         var time = new TimePicker { Time = current.TimeOfDay, ClockIdentifier = "24HourClock", MinWidth = 0, IsEnabled = enabled };
         void Push()
         {
             var day = date.Date ?? current;
             var local = day.Date + time.Time;
-            changed(new DateTimeOffset(local, TimeZoneInfo.Local.GetUtcOffset(local)));
+            changed(new DateTimeOffset(local, Beijing.Zone.GetUtcOffset(local)));
         }
         date.DateChanged += (_, _) => Push();
         time.TimeChanged += (_, _) => Push();

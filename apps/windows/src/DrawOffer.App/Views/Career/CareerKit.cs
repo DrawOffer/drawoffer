@@ -161,7 +161,7 @@ internal static class CareerKit
     public static DateTimeOffset Local(DateTime wall)
     {
         var unspecified = DateTime.SpecifyKind(wall, DateTimeKind.Unspecified);
-        return new DateTimeOffset(unspecified, TimeZoneInfo.Local.GetUtcOffset(unspecified));
+        return new DateTimeOffset(unspecified, Beijing.Zone.GetUtcOffset(unspecified));
     }
 
     /// <summary>`String(format: "%02d:%02d", s / 60, s % 60)`。</summary>

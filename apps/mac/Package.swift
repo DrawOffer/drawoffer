@@ -20,12 +20,12 @@ let package = Package(
         .target(
             name: "DrawOfferRender",
             dependencies: ["DrawOfferCore"],
-            resources: [.copy("Resources/paper.html")]
+            resources: [.copy("Resources/paper.html"), .copy("Resources/editor.html"), .copy("Resources/templates")]
         ),
         .executableTarget(
             name: "DrawOfferApp",
             dependencies: ["DrawOfferCore", "DrawOfferRender"],
-            resources: [.copy("Resources/Branding"), .copy("Resources/Home"), .copy("Resources/Library"), .copy("Resources/Career"), .copy("Resources/AppIcon.png")]
+            resources: [.copy("Resources/Branding"), .copy("Resources/Home"), .copy("Resources/Library"), .copy("Resources/Career"), .copy("Resources/Models"), .copy("Resources/AppIcon.png")]
         ),
         .testTarget(
             name: "DrawOfferCoreTests",

@@ -26,7 +26,7 @@ public sealed partial class CareerForm : UserControl
     string _kind = "";
     CareerApplication? _current;
     string _selectedExisting = "";
-    DateTimeOffset _appliedAt = DateTimeOffset.Now;
+    DateTimeOffset _appliedAt = Beijing.Now;
     List<JsonNode> _resumes = [];
     string _selectedResume = "";
     string _company = "", _role = "", _description = "", _category = "", _city = "";
@@ -35,24 +35,24 @@ public sealed partial class CareerForm : UserControl
     bool _slotSet, _deadlineSet;
     int _duration = 60, _planDuration = 60;
     string _interviewer = "", _prepNote = "";
-    DateTimeOffset _ocAt = DateTimeOffset.Now;
+    DateTimeOffset _ocAt = Beijing.Now;
     bool _ocAtSet;
     string _ocStartText = "", _ocNote = "";
     bool _reuseCurrentStage, _allowConflict;
     string _interviewMode = "video";
-    DateTimeOffset _start = DateTimeOffset.Now, _end = DateTimeOffset.Now.AddSeconds(3600);
+    DateTimeOffset _start = Beijing.Now, _end = Beijing.Now.AddSeconds(3600);
     bool _window, _planSet;
-    DateTimeOffset _planStart = DateTimeOffset.Now;
+    DateTimeOffset _planStart = Beijing.Now;
     JsonNode? _createdSession;
     bool _savedPlan;
     JsonNode? _frozenPlan;
     string _meeting = "";
     string _reason = "user_withdrew";
-    DateTimeOffset _offerReceived = DateTimeOffset.Now;
+    DateTimeOffset _offerReceived = Beijing.Now;
     bool _replySet;
-    DateTimeOffset _replyDate = DateTimeOffset.Now;
+    DateTimeOffset _replyDate = Beijing.Now;
     bool _startSet;
-    DateTimeOffset _startDate = DateTimeOffset.Now;
+    DateTimeOffset _startDate = Beijing.Now;
     string _ocContact = "", _probation = "", _offerMaterials = "", _salaryDescription = "", _channel = "", _oralSalary = "";
     string _offerIntent = "none", _offerSalary = "", _offerBase = "", _currency = "CNY", _salaryPeriod = "month", _benefits = "", _notes = "";
     bool _busy;
@@ -124,7 +124,7 @@ public sealed partial class CareerForm : UserControl
     bool HasScheduleDetails => _slotSet || _deadlineSet || new[] { _meeting, _prepNote, _interviewer }.Any(x => x.Trim().Length > 0);
     bool ScheduleRequired => _kind is "schedule-current" or "schedule" or "arranged";
     DateTimeOffset PlanFinish => _planStart.AddMinutes(_planDuration);
-    DateTimeOffset SessionStart => IsWindow && !_slotSet ? DateTimeOffset.Now : _start;
+    DateTimeOffset SessionStart => IsWindow && !_slotSet ? Beijing.Now : _start;
     /// <summary>发给接口的阶段类型：HR 面与 OC 有自己的类型。</summary>
     string StageType => _stage == "interview" && _label == "HR 面" ? "hr" : _stage == "offer" && _offerIntent == "none" ? "oc" : _stage;
 
@@ -204,7 +204,7 @@ public sealed partial class CareerForm : UserControl
         ["收到日期"] = "", ["回复截止"] = "", ["预计入职"] = "", ["试用期"] = "", ["Offer 材料"] = _offerMaterials, ["薪酬说明"] = _salaryDescription,
     }, _current?.Raw.Text("notes") ?? "");
 
-    static string CalendarDay(DateTimeOffset date) => date.ToLocalTime().ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+    static string CalendarDay(DateTimeOffset date) => date.ToBeijing().ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
     static string Iso(DateTimeOffset date) => date.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture);
 
     static string DefaultRound(CareerApplication? app) =>
@@ -245,8 +245,8 @@ public sealed partial class CareerForm : UserControl
 
     string FooterHint => !NeedsStage || _stage is "offer" or "screening" ? "" : IsWindow ? "快速选择从现在开始算" : "保存后可在面试日程中调整";
 
-    static string? ShortDay(DateTimeOffset? date) => date?.ToLocalTime().ToString("MM-dd", System.Globalization.CultureInfo.InvariantCulture);
-    static string ListDateTime(DateTimeOffset date) => date.ToLocalTime().ToString("M月d日 HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+    static string? ShortDay(DateTimeOffset? date) => date?.ToBeijing().ToString("MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+    static string ListDateTime(DateTimeOffset date) => date.ToBeijing().ToString("M月d日 HH:mm", System.Globalization.CultureInfo.InvariantCulture);
 
     // MARK: 请求
 

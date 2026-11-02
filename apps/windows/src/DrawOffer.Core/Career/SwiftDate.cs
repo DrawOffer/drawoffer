@@ -14,7 +14,7 @@ internal static class SwiftDate
     static readonly Regex Internet = new(@"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|z|[+-]\d{2}(?::?\d{2})?)$", RegexOptions.CultureInvariant);
     static readonly Regex Local = new(@"^(\d{4})-(\d{1,2})-(\d{1,2})T(\d{1,2}):(\d{1,2}):(\d{1,2})(?:\.(\d+))?$", RegexOptions.CultureInvariant);
 
-    public static DateTimeOffset? Parse(string text) => Parse(text, TimeZoneInfo.Local);
+    public static DateTimeOffset? Parse(string text) => Parse(text, Beijing.Zone);
 
     public static DateTimeOffset? Parse(string text, TimeZoneInfo localZone)
     {
