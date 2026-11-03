@@ -31,6 +31,18 @@ public sealed class DesktopLoginChallenge
         => (Qrcode, Verifier, Generation) = (qrcode, verifier, generation);
 }
 
+/// <summary>浏览器登录的一次挑战（对应 Mac `BrowserLoginChallenge`）：verifier 只留在本进程内存，浏览器只拿到 S256 challenge 与随机 state。</summary>
+public sealed class BrowserLoginChallenge
+{
+    public Uri AuthorizeUri { get; }
+    public string State { get; }
+    internal string Verifier { get; }
+    internal string RequestId { get; } = Guid.NewGuid().ToString();
+    internal Guid Generation { get; }
+    internal BrowserLoginChallenge(Uri authorize, string state, string verifier, Guid generation)
+        => (AuthorizeUri, State, Verifier, Generation) = (authorize, state, verifier, generation);
+}
+
 public sealed class SessionCoordinator(IDesktopTransport transport, ITokenStore tokens)
 {
     private readonly object _gate = new();
@@ -44,7 +56,9 @@ public sealed class SessionCoordinator(IDesktopTransport transport, ITokenStore 
     private (string RequestId, Task<TokenEnvelope> Task)? _exchange;
     private (Guid Id, DesktopCredentialRecord? Saved, Task<TokenEnvelope>? Refresh, Task<TokenEnvelope>? Exchange)? _logoutRecovery;
     private Task? _logoutFlight;
+    private BrowserLoginChallenge? _browser;
 
+    public Uri Origin => transport.Origin;
     private sealed record TokenEnvelope(
         [property: JsonPropertyName("user")] User User,
         [property: JsonPropertyName("access_token")] string AccessToken,
@@ -57,6 +71,53 @@ public sealed class SessionCoordinator(IDesktopTransport transport, ITokenStore 
         var result = await transport.SendAsync("/api/auth/desktop/capabilities", ct: ct);
         if (result["session_protocol"]?.GetValue<int>() != 1) throw new JsonException("Unsupported session protocol");
         return result;
+    }
+
+    /// <summary>生成浏览器授权地址 `/desktop-login?challenge&amp;state&amp;platform&amp;client_version`；新的挑战先退出旧会话，并使之前的挑战失效。</summary>
+    public async Task<BrowserLoginChallenge> BeginBrowserLoginAsync(string clientVersion, CancellationToken ct = default)
+    {
+        var generation = Guid.NewGuid();
+        await SignOutAsync(generation);
+        lock (_gate)
+        {
+            if (_generation != generation) throw InvalidSession();
+            _disabled = false;
+            var verifier = Base64Url(RandomNumberGenerator.GetBytes(32));
+            var state = Base64Url(RandomNumberGenerator.GetBytes(24));
+            var challenge = Base64Url(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)));
+            var query = string.Join("&", new[] { ("challenge", challenge), ("state", state), ("platform", "windows"), ("client_version", clientVersion) }
+                .Select(x => x.Item1 + "=" + Uri.EscapeDataString(x.Item2)));
+            _browser = new BrowserLoginChallenge(new Uri(transport.Origin, "desktop-login?" + query), state, verifier, generation);
+            return _browser;
+        }
+    }
+
+    /// <summary>处理 `drawoffer://auth/callback?code&amp;state`：state 必须与当前挑战一致，授权码只换取一次。</summary>
+    public async Task<User> CompleteBrowserLoginAsync(Uri callback, CancellationToken ct = default)
+    {
+        BrowserLoginChallenge challenge;
+        lock (_gate)
+        {
+            challenge = _browser ?? throw InvalidSession();
+            CheckGeneration(challenge.Generation);
+        }
+        var items = BrowserCallback.Parse(callback);
+        if (items is null || !items.TryGetValue("state", out var state) || state != challenge.State
+            || !items.TryGetValue("code", out var code) || code.Length is 0 or > 128)
+            throw new ApiException(HttpStatusCode.BadRequest, "LOGIN_CALLBACK_INVALID");
+        var envelope = Decode(await transport.SendAsync("/api/auth/desktop/browser/exchange", new()
+        {
+            ["code"] = code, ["code_verifier"] = challenge.Verifier, ["request_id"] = challenge.RequestId,
+        }, ct: ct));
+        lock (_gate)
+        {
+            ct.ThrowIfCancellationRequested();
+            CheckGeneration(challenge.Generation);
+            if (_browser?.State != challenge.State) throw InvalidSession();
+            Persist(envelope, null);
+            _browser = null;
+        }
+        return envelope.User;
     }
 
     public async Task<DesktopLoginChallenge> BeginLoginAsync(string clientVersion, CancellationToken ct = default)
@@ -157,10 +218,84 @@ public sealed class SessionCoordinator(IDesktopTransport transport, ITokenStore 
     }
 
     public Task<JsonNode> UploadDatasetAsync(DatasetUpload upload,CancellationToken ct=default) => AuthorizedAsync((access,token)=>transport.UploadDatasetAsync(upload,access,token),ct);
+
+    /// <summary>上传到面试阶段（Mac `uploadDataset` 带 `session` 的分支）。</summary>
+    public Task<JsonNode> UploadSessionAssetAsync(string session,DatasetUpload upload,CancellationToken ct=default) => AuthorizedAsync((access,token)=>transport.UploadSessionAssetAsync(session,upload,access,token),ct);
+
+    /// <summary>AI 助手 SSE（Mac `streamAgent`）：只在开始响应前处理 401 续期；已开始的流不重放，避免重复提交消息（消息自带幂等键）。</summary>
+    public async Task StreamAgentAsync(string path, string method, JsonNode? body, Func<string, Task<bool>> onFrame, CancellationToken ct = default)
+    {
+        Guid generation;
+        lock (_gate) { if (_disabled) throw InvalidSession(); generation = _generation; }
+        await AuthorizedAsync(async (access, token) => { await transport.StreamAgentAsync(path, method, body, access, onFrame, token); return true; }, ct);
+        lock (_gate) { CheckGeneration(generation); }
+    }
+
+    public Task<JsonNode> UploadAgentAttachmentAsync(string session, string fileName, byte[] content, string id, CancellationToken ct = default)
+        => AuthorizedAsync((access, token) => transport.UploadAgentAttachmentAsync(session, fileName, content, id, access, token), ct);
+
+    public Task<JsonNode> ImportResumeAsync(string fileName, string contentType, byte[] content, string? templateId, string idempotencyKey, CancellationToken ct = default)
+        => AuthorizedAsync((access, token) => transport.ImportResumeAsync(fileName, contentType, content, templateId, idempotencyKey, access, token), ct);
+
+    /// <summary>单份 PDF 最多 20 MiB，只保存在内存，由界面写到用户选择的位置（Mac `downloadResumePDF`）。</summary>
+    public async Task<byte[]> DownloadResumePdfAsync(string id, int lockVersion, CancellationToken ct = default)
+    {
+        Guid generation;
+        lock (_gate) { if (_disabled) throw InvalidSession(); generation = _generation; }
+        var data = await AuthorizedAsync((access, token) => transport.DownloadResumePdfAsync(id, lockVersion, 20 * 1024 * 1024, access, token), ct);
+        lock (_gate) { CheckGeneration(generation); }
+        return data;
+    }
+
+    public Task<byte[]> MockAudioAsync(string path, string method, JsonNode? body, CancellationToken ct = default)
+        => AuthorizedAsync((access, token) => transport.MockAudioAsync(path, method, body, access, token), ct);
+
+    /// <summary>打开识别 WebSocket 前先确保 access 有效；握手失败（4401）由界面按登录失效处理。</summary>
+    public Task<System.Net.WebSockets.ClientWebSocket> SpeechSocketAsync(string interviewId, string questionId, string purpose, CancellationToken ct = default)
+    {
+        IReadOnlyDictionary<string, string> query = questionId.Length == 0
+            ? new Dictionary<string, string> { ["purpose"] = purpose }
+            : new Dictionary<string, string> { ["question_id"] = questionId, ["purpose"] = purpose };
+        return AuthorizedAsync((access, token) => transport.SpeechSocketAsync(interviewId, query, access, token), ct);
+    }
+
+    /// <summary>可编辑纸面里的简历图片：与纸面预览同一路径白名单，只接受 PNG/JPEG，单张最多 10 MiB，不缓存（Mac `resumeImage`）。</summary>
+    public async Task<DesktopImage> ResumeImageAsync(string path, CancellationToken ct = default)
+    {
+        Guid generation;
+        string checkedPath;
+        lock (_gate)
+        {
+            if (_disabled) throw InvalidSession();
+            generation = _generation;
+            checkedPath = PaperAssets.PathFor(path, tokens.Load(_scope)?.AccountId ?? throw InvalidSession());
+        }
+        var image = await AuthorizedAsync((access, token) => transport.DownloadImageAsync(checkedPath, PaperAssets.MaximumBytes, access, token), ct);
+        lock (_gate) { ct.ThrowIfCancellationRequested(); CheckGeneration(generation); }
+        return image;
+    }
     public async Task<DatasetFile> DownloadDatasetAsync(string id,long limit,CancellationToken ct=default) {
         var directory=DatasetUpload.PrivateDirectory();var target=Path.Combine(directory,"source");
         try{await AuthorizedAsync(async(access,token)=>{await transport.DownloadDatasetAsync(id,target,limit,access,token);return true;},ct);return new(target,directory);}
         catch{Directory.Delete(directory,true);throw;}
+    }
+
+    /// <summary>本人头像（`/api/assets/users/{本人}/assets/...`），只接受当前账号路径与 PNG/JPEG，最多 4 MiB，不缓存（Mac `accountAvatar`）。</summary>
+    public async Task<byte[]> AccountAvatarAsync(string path, CancellationToken ct = default)
+    {
+        Guid generation;
+        string checkedPath;
+        lock (_gate)
+        {
+            if (_disabled) throw InvalidSession();
+            generation = _generation;
+            var account = tokens.Load(_scope)?.AccountId ?? throw InvalidSession();
+            checkedPath = PaperAssets.PathFor(path, account);
+            if (!checkedPath.StartsWith($"/api/assets/users/{account}/assets/", StringComparison.Ordinal)) throw new InvalidDataException();
+        }
+        var image = await AuthorizedAsync((access, inner) => transport.DownloadImageAsync(checkedPath, 4 * 1024 * 1024, access, inner), ct);
+        lock (_gate) { ct.ThrowIfCancellationRequested(); CheckGeneration(generation); }
+        return image.Data;
     }
 
     public async Task<PaperPreparation> PreparePaperAsync(ResumeRenderRequest request, CancellationToken ct = default)

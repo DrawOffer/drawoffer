@@ -85,9 +85,45 @@ public sealed partial class ResumePaperView : UserControl
                 RenderFailed?.Invoke(this, message.RootElement.GetProperty("message").GetString() ?? "纸面预览失败，请重试。");
                 break;
             case "rendered":
+                _rendered = true;
+                ApplyHighlights();
                 Rendered?.Invoke(this, message.RootElement.GetProperty("heightPx").GetDouble());
                 break;
         }
+    }
+
+    private bool _rendered;
+    private IReadOnlyList<string> _highlights = [];
+
+    /// <summary>
+    /// 纸面上包含这些文字的段落与列表项加底色标出（AI 待确认修改的原文，Mac `setHighlights`）。
+    /// 只改元素的内联样式（CSSOM 不受页面 CSP 限制），文字列表经 System.Text.Json 编码为 JS 字面量。
+    /// </summary>
+    public void SetHighlights(IReadOnlyList<string> next)
+    {
+        if (next.SequenceEqual(_highlights)) return;
+        _highlights = next;
+        if (_rendered) ApplyHighlights();
+    }
+
+    private void ApplyHighlights()
+    {
+        if (!_ready || _webView.CoreWebView2 is null) return;
+        var json = JsonSerializer.Serialize(_highlights.Select(x => x.Trim()).Where(x => x.Length > 0).ToArray());
+        _ = _webView.CoreWebView2.ExecuteScriptAsync(@"(function (texts) {
+  var root = document.getElementById(""paper-root""); if (!root) return 0;
+  root.querySelectorAll(""[data-lr-pending]"").forEach(function (node) {
+    node.removeAttribute(""data-lr-pending""); node.style.backgroundColor = """"; node.style.boxShadow = """"; node.style.borderRadius = """";
+  });
+  var hits = Array.prototype.filter.call(root.querySelectorAll(""p, li""), function (node) {
+    return texts.some(function (text) { return (node.textContent || """").indexOf(text) >= 0; });
+  });
+  hits.forEach(function (node) {
+    node.setAttribute(""data-lr-pending"", """");
+    node.style.backgroundColor = ""rgba(255, 204, 0, 0.28)""; node.style.boxShadow = ""0 0 0 2px rgba(255, 204, 0, 0.28)""; node.style.borderRadius = ""2px"";
+  });
+  return hits.length;
+})(" + json + ")");
     }
 
     private void Flush()

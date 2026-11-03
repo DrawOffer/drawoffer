@@ -15,7 +15,8 @@ public static class DatasetRequest {
     }
 }
 public sealed record DatasetRecord(JsonNode Raw){
-    public string Text(string key)=>Raw[key]?.GetValue<string>()??"";
+    public string Text(string key) => Raw[key] is JsonValue value ? value.GetValueKind() == System.Text.Json.JsonValueKind.String ? value.GetValue<string>() : value.GetValueKind() == System.Text.Json.JsonValueKind.Number ? value.ToJsonString() : "" : "";
+    public string DisplayName { get { var suffix = "." + Text("file_format"); return suffix.Length > 1 && Name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase) ? Name[..^suffix.Length] : Name; } }
     public string Id=>Text("id");public string Name=>Text("file_name");public string Folder=>Text("folder_id");public string Format=>Text("file_format").ToUpperInvariant();
     public bool Media=>Text("asset_kind") is "audio" or "video";public bool Ready=>Text("upload_status")=="succeeded"&&(Media||Text("parse_status")=="succeeded");
     public bool Busy=>Text("upload_status")=="uploading"||Text("parse_status") is "queued" or "processing";

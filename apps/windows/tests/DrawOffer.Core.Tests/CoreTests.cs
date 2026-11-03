@@ -74,7 +74,7 @@ public class CoreTests
     [Fact]
     public void NavigationMatchesWebOrder()
     {
-        var titles = Enum.GetValues<WorkspaceSection>().Select(section => section.Title());
-        Assert.Equal(["首页", "我的简历", "简历模板", "岗位看板", "面试日程", "模拟面试", "资料库"], titles);
+        var titles = WorkspaceSections.Sidebar.Select(section => section.Title());
+        Assert.Equal(["首页", "我的简历", "简历模板", "投递看板", "面试日程", "模拟面试", "岗位广场", "资料库"], titles);
     }
 }
