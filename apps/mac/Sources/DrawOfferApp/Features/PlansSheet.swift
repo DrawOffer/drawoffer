@@ -511,7 +511,7 @@ private struct InvitePanel: View {
                         }
                     }
                     Spacer(minLength: 14)
-                    Text("返现按好友实际付款计算，核实后用微信或支付宝转给你").font(V3.sans(11.5)).foregroundStyle(V3.fnt).frame(height: 22)
+                    Text("返现按好友开通的会员档位计算，核实后用微信或支付宝转给你").font(V3.sans(11.5)).foregroundStyle(V3.fnt).frame(height: 22)
                 }.padding(.horizontal, 24).padding(.vertical, 20).frame(maxWidth: .infinity, alignment: .leading).frame(height: 184)
                     .overlay(RoundedRectangle(cornerRadius: 16).stroke(V3.cl))
             }
