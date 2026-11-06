@@ -16,11 +16,18 @@ ELECTRON_PNG = ROOT / "apps/desktop/build/icon.png"
 
 for target in [MAC_PNG, MAC_ICNS, WINDOWS_ICO, ELECTRON_PNG]:
     target.parent.mkdir(parents=True, exist_ok=True)
-with Image.open(SOURCE) as source:
-    if source.width != source.height:
+with Image.open(SOURCE) as raw:
+    if raw.width != raw.height:
         raise ValueError("Application mark must be square")
     # Classic ICNS/ICO need a baked-in plate. Only its exterior is transparent.
-    size = source.width
+    # 源图可能带透明留白，图标按裁掉留白后的内容放大到 1024，避免图标里的标记过小。
+    size = 1024
+    content = raw.convert("RGBA").crop(raw.getbbox())
+    source = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    longest = max(content.size)
+    fitted = int(size * 0.78)
+    content = content.resize((fitted * content.width // longest, fitted * content.height // longest), Image.Resampling.LANCZOS)
+    source.alpha_composite(content, ((size - content.width) // 2, (size - content.height) // 2))
     scale = 4
     mask = Image.new("L", (size * scale, size * scale))
     ImageDraw.Draw(mask).rounded_rectangle(
@@ -30,10 +37,7 @@ with Image.open(SOURCE) as source:
     )
     icon = Image.new("RGBA", (size, size), "#F7F5F0")
     icon.putalpha(mask.resize((size, size), Image.Resampling.LANCZOS))
-    mark = source.convert("RGBA")
-    mark = mark.crop(mark.getbbox())
-    mark.thumbnail((int(size * 0.66), int(size * 0.66)), Image.Resampling.LANCZOS)
-    icon.alpha_composite(mark, ((size - mark.width) // 2, (size - mark.height) // 2))
+    icon.alpha_composite(source)
     icon.save(MAC_PNG)
     icon.save(ELECTRON_PNG)
     icon.save(MAC_ICNS, format="ICNS")
