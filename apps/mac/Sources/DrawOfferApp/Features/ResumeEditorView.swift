@@ -401,6 +401,7 @@ struct ResumeEditorView: View {
             "unparsed_work_end_date": "部分工作结束日期未能识别",
             "unmapped_fragments_preserved": "部分原文已按自定义章节保留，请人工整理",
             "structure_enhancement_unavailable": "自动分段未完成，请检查板块和经历条目",
+            "structure_needs_review": "部分经历可能识别有误，请检查板块和经历条目",
         ][code] ?? "部分内容需要人工核对"
     }
 
