@@ -123,11 +123,8 @@ struct HomeCardView: View {
         case .compare(let offers):
             HomeCardFrame(title: "对比 \(offers.count) 个 Offer", subtitle: offers.map { $0.text("company_name_snapshot") }.joined(separator: " vs "),
                           action: "查看 Offer", compact: compact, perform: { navigate(.jobs) }) { symbol("square.split.2x1") }
-        case .resumeTodo(let resume, let score, let missing):
-            HomeCardFrame(title: "\(resume.title) · \(score)%", subtitle: "待完善：\(missing)", action: "继续编辑", compact: compact,
-                          perform: { editResume(resume.id) }) { big("\(score)%", caption: "待补 · \(missing)") }
-        case .resumeRecent(let resume, let score):
-            HomeCardFrame(title: score.map { "\(resume.title) · \($0)%" } ?? resume.title, subtitle: "最近编辑的简历", action: "继续编辑", compact: compact,
+        case .resumeRecent(let resume):
+            HomeCardFrame(title: resume.title, subtitle: "最近编辑的简历", action: "继续编辑", compact: compact,
                           perform: { editResume(resume.id) }) { symbol("doc.text") }
         case .pipeline(let applications, let hint):
             let columns = HomeDashboard.pipelineColumns(applications)

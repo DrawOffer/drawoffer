@@ -9,7 +9,7 @@ using Xunit;
 namespace DrawOffer.Core.Tests;
 
 /// <summary>
-/// 首页场景、星图摆放、首页卡片、完整度与 AI 事件。Mac 没有这些规则的单元测试；期望值来自用同样虚构数据
+/// 首页场景、星图摆放、首页卡片与 AI 事件。Mac 没有这些规则的单元测试；期望值来自用同样虚构数据
 /// 运行 Mac `DrawOfferCore`（Asia/Shanghai 时区）打印的结果，逐字段比较（Fixtures/home-scenes.mac.txt）。
 /// </summary>
 public sealed class HomeTests
@@ -166,17 +166,16 @@ public sealed class HomeTests
         var sessions = new[] { J("""{"id":1,"status":"scheduled","start_at":"2026-11-03T02:00:00Z","stage_label":"笔试","company_name":"虚构丙","end_at":"2026-11-02T10:00:00Z"}""") };
         var deadline = HomeDashboard.Build(Now, Summaries(), sessions, Applications, Shanghai);
         Assert.Equal(HomeDashboard.DashboardVariant.Deadline, deadline.Variant);
-        Assert.Equal(["deadline", "resumeTodo", "pipeline"], deadline.Cards.Select(CardName));
+        Assert.Equal(["deadline", "resumeRecent", "pipeline"], deadline.Cards.Select(CardName));
         Assert.Equal("虚构丙的笔试 2 天后截止。", deadline.Copy.Subtitle);
         Assert.Equal(0, deadline.TodayCount);
-        var todo = Assert.IsType<HomeDashboard.Card.ResumeTodo>(deadline.Cards[1]);
-        Assert.Equal(("3", 32, "经历章节"), (todo.Resume.Id, todo.Score, todo.Missing));
+        Assert.Equal("3", Assert.IsType<HomeDashboard.Card.ResumeRecent>(deadline.Cards[1]).Resume.Id);
         Assert.Equal("虚构甲一面结果待出", Assert.IsType<HomeDashboard.Card.Pipeline>(deadline.Cards[2]).Hint);
 
         var idle = HomeDashboard.Build(Now, Summaries(), [], Applications, Shanghai);
-        Assert.Equal(["week", "resumeTodo", "jobs"], idle.Cards.Select(CardName));
+        Assert.Equal(["week", "resumeRecent", "jobs"], idle.Cards.Select(CardName));
         Assert.Equal("适合补一段项目经历，或者看看新岗位。", idle.Copy.Subtitle);
-        Assert.Equal(["week", "resumeTodo", "jobs"], HomeDashboard.Build(Now, Summaries(), [], [], Shanghai).Cards.Select(CardName));
+        Assert.Equal(["week", "resumeRecent", "jobs"], HomeDashboard.Build(Now, Summaries(), [], [], Shanghai).Cards.Select(CardName));
         Assert.Equal(["firstResume", "target", "plugin"], HomeDashboard.Build(Now, [], [], [], Shanghai).Cards.Select(CardName));
 
         Assert.Equal((1, 0, 1, 0), HomeDashboard.PipelineColumns(Applications));
@@ -194,58 +193,6 @@ public sealed class HomeTests
         Assert.Equal("2025-03-04", At("2025-03-04T05:06:07.5").UpdatedLabel(Now, Shanghai));
         Assert.Equal("昨天", At("2026-10-30T15:59:59Z").UpdatedLabel(Now, Shanghai));
         Assert.Equal("—", At("not a date").UpdatedLabel(Now, Shanghai));
-    }
-
-    [Fact]
-    public void CompletenessMatchesMac()
-    {
-        var full = ResumeCompleteness.EvaluateMarkdown("""
-# 林晓
-
-后端开发工程师，专注高并发服务
-电话：13912345678 ｜ 邮箱：lin@fixture.dev
-
-## 工作经历
-### 虚构星河科技
-2024.07 - 至今
-- 负责订单服务重构，QPS 提升 3 倍
-- 主导缓存治理，P99 降低 40%
-- 搭建监控告警
-
-## 教育经历
-### 示例理工大学
-2019.09 - 2023.06
-
-## 专业技能
-- 熟练使用 Java、Spring Boot 开发微服务
-- 熟悉 MySQL 索引优化与分库分表
-- Redis
-""".Replace("\r\n", "\n"));
-        Assert.Equal(100, full.Score);
-        Assert.Equal("完整", full.Level);
-        Assert.Equal("name:8,phone:6,email:6,positioning:10,experience-section:10,experience-basics:10,experience-details:15,education-section:8,education-basics:7,skills-section:7,skills-entries:8,structure:5",
-            string.Join(",", full.Checks.Select(x => $"{x.Id}:{x.Earned}")));
-        Assert.Empty(full.Caps);
-        Assert.Null(full.Missing);
-        Assert.Empty(full.FlaggedKinds);
-
-        var thin = ResumeCompleteness.Evaluate(J(Preview))!;
-        Assert.Equal(32, thin.Score);
-        Assert.Equal("name:8,phone:6,email:6,positioning:10,experience-section:0,experience-basics:0,experience-details:0,education-section:0,education-basics:0,skills-section:0,skills-entries:0,structure:2",
-            string.Join(",", thin.Checks.Select(x => $"{x.Id}:{x.Earned}")));
-        Assert.Equal("经历章节", thin.Missing);
-        Assert.Equal(8, thin.PendingCount);
-
-        Assert.Equal("# 张三\n\n电话：13800000000\n\n## 教育\n\n### 示例大学\n本科\n2020.09\n\n3. 一\n4. 二\n\n左 ｜", ResumeCompleteness.Markdown(J("""
-{"identity":{"name":{"value":"张三"},"contacts":[{"label":"电话","value":"13800000000"}]},"sections":[{"title":{"value":"教育"},"entries":[{"fields":{"organization":{"value":"示例大学"},"role":{"value":"本科"},"start_date":{"value":"2020.09"}},"blocks":[{"block_type":"ordered_list","start":3,"items":[{"runs":[{"inline_type":"text","text":"一"}]},{"runs":[{"inline_type":"icon","name":"Mail"},{"inline_type":"text","text":"二"}]}]}]}],"blocks":[{"block_type":"row","cells":[{"blocks":[{"runs":[{"inline_type":"text","text":"左"}]}]},{"blocks":[]}]}]}]}
-""")));
-        var sample = ResumeCompleteness.Evaluate(J("""
-{"identity":{"name":{"value":"张三"},"contacts":[{"label":"电话","value":"13800000000"}]},"sections":[{"title":{"value":"教育"},"entries":[{"fields":{"organization":{"value":"示例大学"}}}]}]}
-"""))!;
-        Assert.Equal(13, sample.Score);
-        Assert.Equal(["sample-identity", "sample-content"], sample.Caps.Select(x => x.Id));
-        Assert.Equal("name:0,phone:0,email:0,positioning:0,experience-section:0,experience-basics:0,experience-details:0,education-section:8,education-basics:3,skills-section:0,skills-entries:0,structure:2",
-            string.Join(",", sample.Checks.Select(x => $"{x.Id}:{x.Earned}")));
     }
 
     [Fact]
