@@ -182,7 +182,7 @@ public sealed class TemplateSwitchSheet : UserControl
 // MARK: - 版式设置
 
 /// <summary>
-/// Web `WorkbenchTypePanel` + `WorkbenchPageBar`（Mac `TypeSettingsPanel`）：页面排列（上下 / 左右 / 智能一页）、页边距（两个步进器 + 88 宽页面预览）、
+/// Web `WorkbenchTypePanel` + `WorkbenchPageBar`（Mac `TypeSettingsPanel`）：页面排列（上下 / 左右 / 智能一页）、页边距（两个整行步进器）、
 /// 排版（字体下拉、正文字号、正文行距）。步进器控件 116 宽，28×28 描边按钮，数字 12/500。
 /// </summary>
 public sealed class TypeSettingsPanel : UserControl
@@ -229,17 +229,9 @@ public sealed class TypeSettingsPanel : UserControl
                 _arrangementChanged("horizontal");
             })),
             (Star(), Option("智能一页", "sparkles", s.SmartOnePage, () => Set(x => x.SmartOnePage = !x.SmartOnePage), toggle: true)));
-        var preview = new Border
-        {
-            Width = 88, MinHeight = 108, CornerRadius = new CornerRadius(8), BorderBrush = Brush(Line), BorderThickness = new Thickness(1),
-            Child = VStack(10, Icon("rectangle.split.1x2", 22, Blue), Sans("页面预览", 10, Fnt).Align(HorizontalAlignment.Center)).Align(HorizontalAlignment.Center, VerticalAlignment.Center),
-        };
-        AutomationProperties.SetAccessibilityView(preview, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
-        var margins = Columns(16,
-            (Star(), VStack(16,
-                Stepper("上下边距", "mm", s.VerticalPageMargin, ResumeTypeSettings.VerticalMarginRange, v => Set(x => x.VerticalPageMargin = v)),
-                Stepper("左右边距", "mm", s.PageMargin, ResumeTypeSettings.HorizontalMarginRange, v => Set(x => x.PageMargin = v)))),
-            (Auto, preview));
+        var margins = VStack(16,
+            Stepper("上下边距", "mm", s.VerticalPageMargin, ResumeTypeSettings.VerticalMarginRange, v => Set(x => x.VerticalPageMargin = v)),
+            Stepper("左右边距", "mm", s.PageMargin, ResumeTypeSettings.HorizontalMarginRange, v => Set(x => x.PageMargin = v)));
         var typeHead = VStack(5,
             HStack(8, Icon("textformat", 13, Blue), Sans("排版", 13, Txt, Medium)).Frame(height: 22),
             Sans("统一调整简历正文的字体、字号和行距。", 11, Fnt).Frame(height: 22));
