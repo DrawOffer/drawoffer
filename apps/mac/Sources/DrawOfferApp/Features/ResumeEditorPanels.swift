@@ -121,7 +121,7 @@ struct TemplateSwitchSheet: View {
 
 // MARK: - 版式设置
 
-/// Web `WorkbenchTypePanel` + `WorkbenchPageBar`：页面排列（上下 / 左右 / 智能一页）、页边距（两个整行步进器）、
+/// Web `WorkbenchTypePanel` + `WorkbenchPageBar`：页面排列（上下 / 左右 / 智能一页）、页边距（两个步进器 + 88 宽页面预览）、
 /// 排版（字体下拉、正文字号、正文行距）。步进器控件 116 宽，28×28 描边按钮，数字 12/500。
 struct TypeSettingsPanel: View {
     @Binding var settings: ResumeTypeSettings
@@ -144,9 +144,15 @@ struct TypeSettingsPanel: View {
             Text("排列只影响编辑时的浏览方向。").font(V3.sans(11)).foregroundStyle(V3.fnt).frame(height: 22).padding(.top, 10)
             divider
             section("页边距", "分别调整上下和左右留白，单位为毫米。")
-            VStack(spacing: 16) {
-                stepper("上下边距", unit: "mm", value: $settings.verticalPageMargin, range: ResumeTypeSettings.verticalMarginRange)
-                stepper("左右边距", unit: "mm", value: $settings.pageMargin, range: ResumeTypeSettings.horizontalMarginRange)
+            HStack(spacing: 16) {
+                VStack(spacing: 16) {
+                    stepper("上下边距", unit: "mm", value: $settings.verticalPageMargin, range: ResumeTypeSettings.verticalMarginRange)
+                    stepper("左右边距", unit: "mm", value: $settings.pageMargin, range: ResumeTypeSettings.horizontalMarginRange)
+                }
+                VStack(spacing: 10) {
+                    Image(systemName: "rectangle.split.1x2").font(.system(size: 22)).foregroundStyle(V3.blue)
+                    Text("页面预览").font(V3.sans(10)).foregroundStyle(V3.fnt)
+                }.frame(width: 88).frame(minHeight: 108).overlay(RoundedRectangle(cornerRadius: 8).stroke(V3.line)).accessibilityHidden(true)
             }
             divider
             VStack(alignment: .leading, spacing: 5) {
