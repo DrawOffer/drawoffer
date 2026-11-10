@@ -10,7 +10,7 @@
 
 ### 首页引导与输入
 
-首页参考 Dev 的 `AssistantPage.tsx`、`HomeCards.tsx`、`homeDashboard.ts` 与 `assistant.css`，采用 720px 居中正文、120px 输入框、三条快捷指令和三张 236px 引导卡。游客使用 Web 新用户的引导文案，发送与添加资料触发登录，不模拟 AI 回答。Mac 登录后由 Core 的 `HomeDashboard` 移植 Web `homeDashboard.ts` 规则：并行读取本人简历、本周起两周的排期（`start_at/end_at`）与进行中求职进程，三个卡片位依次取 Offer 待回复/今日面试/三天内笔试截止/本周安排，Offer 对比或最近编辑的简历，岗位推荐或求职进度；问候副标题与快捷指令随位置 1 变化。推荐岗位卡读取 `/api/job-matches/recommendations`，可计算时调用 `:ensure`，随后每 3 秒轮询、最多 20 次，各状态与 Web 文案一致。读取失败显示重新加载，不当作无数据。发送按钮把输入带入新的 AI 对话。
+首页参考 Dev 的 `AssistantPage.tsx`、`HomeCards.tsx`、`homeDashboard.ts` 与 `assistant.css`，采用 720px 居中正文、120px 输入框、三条快捷指令和三张 236px 引导卡。游客使用 Web 新用户的引导文案，发送与添加资料触发登录，不模拟 AI 回答。Mac 登录后由 Core 的 `HomeDashboard` 移植 Web `homeDashboard.ts` 规则：并行读取本人简历、本周起两周的排期（`start_at/end_at`）与进行中求职进程，三个卡片位依次取 Offer 待回复/今日面试/三天内笔试截止/本周安排，Offer 对比或最近编辑的简历，岗位推荐或求职进度；问候副标题与快捷指令随位置 1 变化。位置 2 的完整度由 Core 的 `ResumeCompleteness` 移植 Web `resumeCompleteness.ts`：从最近编辑简历的预览正文投影 Markdown，按同样 12 项检查与示例上限计分，低于 90 分显示“待完善”卡，点击直接进入原生编辑器。推荐岗位卡读取 `/api/job-matches/recommendations`，可计算时调用 `:ensure`，随后每 3 秒轮询、最多 20 次，各状态与 Web 文案一致。读取失败显示重新加载，不当作无数据。发送按钮把输入带入新的 AI 对话。
 
 首页在右侧内容区水平、垂直居中，正文最大宽度 720px，随窗口宽度收缩；移除页面级滚动容器与固定顶部留白。较矮窗口缩减间距、插图和卡片高度，Mac 支持的最小窗口为 1080×700。Windows 同步尺寸响应，并在过小窗口使用仅缩小的 Viewbox 防止截断，实机视觉仍需验证。输入框内部仍支持长文本编辑。
 
