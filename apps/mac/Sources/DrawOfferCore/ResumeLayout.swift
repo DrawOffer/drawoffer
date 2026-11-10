@@ -89,7 +89,13 @@ public struct ResumeTypeSettings: Equatable, Sendable {
         let key = style["template_snapshot"]?.text("template_key") ?? ""
         let scoped = style["template_scoped"]?[key] ?? .null
         let portable = style["portable"] ?? .null
-        func pick(_ field: String) -> Double? { scoped[field]?.numberValue ?? portable[field]?.numberValue }
+        // A zero carried in portable is a previous template's full-bleed decoration,
+        // not a text inset the user chose. The active template's own zero still wins.
+        func carried(_ field: String) -> Double? {
+            guard let value = portable[field]?.numberValue, value > 0 else { return nil }
+            return value
+        }
+        func pick(_ field: String) -> Double? { scoped[field]?.numberValue ?? carried(field) }
         let base = tokens["font_size_pt"]?.numberValue ?? 10
         let scale = pick("font_scale") ?? 1
         let margin = tokens["page_margin_mm"]?.numberValue ?? 16
