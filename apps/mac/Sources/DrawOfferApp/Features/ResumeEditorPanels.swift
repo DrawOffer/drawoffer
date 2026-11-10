@@ -298,13 +298,14 @@ extension JSONValue {
 /// 大纲面板（Web `WorkbenchOutlinePanel`）：模块列表，点击跳转，上下移动，删除（可撤销），添加模块；
 /// 双栏模板按左栏在上、右栏在下分组。
 /// 大纲 V2（Web `WorkbenchOutlinePanel` + `WorkbenchSectionOrderControl`）：头部、「N 个模块 / 恢复默认顺序」、
-/// 按栏分组的两行模块行（拖动手柄、标题、摘要、空标签、悬停 ⋯ 菜单），虚线「添加模块」与底部 / 提示。
+/// 按栏分组的两行模块行（拖动手柄、标题、摘要、待完善 / 空标签、悬停 ⋯ 菜单），虚线「添加模块」与底部 / 提示。
 /// 个人信息固定在第一行，不能拖动。原生端没有分页信息，不显示 Web 的页面缩略图条。
 struct OutlinePanel: View {
     let sections: [JSONValue]
     let identity: JSONValue?
     let label: (JSONValue) -> String
     let columns: [String: String]
+    let flagged: Set<String>
     let disabled: Bool
     let jump: (String) -> Void
     let move: (Int, Int) -> Void
@@ -370,7 +371,7 @@ struct OutlinePanel: View {
 
     /// 个人信息：锁图标、「固定」，摘要是已填的联系方式。
     private var identityRow: some View {
-        OutlineRow(title: "个人信息", summary: ResumeOutline.identitySummary(identity), empty: false,
+        OutlineRow(title: "个人信息", summary: ResumeOutline.identitySummary(identity), flagged: flagged.contains("identity"), empty: false,
                    fixed: true, current: false, dragging: false, disabled: disabled, renaming: nil,
                    handle: { EmptyView() }, menu: { EmptyView() }, open: { jump("identity") })
     }
@@ -378,7 +379,7 @@ struct OutlinePanel: View {
     private func sectionRow(_ index: Int) -> some View {
         let section = sections[index], title = label(section), key = section.nodeKey
         let empty = ResumeOutline.isEmpty(section)
-        return OutlineRow(title: title, summary: ResumeOutline.summary(section),
+        return OutlineRow(title: title, summary: ResumeOutline.summary(section), flagged: flagged.contains(section.text("semantic_kind")),
                           empty: empty, fixed: false, current: false, dragging: dragging == key, disabled: disabled,
                           renaming: renaming == key ? $renameText : nil,
                           handle: {
@@ -451,6 +452,7 @@ struct OutlinePanel: View {
 private struct OutlineRow<Handle: View, MenuView: View>: View {
     let title: String
     let summary: String
+    let flagged: Bool
     let empty: Bool
     let fixed: Bool
     let current: Bool
@@ -484,7 +486,10 @@ private struct OutlineRow<Handle: View, MenuView: View>: View {
                 }
                 Text(summary).font(V3.sans(11)).foregroundStyle(V3.fnt).lineLimit(1).frame(height: 13)
             }.frame(maxWidth: .infinity, alignment: .leading)
-            if !(hover && !fixed), empty && !fixed { tag("空", fg: V3.fnt, bg: V3.field) }
+            if !(hover && !fixed) {
+                if flagged { tag("待完善", fg: Color(hex: 0xB8661A), bg: Color(hex: 0xFBF1E6)) }
+                else if empty && !fixed { tag("空", fg: V3.fnt, bg: V3.field) }
+            } else if fixed && flagged { tag("待完善", fg: Color(hex: 0xB8661A), bg: Color(hex: 0xFBF1E6)) }
             if fixed { Text("固定").font(V3.sans(11)).foregroundStyle(V3.fnt2) }
             if hover && !fixed && !disabled { menu().foregroundStyle(V3.sub).padding(.trailing, -3) }
         }
@@ -512,6 +517,118 @@ private struct ColumnGlyph: View {
         RoundedRectangle(cornerRadius: 2).stroke(V3.fnt, lineWidth: 1.5).frame(width: 12, height: 10)
             .overlay(alignment: left ? .leading : .trailing) { Rectangle().fill(V3.fnt).frame(width: 4, height: 10) }
             .clipShape(RoundedRectangle(cornerRadius: 2)).accessibilityHidden(true)
+    }
+}
+
+/// 简历检查（Web `ResumeCompletenessPanel`）：分数与等级、示例内容提示、优先完善与已通过。
+struct CompletenessPanel: View {
+    let result: ResumeCompleteness
+    let close: () -> Void
+    @State private var passedOpen = false
+
+    var body: some View {
+        let incomplete = result.checks.filter { $0.status != "passed" }
+        let passed = result.checks.filter { $0.status == "passed" }
+        VStack(alignment: .leading, spacing: 0) {
+            WorkbenchPanelHeader(title: "简历检查", subtitle: "实时规则检查", closeLabel: "关闭简历检查", close: close)
+            ScrollView {
+                // `.wb3-check-content`：内边距 15/24/24
+                VStack(alignment: .leading, spacing: 0) {
+                    summary(incomplete.count)
+                    if !result.caps.isEmpty { caps.padding(.top, 18) }
+                    // `.wb3-check-section`：上 24；头 16 高、下 12；卡片间距 10
+                    HStack {
+                        Text("优先完善").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
+                        Spacer()
+                        Text("\(incomplete.count) 项").font(V3.sans(12)).foregroundStyle(V3.fnt)
+                    }.frame(height: 16).padding(.top, 24).padding(.bottom, 12)
+                    if incomplete.isEmpty {
+                        Text("基础内容已经齐全，可以继续优化表达质量。").font(V3.sans(12)).foregroundStyle(V3.green)
+                            .padding(.horizontal, 14).padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
+                            .background(V3.greenSoft, in: RoundedRectangle(cornerRadius: 10))
+                    } else {
+                        VStack(spacing: 10) { ForEach(incomplete, id: \.id) { checkRow($0) } }
+                    }
+                    // `.wb3-check-passed`：上 16；40 高 #f4f4f2 圆角 10 的展开行，展开后下 10
+                    Button { withAnimation(.easeOut(duration: 0.14)) { passedOpen.toggle() } } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(V3.sub)
+                                .rotationEffect(.degrees(passedOpen ? 90 : 0)).frame(width: 14)
+                            Text("已通过").font(V3.sans(12.5, weight: .medium)).foregroundStyle(V3.txt)
+                            Spacer()
+                            Text("\(passed.count) 项").font(V3.sans(12)).foregroundStyle(V3.fnt)
+                        }.padding(.horizontal, 14).frame(height: 40).background(V3.field, in: RoundedRectangle(cornerRadius: 10)).contentShape(Rectangle())
+                    }.buttonStyle(.plain).padding(.top, 16).accessibilityLabel("已通过 \(passed.count) 项").accessibilityAddTraits(passedOpen ? .isSelected : [])
+                    if passedOpen { VStack(spacing: 10) { ForEach(passed, id: \.id) { checkRow($0) } }.padding(.top, 10) }
+                    Text("完整度检查基础信息、结构及技能表达的具体程度，不代表岗位匹配度。").font(V3.sans(11)).foregroundStyle(V3.fnt)
+                        .lineSpacing(5).padding(.vertical, 2.5).fixedSize(horizontal: false, vertical: true).padding(.top, 18)
+                }.padding(.horizontal, 24).padding(.top, 15).padding(.bottom, 24)
+            }.scrollIndicators(.never)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onAppear { passedOpen = incompleteCount == 0 }
+    }
+
+    private var incompleteCount: Int { result.checks.filter { $0.status != "passed" }.count }
+
+    /// `.wb3-check-summary`：大号仪表盘（`gaugeGeometry(false, 18)`），弧心 34/600 分数与 11px「/ 100」，
+    /// 两端 10px 的 0 / 100，开口处 24 高等级胶囊；下方 12px 说明，上距 6。
+    private func summary(_ pending: Int) -> some View {
+        let g = WorkbenchGaugeShape.geometry(mini: false, extra: 18)
+        let angle = 150.0 * .pi / 180
+        let endX = g.r * cos(angle), endY = g.cy + g.r * sin(angle)
+        return VStack(spacing: 6) {
+            ZStack(alignment: .topLeading) {
+                WorkbenchGaugeShape(score: result.score, extra: 18)
+                VStack(spacing: 3) {
+                    Text("\(result.score)").font(V3.number(34, weight: .semibold)).foregroundStyle(V3.txt).frame(height: 41)
+                    Text("/ 100").font(V3.number(11, weight: .medium)).foregroundStyle(V3.fnt)
+                }.frame(width: g.width).offset(y: g.cy - 42).accessibilityElement(children: .ignore).accessibilityLabel("当前完整度 \(result.score) 分")
+                Text("0").font(V3.number(10, weight: .medium)).foregroundStyle(V3.fnt2).frame(height: 12).fixedSize()
+                    .position(x: g.cx + endX, y: endY + 16).accessibilityHidden(true)
+                Text("100").font(V3.number(10, weight: .medium)).foregroundStyle(V3.fnt2).frame(height: 12).fixedSize()
+                    .position(x: g.cx - endX, y: endY + 16).accessibilityHidden(true)
+                Text(result.level).font(V3.sans(12, weight: .medium)).foregroundStyle(V3.txt).padding(.horizontal, 12).frame(height: 24)
+                    .background(V3.field, in: Capsule()).fixedSize().position(x: g.cx, y: g.cy + 42)
+            }.frame(width: g.width, height: g.height)
+            Text("当前完整度 · " + (pending > 0 ? "还有 \(pending) 项可以完善" : "所有基础检查均已通过")).font(V3.sans(12)).foregroundStyle(V3.sub).frame(height: 22)
+        }.frame(maxWidth: .infinity)
+    }
+
+    /// `.wb3-check-caps`：#f1dfc8 描边、圆角 10、橙色浅底、12/14；标题 12.5/500，原因 11.5px 行高 18。
+    private var caps: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle").font(.system(size: 12)).foregroundStyle(V3.orange).padding(.top, 1)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("检测到示例内容").font(V3.sans(12.5, weight: .medium)).foregroundStyle(V3.txt)
+                ForEach(result.caps, id: \.id) { Text($0.reason).font(V3.sans(11.5)).foregroundStyle(V3.sub).lineSpacing(3).fixedSize(horizontal: false, vertical: true) }
+            }
+            Spacer(minLength: 0)
+        }.padding(.horizontal, 14).padding(.vertical, 12).background(V3.orangeSoft, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(hex: 0xF1DFC8))).accessibilityElement(children: .contain).accessibilityLabel("分数限制说明")
+    }
+
+    /// `.wb3-check-check`：白底、#e4e4e0 描边、圆角 10、内边距 14；左 22 圆形状态标（橙 / 绿 / 红浅底）；
+    /// 标题行 22 高（13/500 名称、11px 得分、右侧状态字）；问题 12px 行高 19，建议 11.5px 行高 18。
+    private func checkRow(_ item: ResumeCompleteness.Check) -> some View {
+        let tone = item.status == "passed" ? V3.green : item.status == "failed" ? V3.red : V3.orange
+        let soft = item.status == "passed" ? V3.greenSoft : item.status == "failed" ? V3.redSoft : V3.orangeSoft
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: item.status == "passed" ? "checkmark" : item.status == "failed" ? "exclamationmark" : "minus")
+                .font(.system(size: 9, weight: .bold)).foregroundStyle(tone).frame(width: 22, height: 22).background(soft, in: Circle()).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(item.label).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
+                    Text("\(item.earned)/\(item.max) 分").font(V3.number(11, weight: .medium)).foregroundStyle(V3.fnt)
+                    Spacer(minLength: 4)
+                    Text(item.status == "passed" ? "已通过" : item.status == "partial" ? "需完善" : "待补充").font(V3.sans(11, weight: .medium)).foregroundStyle(tone)
+                }.frame(height: 22)
+                if let issue = item.issue { Text(issue).font(V3.sans(12)).foregroundStyle(V3.sub).lineSpacing(4).padding(.vertical, 2).frame(minHeight: 19).fixedSize(horizontal: false, vertical: true) }
+                if let advice = item.recommendation { Text(advice).font(V3.sans(11.5)).foregroundStyle(V3.fnt).lineSpacing(4).padding(.vertical, 2).frame(minHeight: 18).fixedSize(horizontal: false, vertical: true) }
+            }
+        }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
+            .background(.white, in: RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(V3.cl))
+            .accessibilityElement(children: .combine)
     }
 }
 

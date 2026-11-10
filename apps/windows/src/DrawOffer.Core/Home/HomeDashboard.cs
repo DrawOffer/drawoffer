@@ -7,6 +7,7 @@ namespace DrawOffer.Core.Home;
 /// <summary>
 /// 首页卡片规则（Web `features/assistant/homeDashboard.ts`，Figma“01.1 首页 · 状态变体”）：
 /// 三个卡片位各自按顺序取第一个满足条件的候选；没有简历的账号固定三张引导卡。规则只读数据，不经过 AI。
+/// 位置 2 的完整度由 <see cref="ResumeCompleteness"/> 按 Web 同一规则从最近编辑简历的预览正文计算。
 /// Swift 的 `calendar` 参数在这里是 `zone`（默认本机时区）。
 /// </summary>
 public sealed class HomeDashboard
@@ -24,7 +25,8 @@ public sealed class HomeDashboard
         public sealed record Deadline(JsonNode? Session, int DaysLeft) : Card;
         public sealed record Week(IReadOnlyList<JsonNode?> Sessions) : Card;
         public sealed record Compare(IReadOnlyList<JsonNode?> Offers) : Card;
-        public sealed record ResumeRecent(ResumeSummary Resume) : Card;
+        public sealed record ResumeTodo(ResumeSummary Resume, int Score, string Missing) : Card;
+        public sealed record ResumeRecent(ResumeSummary Resume, int? Score) : Card;
         public sealed record Jobs : Card;
         public sealed record Pipeline(IReadOnlyList<JsonNode?> Applications, string Hint) : Card;
     }
@@ -41,6 +43,8 @@ public sealed class HomeDashboard
     }
 
     const int DeadlineDays = 3;
+    /// <summary>Web `RESUME_TODO_THRESHOLD`。</summary>
+    const int ResumeTodoThreshold = 90;
     const double Day = 86_400;
 
     public static HomeDashboard Build(DateTimeOffset now, IReadOnlyList<ResumeSummary> resumes, IReadOnlyList<JsonNode?> sessions, IReadOnlyList<JsonNode?> applications, TimeZoneInfo? zone = null)
@@ -85,9 +89,11 @@ public sealed class HomeDashboard
             first = new Card.Week(scheduled.Where(x => Date(x.Text("start_at")) is { } start && start >= weekStart && start < weekEnd).ToList());
             variant = DashboardVariant.Idle;
         }
+        var completeness = recent.Preview is { } preview ? ResumeCompleteness.Evaluate(preview.Data) : null;
         Card second;
         if (offers.Count >= 2) second = new Card.Compare(offers.Take(2).ToList());
-        else second = new Card.ResumeRecent(recent);
+        else if (completeness is not null && completeness.Score < ResumeTodoThreshold && completeness.Missing is { } missing) second = new Card.ResumeTodo(recent, completeness.Score, missing);
+        else second = new Card.ResumeRecent(recent, completeness?.Score);
         Card third;
         if (first is Card.Week) third = new Card.Jobs();
         else if (active.Count == 0) third = new Card.Jobs();
