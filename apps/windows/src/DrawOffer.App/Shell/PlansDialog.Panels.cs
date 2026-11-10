@@ -45,7 +45,7 @@ internal sealed partial class PlansView
         if(_inviteState.Length==0)return Sans("正在加载…",14,Sub);if(_inviteState=="error")return State("暂时无法读取邀请信息，请重试。",()=>_=LoadInvite());if(_mine is null)return Sans("正在加载…",14,Sub);
         var rewards=_mine.Items("rewards");var coupon=InviteCoupon();
         var rewardColumns=new Grid{ColumnSpacing=16};foreach(var reward in rewards){rewardColumns.ColumnDefinitions.Add(new(){Width=Star()});var block=VStack(4,Sans(reward.Text("title"),12,Sub),Label(reward.Text("reward"),26,Blue,Semibold),Sans("好友付 "+reward.Text("price"),11.5,Fnt));Grid.SetColumn(block,rewardColumns.Children.Count);rewardColumns.Children.Add(block);}
-        var rewardCard=Card(VStack(14,Sans("好友每开通一次会员，你得到现金返现",13,Txt,Medium),rewardColumns,Sans("返现按好友实际付款计算，核实后用微信或支付宝转给你",11.5,Fnt).Wrap()),16,new Thickness(24,20,24,20)).Frame(height:184);
+        var rewardCard=Card(VStack(14,Sans("好友每开通一次会员，你得到现金返现",13,Txt,Medium),rewardColumns,Sans("返现按好友开通的会员档位计算，核实后用微信或支付宝转给你",11.5,Fnt).Wrap()),16,new Thickness(24,20,24,20)).Frame(height:184);
         var top=Columns(16,(Px(400),coupon),(Star(),rewardCard));var stats=HStack(22,Sans("待结算",12,Fnt),Label("¥"+N(_mine,"pendingAmount").ToString("F2"),18,Hex(0xB8661A),Semibold),Sans("已到账",12,Fnt),Label("¥"+N(_mine,"paidAmount").ToString("F2"),18,Txt,Semibold),Sans("已邀请 "+_mine.Display("invitedCount")+" 人",12,Fnt));
         var claim=Fill(Field,10,child:Spread(Sans("领取返现  ① 截图这份记录 → ② 添加客服微信并发送截图 → ③ 核实后转账",12.5,Sub).Wrap(),new V3Button("查看客服微信",SupportQr,height:28,small:true))).WithPadding(new(14,8,10,8));
         var rows=VStack(0);if(_rewards.Count==0){

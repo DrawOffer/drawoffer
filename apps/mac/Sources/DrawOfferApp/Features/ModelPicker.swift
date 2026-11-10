@@ -96,10 +96,10 @@ private struct ModelHoverCard: View {
                 ModelIcon(name: model.text("name"), size: 16)
                 Text(model.text("name")).font(.system(size: 13, weight: .medium)).foregroundStyle(Color(hex: 0x1F2329)).lineLimit(1)
                 Spacer(minLength: 0)
-                // 对话不扣积分时人人都能用，不标会员
-                if turn?.text("basis") != "free" {
-                    Text(["free": "免费可用", "member": "会员", "locked": "需开通会员"][status]!).font(.system(size: 11))
-                        .foregroundStyle(status == "free" ? Color(hex: 0x3F6FD8) : status == "locked" ? Color(hex: 0xC2410C) : Color(hex: 0xA0A6AE))
+                // 对话不扣积分时人人都能用，不标会员；基础模型也不标“免费可用”，它仍扣积分，避免误会
+                if turn?.text("basis") != "free" && status != "free" {
+                    Text(status == "locked" ? "需开通会员" : "会员").font(.system(size: 11))
+                        .foregroundStyle(status == "locked" ? Color(hex: 0xC2410C) : Color(hex: 0xA0A6AE))
                 }
             }
             if case let intro = model.text("chatIntro").trimmingCharacters(in: .whitespacesAndNewlines), !intro.isEmpty {
