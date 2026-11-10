@@ -147,11 +147,11 @@ public static class ModelHoverCard
         var name = Label(model.Text("name"), 13, Hex(0x1F2329), Medium).Align(v: VerticalAlignment.Center);
         Grid.SetColumn(name, 1);
         head.Children.Add(name);
-        // 对话不扣积分时人人都能用，不标会员
-        if (turn.Text("basis") != "free")
+        // 对话不扣积分时人人都能用，不标会员；基础模型也不标“免费可用”，它仍扣积分，避免误会
+        if (turn.Text("basis") != "free" && status != "free")
         {
-            var badge = Label(status switch { "free" => "免费可用", "member" => "会员", _ => "需开通会员" }, 11,
-                status == "free" ? Hex(0x3F6FD8) : status == "locked" ? Hex(0xC2410C) : Hex(0xA0A6AE)).Align(v: VerticalAlignment.Center);
+            var badge = Label(status == "locked" ? "需开通会员" : "会员", 11,
+                status == "locked" ? Hex(0xC2410C) : Hex(0xA0A6AE)).Align(v: VerticalAlignment.Center);
             Grid.SetColumn(badge, 2);
             head.Children.Add(badge);
         }
