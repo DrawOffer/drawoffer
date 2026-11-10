@@ -182,7 +182,7 @@ public sealed class TemplateSwitchSheet : UserControl
 // MARK: - 版式设置
 
 /// <summary>
-/// Web `WorkbenchTypePanel` + `WorkbenchPageBar`（Mac `TypeSettingsPanel`）：页面排列（上下 / 左右 / 智能一页）、页边距（两个步进器 + 88 宽页面预览）、
+/// Web `WorkbenchTypePanel` + `WorkbenchPageBar`（Mac `TypeSettingsPanel`）：页面排列（上下 / 左右 / 智能一页）、页边距（两个整行步进器）、
 /// 排版（字体下拉、正文字号、正文行距）。步进器控件 116 宽，28×28 描边按钮，数字 12/500。
 /// </summary>
 public sealed class TypeSettingsPanel : UserControl
@@ -229,17 +229,9 @@ public sealed class TypeSettingsPanel : UserControl
                 _arrangementChanged("horizontal");
             })),
             (Star(), Option("智能一页", "sparkles", s.SmartOnePage, () => Set(x => x.SmartOnePage = !x.SmartOnePage), toggle: true)));
-        var preview = new Border
-        {
-            Width = 88, MinHeight = 108, CornerRadius = new CornerRadius(8), BorderBrush = Brush(Line), BorderThickness = new Thickness(1),
-            Child = VStack(10, Icon("rectangle.split.1x2", 22, Blue), Sans("页面预览", 10, Fnt).Align(HorizontalAlignment.Center)).Align(HorizontalAlignment.Center, VerticalAlignment.Center),
-        };
-        AutomationProperties.SetAccessibilityView(preview, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
-        var margins = Columns(16,
-            (Star(), VStack(16,
-                Stepper("上下边距", "mm", s.VerticalPageMargin, ResumeTypeSettings.VerticalMarginRange, v => Set(x => x.VerticalPageMargin = v)),
-                Stepper("左右边距", "mm", s.PageMargin, ResumeTypeSettings.HorizontalMarginRange, v => Set(x => x.PageMargin = v)))),
-            (Auto, preview));
+        var margins = VStack(16,
+            Stepper("上下边距", "mm", s.VerticalPageMargin, ResumeTypeSettings.VerticalMarginRange, v => Set(x => x.VerticalPageMargin = v)),
+            Stepper("左右边距", "mm", s.PageMargin, ResumeTypeSettings.HorizontalMarginRange, v => Set(x => x.PageMargin = v)));
         var typeHead = VStack(5,
             HStack(8, Icon("textformat", 13, Blue), Sans("排版", 13, Txt, Medium)).Frame(height: 22),
             Sans("统一调整简历正文的字体、字号和行距。", 11, Fnt).Frame(height: 22));
@@ -451,7 +443,7 @@ public sealed class SectionOrderSheet : UserControl
 
 /// <summary>
 /// 大纲 V2（Mac `OutlinePanel`，Web `WorkbenchOutlinePanel` + `WorkbenchSectionOrderControl`）：头部、「N 个模块 / 恢复默认顺序」、
-/// 按栏分组的两行模块行（拖动手柄、标题、摘要、待完善 / 空标签、悬停 ⋯ 菜单），虚线「添加模块」与底部 / 提示。
+/// 按栏分组的两行模块行（拖动手柄、标题、摘要、空标签、悬停 ⋯ 菜单），虚线「添加模块」与底部 / 提示。
 /// 个人信息固定在第一行，不能拖动。原生端没有分页信息，不显示 Web 的页面缩略图条。
 /// </summary>
 public sealed class OutlinePanel : UserControl
@@ -468,7 +460,6 @@ public sealed class OutlinePanel : UserControl
     List<JsonNode?> _sections = [];
     JsonNode? _identity;
     Dictionary<string, string> _columns = [];
-    IReadOnlySet<string> _flagged = new HashSet<string>();
     bool _disabled;
     string? _renaming;
     string _renameText = "";
@@ -482,9 +473,9 @@ public sealed class OutlinePanel : UserControl
         _label = label; _jump = jump; _move = move; _reorder = reorder; _rename = rename; _remove = remove; _add = add; _close = close;
     }
 
-    public void Update(List<JsonNode?> sections, JsonNode? identity, Dictionary<string, string> columns, IReadOnlySet<string> flagged, bool disabled)
+    public void Update(List<JsonNode?> sections, JsonNode? identity, Dictionary<string, string> columns, bool disabled)
     {
-        _sections = sections; _identity = identity; _columns = columns; _flagged = flagged; _disabled = disabled;
+        _sections = sections; _identity = identity; _columns = columns; _disabled = disabled;
         Render();
     }
 
@@ -541,7 +532,7 @@ public sealed class OutlinePanel : UserControl
     }
 
     /// <summary>个人信息：锁图标、「固定」，摘要是已填的联系方式。</summary>
-    FrameworkElement IdentityRow() => OutlineRow.Make("个人信息", ResumeOutline.IdentitySummary(_identity), _flagged.Contains("identity"), empty: false,
+    FrameworkElement IdentityRow() => OutlineRow.Make("个人信息", ResumeOutline.IdentitySummary(_identity), empty: false,
         fixedRow: true, current: false, dragging: false, disabled: _disabled, renaming: null, handle: null, menu: null, open: () => _jump("identity"));
 
     FrameworkElement SectionRow(int index)
@@ -572,7 +563,7 @@ public sealed class OutlinePanel : UserControl
             menu.Items.Add(new MenuFlyoutItem { Text = "连同内容一起删除，可 Ctrl+Z 撤销", IsEnabled = false });
             menu.ShowAt(menuButton);
         }, $"「{title}」更多操作");
-        var row = OutlineRow.Make(title, ResumeOutline.Summary(section), _flagged.Contains(section.Text("semantic_kind")), empty, fixedRow: false, current: false,
+        var row = OutlineRow.Make(title, ResumeOutline.Summary(section), empty, fixedRow: false, current: false,
             dragging: _dragging == key, disabled: _disabled, renaming: _renaming == key ? _renameText : null, handle: handleHost, menu: menuButton,
             open: () => _jump(key), commitRename: value =>
             {
@@ -663,7 +654,7 @@ public sealed class OutlinePanel : UserControl
 /// <summary>一行模块（Mac `OutlineRow`）：最小 52 高、圆角 10、内边距 9/10/9/8、间距 8；标题 13 行高 16，摘要 11 行高 13；悬停 #fafaf9，⋯ 只在悬停时出现并替换标签。</summary>
 static class OutlineRow
 {
-    public static Grid Make(string title, string summary, bool flagged, bool empty, bool fixedRow, bool current, bool dragging, bool disabled, string? renaming,
+    public static Grid Make(string title, string summary, bool empty, bool fixedRow, bool current, bool dragging, bool disabled, string? renaming,
         FrameworkElement? handle, FrameworkElement? menu, Action open, Action<string?>? commitRename = null)
     {
         var row = new Grid { MinHeight = 52, Padding = new Thickness(8, 9, 10, 9), CornerRadius = new CornerRadius(10), ColumnSpacing = 8, Opacity = dragging ? 0.35 : 1 };
@@ -707,12 +698,7 @@ static class OutlineRow
         void Paint()
         {
             trailing.Children.Clear();
-            if (!(hover && !fixedRow))
-            {
-                if (flagged) trailing.Children.Add(Tag("待完善", Hex(0xB8661A), Hex(0xFBF1E6)));
-                else if (empty && !fixedRow) trailing.Children.Add(Tag("空", Fnt, Field));
-            }
-            else if (fixedRow && flagged) trailing.Children.Add(Tag("待完善", Hex(0xB8661A), Hex(0xFBF1E6)));
+            if (!(hover && !fixedRow) && empty && !fixedRow) trailing.Children.Add(Tag("空", Fnt, Field));
             if (fixedRow) trailing.Children.Add(Sans("固定", 11, Fnt2));
             if (hover && !fixedRow && !disabled && menu is not null) { ResumeEditorView.Detach(menu); menu.Margin = new Thickness(0, 0, -3, 0); trailing.Children.Add(menu); }
             row.Background = Brush(current ? Field : hover ? Hex(0xFAFAF9) : Clear);
@@ -751,151 +737,6 @@ static class ColumnGlyph
         frame.Children.Add(new Border { CornerRadius = new CornerRadius(2), BorderBrush = Brush(Fnt), BorderThickness = new Thickness(1.5) });
         AutomationProperties.SetAccessibilityView(frame, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
         return frame;
-    }
-}
-
-// MARK: - 简历检查
-
-/// <summary>简历检查（Mac `CompletenessPanel`，Web `ResumeCompletenessPanel`）：分数与等级、示例内容提示、优先完善与已通过。</summary>
-public sealed class CompletenessPanel : UserControl
-{
-    readonly Action _close;
-    ResumeCompleteness? _result;
-    bool _passedOpen, _opened;
-    readonly ScrollViewer _scroll = new() { VerticalScrollBarVisibility = ScrollBarVisibility.Hidden };
-
-    public CompletenessPanel(Action close) => _close = close;
-
-    public void Update(ResumeCompleteness result)
-    {
-        _result = result;
-        // `.onAppear { passedOpen = incompleteCount == 0 }`
-        if (!_opened) { _passedOpen = result.Checks.All(x => x.Status == "passed"); _opened = true; }
-        Render();
-    }
-
-    void Render()
-    {
-        if (_result is not { } result) return;
-        var incomplete = result.Checks.Where(x => x.Status != "passed").ToList();
-        var passed = result.Checks.Where(x => x.Status == "passed").ToList();
-        // `.wb3-check-content`：内边距 15/24/24
-        var content = VStack(0, Summary(result, incomplete.Count));
-        if (result.Caps.Count > 0) content.Children.Add(Caps(result).Top(18));
-        // `.wb3-check-section`：上 24；头 16 高、下 12；卡片间距 10
-        content.Children.Add(Spread(Sans("优先完善", 13, Txt, Medium), Sans($"{incomplete.Count} 项", 12, Fnt), 8).Frame(height: 16).Pad(0, 24, 0, 12));
-        if (incomplete.Count == 0)
-            content.Children.Add(new Border
-            {
-                Child = Sans("基础内容已经齐全，可以继续优化表达质量。", 12, Green).Wrap(), Padding = new Thickness(14, 12, 14, 12),
-                CornerRadius = new CornerRadius(10), Background = Brush(GreenSoft),
-            });
-        else content.Children.Add(VStack(10, incomplete.Select(CheckRow).ToArray()));
-        // `.wb3-check-passed`：上 16；40 高 #f4f4f2 圆角 10 的展开行，展开后下 10
-        var chevron = Icon("chevron.right", 10, Sub);
-        chevron.FontWeight = Semibold;
-        chevron.Width = 14;
-        chevron.RenderTransformOrigin = new Point(0.5, 0.5);
-        chevron.RenderTransform = new RotateTransform { Angle = _passedOpen ? 90 : 0 };
-        var toggle = new Border
-        {
-            Child = Columns(8, (Auto, chevron), (Star(), Sans("已通过", 12.5, Txt, Medium)), (Auto, Sans($"{passed.Count} 项", 12, Fnt))),
-            Padding = new Thickness(14, 0, 14, 0), Height = 40, CornerRadius = new CornerRadius(10), Background = Brush(Field), Margin = new Thickness(0, 16, 0, 0),
-        };
-        toggle.OnTap(() => { _passedOpen = !_passedOpen; Render(); }, $"已通过 {passed.Count} 项");
-        if (_passedOpen) AutomationProperties.SetItemStatus(toggle, "已展开");
-        content.Children.Add(toggle);
-        if (_passedOpen) content.Children.Add(VStack(10, passed.Select(CheckRow).ToArray()).Top(10));
-        content.Children.Add(Sans("完整度检查基础信息、结构及技能表达的具体程度，不代表岗位匹配度。", 11, Fnt).LineHeight(16).Wrap().Pad(0, 20.5, 0, 2.5));
-        content.Padding = new Thickness(24, 15, 24, 24);
-        var offset = _scroll.VerticalOffset;
-        _scroll.Content = content;
-
-        var grid = new Grid { VerticalAlignment = VerticalAlignment.Stretch };
-        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        grid.RowDefinitions.Add(new RowDefinition { Height = Star() });
-        grid.Children.Add(WorkbenchPanelHeader.Make("简历检查", "实时规则检查", "关闭简历检查", _close));
-        ResumeEditorView.Detach(_scroll);
-        Grid.SetRow(_scroll, 1);
-        grid.Children.Add(_scroll);
-        Content = grid;
-        _scroll.DispatcherQueue.TryEnqueue(() => _scroll.ChangeView(null, offset, null, true));
-    }
-
-    /// <summary>
-    /// `.wb3-check-summary`：大号仪表盘（`gaugeGeometry(false, 18)`），弧心 34/600 分数与 11px「/ 100」，
-    /// 两端 10px 的 0 / 100，开口处 24 高等级胶囊；下方 12px 说明，上距 6。
-    /// </summary>
-    static FrameworkElement Summary(ResumeCompleteness result, int pending)
-    {
-        var g = WorkbenchGaugeShape.GaugeGeometry(false, 18);
-        var angle = 150.0 * Math.PI / 180;
-        var endX = g.R * Math.Cos(angle);
-        var endY = g.Cy + g.R * Math.Sin(angle);
-        var canvas = new Canvas { Width = g.Width, Height = g.Height };
-        canvas.Children.Add(WorkbenchGaugeShape.Make(result.Score, extra: 18));
-        var score = VStack(3, Number($"{result.Score}", 34, Txt, Semibold).Frame(height: 41).Align(HorizontalAlignment.Center), Number("/ 100", 11, Fnt, Medium).Align(HorizontalAlignment.Center));
-        score.Width = g.Width;
-        AutomationProperties.SetName(score, $"当前完整度 {result.Score} 分");
-        canvas.Children.Add(score.At(0, g.Cy - 42));
-        var zero = Number("0", 10, Fnt2, Medium).Frame(height: 12);
-        var hundred = Number("100", 10, Fnt2, Medium).Frame(height: 12);
-        canvas.Children.Add(zero);
-        canvas.Children.Add(hundred);
-        Draw.Place(zero, new Point(g.Cx + endX, endY + 16), 0.5, 0.5);
-        Draw.Place(hundred, new Point(g.Cx - endX, endY + 16), 0.5, 0.5);
-        var level = new Border { Child = Sans(result.Level, 12, Txt, Medium).Align(v: VerticalAlignment.Center), Padding = new Thickness(12, 0, 12, 0), Height = 24, CornerRadius = Capsule(24), Background = Brush(Field) };
-        canvas.Children.Add(level);
-        Draw.Place(level, new Point(g.Cx, g.Cy + 42), 0.5, 0.5);
-        var text = Sans("当前完整度 · " + (pending > 0 ? $"还有 {pending} 项可以完善" : "所有基础检查均已通过"), 12, Sub).Frame(height: 22);
-        text.HorizontalAlignment = HorizontalAlignment.Center;
-        canvas.HorizontalAlignment = HorizontalAlignment.Center;
-        return VStack(6, canvas, text);
-    }
-
-    /// <summary>`.wb3-check-caps`：#f1dfc8 描边、圆角 10、橙色浅底、12/14；标题 12.5/500，原因 11.5px 行高 18。</summary>
-    static Border Caps(ResumeCompleteness result)
-    {
-        var icon = Icon("exclamationmark.triangle", 12, Orange);
-        icon.VerticalAlignment = VerticalAlignment.Top;
-        icon.Margin = new Thickness(0, 1, 0, 0);
-        var texts = VStack(4, Sans("检测到示例内容", 12.5, Txt, Medium));
-        foreach (var cap in result.Caps) texts.Children.Add(Sans(cap.Reason, 11.5, Sub).LineHeight(18).Wrap());
-        var card = new Border
-        {
-            Child = Columns(8, (Auto, icon), (Star(), texts)), Padding = new Thickness(14, 12, 14, 12), CornerRadius = new CornerRadius(10),
-            Background = Brush(OrangeSoft), BorderBrush = Brush(Hex(0xF1DFC8)), BorderThickness = new Thickness(1),
-        };
-        AutomationProperties.SetName(card, "分数限制说明");
-        return card;
-    }
-
-    /// <summary>
-    /// `.wb3-check-check`：白底、#e4e4e0 描边、圆角 10、内边距 14；左 22 圆形状态标（橙 / 绿 / 红浅底）；
-    /// 标题行 22 高（13/500 名称、11px 得分、右侧状态字）；问题 12px 行高 19，建议 11.5px 行高 18。
-    /// </summary>
-    static UIElement CheckRow(ResumeCompleteness.Check item)
-    {
-        var tone = item.Status == "passed" ? Green : item.Status == "failed" ? Red : Orange;
-        var soft = item.Status == "passed" ? GreenSoft : item.Status == "failed" ? RedSoft : OrangeSoft;
-        var glyph = Icon(item.Status == "passed" ? "checkmark" : item.Status == "failed" ? "exclamationmark" : "minus", 9, tone);
-        glyph.FontWeight = Bold;
-        var mark = new Border { Width = 22, Height = 22, CornerRadius = new CornerRadius(11), Background = Brush(soft), Child = glyph.Align(HorizontalAlignment.Center, VerticalAlignment.Center), VerticalAlignment = VerticalAlignment.Top };
-        AutomationProperties.SetAccessibilityView(mark, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
-        var status = item.Status == "passed" ? "已通过" : item.Status == "partial" ? "需完善" : "待补充";
-        var head = Columns(8, (Auto, Sans(item.Label, 13, Txt, Medium)), (Auto, Number($"{item.Earned}/{item.Max} 分", 11, Fnt, Medium)), (Star(), new Border { MinWidth = 4 }), (Auto, Sans(status, 11, tone, Medium)));
-        head.Height = 22;
-        foreach (var child in head.Children.OfType<FrameworkElement>()) child.VerticalAlignment = VerticalAlignment.Center;
-        var texts = VStack(4, head,
-            item.Issue is { } issue ? Sans(issue, 12, Sub).LineHeight(19).Wrap().Pad(0, 2, 0, 2) : null,
-            item.Recommendation is { } advice ? Sans(advice, 11.5, Fnt).LineHeight(18).Wrap().Pad(0, 2, 0, 2) : null);
-        var card = new Border
-        {
-            Child = Columns(10, (Auto, mark), (Star(), texts)), Padding = new Thickness(14), CornerRadius = new CornerRadius(10),
-            Background = Brush(V3.White), BorderBrush = Brush(Cl), BorderThickness = new Thickness(1),
-        };
-        AutomationProperties.SetName(card, $"{item.Label} {item.Earned}/{item.Max} 分 {status}");
-        return card;
     }
 }
 

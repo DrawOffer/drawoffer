@@ -36,7 +36,6 @@ public sealed class ResumeEditorView : UserControl
     string? _notice;
     bool _saving, _conflict;
     string? _paperNote;
-    ResumeCompleteness? _completeness;
     /// <summary>可编辑纸面：`paperSeed` 变化时重新载入（打开、换模板、重新载入）；版式在排版面板改动时按 `styleRevision` 下发。</summary>
     JsonNode? _paperSeed;
     int _paperGeneration, _styleRevision;
@@ -52,7 +51,7 @@ public sealed class ResumeEditorView : UserControl
     string _pageArrangement = EditorPreferences.Read("workbench.pageArrangement", "vertical");
     // Mac 保留了 uploading（头像上传改由纸面完成后不再置位），这里同样保留以便 Busy 与 Swift 一致
     readonly bool _uploading = false;
-    /// <summary>右侧工具轨当前打开的面板（Web 大纲 / 模板 / 排版 / 检查）。</summary>
+    /// <summary>右侧工具轨当前打开的面板（Web 大纲 / 模板 / 排版）。</summary>
     string? _panel;
     /// <summary>自动保存：停顿后串行保存；失败时显示横幅和重试。</summary>
     CancellationTokenSource? _autosaveTask;
@@ -68,7 +67,6 @@ public sealed class ResumeEditorView : UserControl
     readonly TextBox _titleBox = new();
     TemplateSwitchSheet? _templatePanel;
     OutlinePanel? _outlinePanel;
-    CompletenessPanel? _checkPanel;
     TypeSettingsPanel? _typePanel;
     Grid? _typeGrid;
     ResumeGuidePanel? _guidePanel;
@@ -339,7 +337,7 @@ public sealed class ResumeEditorView : UserControl
     /// <summary>
     /// `.wb3-head`：57 高（含 1px 下边线）、左右 16、三栏网格。左：32 圆角 8 的主页钮、13/500「简历编辑」、
     /// 1×16 分隔（左 20 右 6）、28×28 撤销/重做；中：14.5/500 居中标题（随内容伸缩，最宽 420）与保存状态；
-    /// 右：32 高完整度胶囊（迷你仪表盘 + 分数 + 等级）与 104 宽「导出 PDF」。
+    /// 右：104 宽「导出 PDF」。
     /// </summary>
     void RenderToolbar()
     {
@@ -354,22 +352,6 @@ public sealed class ResumeEditorView : UserControl
 
         var right = new StackPanel { Orientation = Orientation.Horizontal };
         if (_conflict) right.Children.Add(new V3Button("重新载入", () => _ = Load(), V3Button.Kind.Ghost).Pad(0, 0, 8, 0));
-        if (_completeness is { } completeness)
-        {
-            var on = _panel == "check";
-            var pill = new Border
-            {
-                Child = HStack(0,
-                    MiniGauge.Make(completeness.Score).Pad(0, 0, 7, 0),
-                    Number($"{completeness.Score}", 12.5, Txt, Semibold),
-                    Sans(completeness.Level, 11.5, Sub).Pad(6, 0, 0, 0)),
-                Padding = new Thickness(10, 0, 14, 0), Height = 32, CornerRadius = Capsule(32),
-                Background = Brush(on ? Field : V3.White), BorderBrush = Brush(on ? Hex(0xDCDCD8) : Cl), BorderThickness = new Thickness(1),
-            };
-            pill.OnTap(() => TogglePanel("check"), $"简历完整度 {completeness.Score} 分，{completeness.Level}，打开简历检查");
-            if (on) AutomationProperties.SetItemStatus(pill, "已选中");
-            right.Children.Add(pill);
-        }
         var export = new V3Button(_exporting ? "导出中…" : "导出 PDF", () => _ = ExportPdf(), V3Button.Kind.Dark, height: 32, width: 104) { Enabled = !_exporting && _record is not null };
         right.Children.Add(export.Pad(8, 0, 0, 0));
 
@@ -396,7 +378,7 @@ public sealed class ResumeEditorView : UserControl
 
     /// <summary>
     /// `.wb3-rail`：56 宽白卡、圆角 14、内边距 5/3、间距 2、0 6 20 rgba(0,0,0,.06)；每项 48×52、圆角 10、上 9，
-    /// 18 号图标与 10.5px 文字间距 4，选中 #f4f4f2 底与 500 字重；「检查」右上 16 高橙色待完善数角标。
+    /// 18 号图标与 10.5px 文字间距 4，选中 #f4f4f2 底与 500 字重。
     /// </summary>
     Border ToolRail()
     {
@@ -404,7 +386,6 @@ public sealed class ResumeEditorView : UserControl
             RailButton("outline", "大纲", "list.bullet.indent"),
             RailButton("template", "模板", "rectangle.on.rectangle", label: "简历模板"),
             RailButton("type", "排版", "textformat", label: "排版"),
-            RailButton("check", "检查", "checkmark.circle", label: "简历检查", badge: _completeness?.PendingCount ?? 0),
             _guide is not null ? RailButton("guide", "引导", "bubble.left", label: "引导创建简历") : null);
         var rail = new Border
         {
@@ -467,7 +448,7 @@ public sealed class ResumeEditorView : UserControl
                     remove: index => { if (index >= 0 && index < Sections.Count) _channel.Send(ResumeEditorCommand.Remove(Sections[index].NodeKey())); },
                     add: kind => _channel.Send(ResumeEditorCommand.Add(kind.key, kind.label)),
                     close: () => { _panel = null; Render(); });
-                _outlinePanel.Update(Sections, _doc.Get("identity"), ResumeLayout.Columns(_doc, _style), _completeness?.FlaggedKinds ?? new HashSet<string>(), Busy);
+                _outlinePanel.Update(Sections, _doc.Get("identity"), ResumeLayout.Columns(_doc, _style), Busy);
                 return _outlinePanel;
             case "type":
                 if (_typeGrid is not null && (_typePanel is not null) == (ResumeTypeSettings.Read(_style) is not null))
@@ -497,11 +478,6 @@ public sealed class ResumeEditorView : UserControl
                 _templatePanel ??= new TemplateSwitchSheet(ApplyTemplate, () => { _panel = null; Render(); });
                 _templatePanel.Update(TemplateKey, Busy || _conflict);
                 return _templatePanel;
-            case "check":
-                if (_completeness is not { } result) return null;
-                _checkPanel ??= new CompletenessPanel(() => { _panel = null; Render(); });
-                _checkPanel.Update(result);
-                return _checkPanel;
             default: return null;
         }
     }
@@ -606,7 +582,6 @@ public sealed class ResumeEditorView : UserControl
         if (S.Same(next, _doc)) return;
         _doc = next;
         ScheduleAutosave();
-        _completeness = ResumeCompleteness.Evaluate(_doc) ?? _completeness;
     }
 
     void SetStyle(JsonNode? next)
@@ -702,7 +677,6 @@ public sealed class ResumeEditorView : UserControl
         _paperNote = null;
         var warnings = S.HasKey(resume.Get("import"), "warnings") ? resume.Get("import").Get("warnings") : resume.Get("import_warnings");
         _importWarnings = S.Arr(warnings).Select(x => x.String()).OfType<string>().ToList();
-        _completeness = ResumeCompleteness.Evaluate(_saved);
         _saveFailed = false; _canUndo = false; _canRedo = false;
         _paperSeed = new JsonObject { ["data"] = S.Clone(_saved), ["style"] = S.Clone(_savedStyle) };
         _paperGeneration += 1;
@@ -717,7 +691,6 @@ public sealed class ResumeEditorView : UserControl
         _record = resume;
         _saved = S.Clone(resume.Get("data"));
         _savedStyle = S.Clone(resume.Get("style"));
-        _completeness = ResumeCompleteness.Evaluate(_saved);
         if (editedDuringSave) ScheduleAutosave();
         else
         {
@@ -979,59 +952,6 @@ static class HeadIconStyle
     }
 
     public readonly record struct FontWeightValue(bool Medium);
-}
-
-/// <summary>`WorkbenchGauge mini`（Mac `MiniGauge`）：18×16，半径 7、线宽 3 的 240° 圆弧，浅灰轨道 + 灰到黑渐变弧 + 末端白色旋钮。</summary>
-static class MiniGauge
-{
-    public static FrameworkElement Make(int score) => WorkbenchGaugeShape.Make(score, mini: true);
-}
-
-/// <summary>Web `WorkbenchGauge`（Mac `WorkbenchGaugeShape`）：起点 150°、扫过 240°；大号半径 78、线宽 10，带每 5 分一格的刻度（20 的倍数与 40/70/90 加长）。</summary>
-static class WorkbenchGaugeShape
-{
-    public static (double R, double Sw, double Width, double Height, double Cx, double Cy) GaugeGeometry(bool mini, double extra = 0)
-    {
-        double r = mini ? 7 : 78, sw = mini ? 3 : 10, pad = mini ? 2 : 18;
-        double width = Math.Ceiling(2 * (r + pad)), cy = r + pad;
-        return (r, sw, width, Math.Ceiling(cy + r * 0.5 + sw / 2 + 2 + extra), width / 2, cy);
-    }
-
-    public static FrameworkElement Make(int score, bool mini = false, double extra = 0)
-    {
-        var g = GaugeGeometry(mini, extra);
-        var draw = new Draw(g.Width, g.Height);
-        Point P(double angle, double radius) => new(g.Cx + radius * Math.Cos(angle * Math.PI / 180), g.Cy + radius * Math.Sin(angle * Math.PI / 180));
-        Geometry Arc(double from, double to)
-        {
-            var figure = new PathFigure { StartPoint = P(from, g.R), IsClosed = false, IsFilled = false };
-            figure.Segments.Add(new ArcSegment { Point = P(to, g.R), Size = new Size(g.R, g.R), SweepDirection = SweepDirection.Clockwise, IsLargeArc = to - from > 180 });
-            return new PathGeometry { Figures = { figure } };
-        }
-        var end = 150 + 240 * Math.Max(0.5, Math.Min(100, (double)score)) / 100;
-        draw.Stroke(Arc(150, 390), Hex(0xECECEA), g.Sw, round: true);
-        draw.Stroke(Arc(150, end), Draw.Gradient(new Point(0, 0), new Point(g.Width, 0), (Hex(0xA3A39C), 0), (Hex(0x1D1D1B), 1)), g.Sw, round: true);
-        if (!mini)
-        {
-            for (var index = 0; index <= 20; index++)
-            {
-                var value = index * 5;
-                var angle = 150 + 240 * (double)value / 100;
-                var level = value is 40 or 70 or 90;
-                var major = value % 20 == 0 || level;
-                var r1 = g.R + g.Sw / 2 + 5;
-                draw.Stroke(Draw.Lines([P(angle, r1), P(angle, r1 + (major ? 6 : 3))]), Hex(level ? 0x96968Fu : major ? 0xC4C4BEu : 0xDCDCD8u), level ? 1.4 : 1, round: true);
-            }
-            var halo = g.Sw * 1.05;
-            draw.Fill(Draw.Circle(P(end, g.R), halo), Alpha(Hex(0x1D1D1B), 0.08));
-        }
-        var knob = P(end, g.R);
-        var kr = g.Sw * (mini ? 0.62 : 0.78);
-        draw.Fill(Draw.Circle(knob, kr), V3.White);
-        draw.Stroke(Draw.Circle(knob, kr), Hex(0x1D1D1B), g.Sw * (mini ? 0.34 : 0.3));
-        AutomationProperties.SetAccessibilityView(draw.Surface, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
-        return draw.Surface;
-    }
 }
 
 /// <summary>`WorkbenchPanelHeader`：73 高（含 1px 下边线）、内边距 20/24；标题 16/500 行高 19、说明 11.5 行高 14、间距 6；右上 28 关闭钮（-4/-6）。</summary>
