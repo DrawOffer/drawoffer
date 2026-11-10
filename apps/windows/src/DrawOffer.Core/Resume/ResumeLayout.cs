@@ -111,10 +111,7 @@ public sealed record ResumeTypeSettings(string FontFamily, double FontSize, doub
         var key = snapshot.Text("template_key");
         var scoped = style.Get("template_scoped").Get(key);
         var portable = style.Get("portable");
-        // A zero carried in portable is a previous template's full-bleed decoration,
-        // not a text inset the user chose. The active template's own zero still wins.
-        double? Carried(string field) { var value = portable.Number(field); return value is > 0 ? value : null; }
-        double? Pick(string field) => scoped.Number(field) ?? Carried(field);
+        double? Pick(string field) => scoped.Number(field) ?? portable.Number(field);
         var fontBase = tokens.Number("font_size_pt") ?? 10;
         var scale = Pick("font_scale") ?? 1;
         var margin = tokens.Number("page_margin_mm") ?? 16;

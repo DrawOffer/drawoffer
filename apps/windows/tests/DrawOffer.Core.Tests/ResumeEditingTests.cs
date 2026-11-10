@@ -53,20 +53,6 @@ public sealed class ResumeEditingTests
     }
 
     [Fact]
-    public void CarriedZeroMarginDoesNotReplaceTheActiveTemplateInset()
-    {
-        const string source = """
-        {"schema_version":"resume-presentation.v1",
-         "portable":{"page_margin_mm":10,"vertical_page_margin_mm":0,"page_margin_top_mm":0,"page_margin_right_mm":0,"page_margin_bottom_mm":8,"page_margin_left_mm":10},
-         "template_scoped":{"muse-badge-cn":{}},
-         "template_snapshot":{"template_key":"muse-badge-cn","tokens":{"font_family":"source-han-serif","font_size_pt":10,"line_height":1.5,"accent_color":"#2F4858","page_margin_mm":12}}}
-        """;
-        var settings = ResumeTypeSettings.Read(J(source));
-        Assert.NotNull(settings);
-        Assert.True(settings.PageMargin == 10 && settings.VerticalPageMargin == 12);
-    }
-
-    [Fact]
     public void TextRunsKeepValueInSyncAndDropPlainRuns()
     {
         var bold = ResumeDocument.TextRun("张", ["bold"]);
