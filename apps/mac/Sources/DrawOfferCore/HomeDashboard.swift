@@ -2,7 +2,6 @@ import Foundation
 
 /// 首页卡片规则（Web `features/assistant/homeDashboard.ts`，Figma「01.1 首页 · 状态变体」）：
 /// 三个卡片位各自按顺序取第一个满足条件的候选；没有简历的账号固定三张引导卡。规则只读数据，不经过 AI。
-/// 位置 2 的完整度由 `ResumeCompleteness` 按 Web 同一规则从最近编辑简历的预览正文计算。
 public struct HomeDashboard: Sendable {
     public enum Variant: String, Sendable { case new, offer, today, deadline, idle }
 
@@ -13,8 +12,7 @@ public struct HomeDashboard: Sendable {
         case deadline(session: JSONValue, daysLeft: Int)
         case week(sessions: [JSONValue])
         case compare(offers: [JSONValue])
-        case resumeTodo(ResumeSummary, score: Int, missing: String)
-        case resumeRecent(ResumeSummary, score: Int?)
+        case resumeRecent(ResumeSummary)
         case jobs
         case pipeline(applications: [JSONValue], hint: String)
     }
@@ -26,8 +24,6 @@ public struct HomeDashboard: Sendable {
     public let deadline: (company: String, daysLeft: Int)?
 
     static let deadlineDays = 3
-    /// Web `RESUME_TODO_THRESHOLD`。
-    static let resumeTodoThreshold = 90
     static let day: TimeInterval = 86_400
 
     public static func build(now: Date, resumes: [ResumeSummary], sessions: [JSONValue], applications: [JSONValue], calendar: Calendar = Beijing.calendar) -> HomeDashboard {
@@ -64,11 +60,9 @@ public struct HomeDashboard: Sendable {
             first = .week(sessions: scheduled.filter { guard let start = date($0.text("start_at")) else { return false }; return start >= weekStart && start < weekEnd })
             variant = .idle
         }
-        let completeness = recent.preview.flatMap { ResumeCompleteness.evaluate($0.data) }
         let second: Card
         if offers.count >= 2 { second = .compare(offers: Array(offers.prefix(2))) }
-        else if let completeness, completeness.score < resumeTodoThreshold, let missing = completeness.missing { second = .resumeTodo(recent, score: completeness.score, missing: missing) }
-        else { second = .resumeRecent(recent, score: completeness?.score) }
+        else { second = .resumeRecent(recent) }
         let third: Card
         if case .week = first { third = .jobs } else if active.isEmpty { third = .jobs } else { third = .pipeline(applications: active, hint: pipelineHint(active, now: now)) }
         return HomeDashboard(variant: variant, cards: [first, second, third], todayCount: today.count,

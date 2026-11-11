@@ -5,7 +5,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// 简历编辑（Web `ResumeWorkbench` 的对应页）：纸面即编辑器，与 Web 同一套 TipTap 编辑器、分页、斜杠菜单与选区工具栏
-/// （`ResumeEditorPaperView`）；顶栏、右侧工具轨与大纲 / 模板 / 排版 / 检查 / 引导面板由原生实现。
+/// （`ResumeEditorPaperView`）；顶栏、右侧工具轨与大纲 / 模板 / 排版 / 引导面板由原生实现。
 /// 保存提交 `PUT /api/resumes/{id}` 的 data、style 与 base_lock_version；冲突时提示重新载入，不覆盖他处的修改。
 struct ResumeEditorView: View {
     @Environment(SessionStore.self) private var session
@@ -25,7 +25,6 @@ struct ResumeEditorView: View {
     @State private var conflict = false
     @State private var confirmLeave = false
     @State private var paperNote: String?
-    @State private var completeness: ResumeCompleteness?
     /// 可编辑纸面：`paperSeed` 变化时重新载入（打开、换模板、重新载入）；版式在排版面板改动时按 `styleRevision` 下发。
     @State private var paperSeed: JSONValue?
     @State private var paperGeneration = 0
@@ -43,7 +42,7 @@ struct ResumeEditorView: View {
     /// Web 存在 localStorage 的「页面排列」，只影响编辑时浏览方向。
     @AppStorage("workbench.pageArrangement") private var pageArrangement = "vertical"
     @State private var uploading = false
-    /// 右侧工具轨当前打开的面板（Web 大纲 / 模板 / 排版 / 检查）。
+    /// 右侧工具轨当前打开的面板（Web 大纲 / 模板 / 排版）。
     @State private var panel: String?
     /// 自动保存：停顿后串行保存；失败时显示横幅和重试。
     @State private var autosaveTask: Task<Void, Never>?
@@ -75,7 +74,7 @@ struct ResumeEditorView: View {
         }
         .task { await load(); await loadGuide() }
         .onExitCommand { if panel != nil { panel = nil } }
-        .onChange(of: doc) { _, _ in scheduleAutosave(); completeness = ResumeCompleteness.evaluate(doc) ?? completeness }
+        .onChange(of: doc) { _, _ in scheduleAutosave() }
         .onChange(of: style) { _, _ in
             // 排版面板改的版式下发给纸面；纸面自己回报的（头像尺寸）不再回送
             if style != paperStyle { styleRevision += 1 }
@@ -210,7 +209,7 @@ struct ResumeEditorView: View {
 
     /// `.wb3-head`：57 高（含 1px 下边线）、左右 16、三栏网格。左：32 圆角 8 的主页钮、13/500「简历编辑」、
     /// 1×16 分隔（左 20 右 6）、28×28 撤销/重做；中：14.5/500 居中标题（随内容伸缩，最宽 420）与保存状态；
-    /// 右：32 高完整度胶囊（迷你仪表盘 + 分数 + 等级）与 104 宽「导出 PDF」。
+    /// 右：104 宽「导出 PDF」。
     private var toolbar: some View {
         ZStack {
             HStack(spacing: 0) {
@@ -229,19 +228,6 @@ struct ResumeEditorView: View {
                 }
                 Spacer(minLength: 16)
                 if conflict { Button("重新载入") { Task { await load() } }.buttonStyle(V3ButtonStyle(kind: .ghost)).padding(.trailing, 8) }
-                if let completeness {
-                    Button { togglePanel("check") } label: {
-                        HStack(spacing: 0) {
-                            MiniGauge(score: completeness.score).padding(.trailing, 7)
-                            Text("\(completeness.score)").font(V3.number(12.5, weight: .semibold)).foregroundStyle(V3.txt)
-                            Text(completeness.level).font(V3.sans(11.5)).foregroundStyle(V3.sub).padding(.leading, 6)
-                        }
-                        .padding(.leading, 10).padding(.trailing, 14).frame(height: 32)
-                        .background(panel == "check" ? V3.field : .white, in: Capsule())
-                        .overlay(Capsule().stroke(panel == "check" ? Color(hex: 0xDCDCD8) : V3.cl)).contentShape(Capsule())
-                    }.buttonStyle(.plain).accessibilityLabel("简历完整度 \(completeness.score) 分，\(completeness.level)，打开简历检查")
-                        .accessibilityAddTraits(panel == "check" ? .isSelected : [])
-                }
                 Button(exporting ? "导出中…" : "导出 PDF") { Task { await exportPDF() } }
                     .buttonStyle(V3ButtonStyle(kind: .dark, height: 32, width: 104)).disabled(exporting || record == nil).padding(.leading, 8)
             }
@@ -268,13 +254,12 @@ struct ResumeEditorView: View {
     }
 
     /// `.wb3-rail`：56 宽白卡、圆角 14、内边距 5/3、间距 2、0 6 20 rgba(0,0,0,.06)；每项 48×52、圆角 10、上 9，
-    /// 18 号图标与 10.5px 文字间距 4，选中 #f4f4f2 底与 500 字重；「检查」右上 16 高橙色待完善数角标。
+    /// 18 号图标与 10.5px 文字间距 4，选中 #f4f4f2 底与 500 字重。
     private var toolRail: some View {
         VStack(spacing: 2) {
             railButton("outline", "大纲", "list.bullet.indent")
             railButton("template", "模板", "rectangle.on.rectangle", label: "简历模板")
             railButton("type", "排版", "textformat", label: "排版")
-            railButton("check", "检查", "checkmark.circle", label: "简历检查", badge: completeness.map { $0.pendingCount } ?? 0)
             if guide != nil { railButton("guide", "引导", "bubble.left", label: "引导创建简历") }
         }
         .padding(.vertical, 5).padding(.horizontal, 3).frame(width: 56)
@@ -310,7 +295,7 @@ struct ResumeEditorView: View {
         switch panel {
         case "outline":
             OutlinePanel(sections: sections, identity: doc["identity"], label: sectionLabel, columns: ResumeLayout.columns(data: doc, style: style),
-                         flagged: completeness?.flaggedKinds ?? [], disabled: busy,
+                         disabled: busy,
                          jump: { channel.send(.jump($0 == "identity" ? nil : $0)) },
                          move: { from, to in channel.send(.reorder(doc.moving([.key("sections")], from: from, to: to)["sections"]?.items.map(\.nodeKey) ?? [])) },
                          reorder: { order in channel.send(.reorder(order.map(\.nodeKey))) },
@@ -326,8 +311,6 @@ struct ResumeEditorView: View {
             }
         case "template":
             TemplateSwitchSheet(currentKey: templateKey, disabled: busy || conflict, apply: applyTemplate, close: { panel = nil })
-        case "check":
-            if let completeness { CompletenessPanel(result: completeness, close: { panel = nil }) }
         default: EmptyView()
         }
     }
@@ -421,7 +404,6 @@ struct ResumeEditorView: View {
         title = resume.text("title")
         paperNote = nil
         importWarnings = (resume["import"]?["warnings"]?.items ?? resume["import_warnings"]?.items ?? []).compactMap(\.stringValue)
-        completeness = ResumeCompleteness.evaluate(saved)
         saveFailed = false; canUndo = false; canRedo = false
         paperSeed = .object(["data": saved, "style": savedStyle])
         paperStyle = savedStyle
@@ -435,7 +417,6 @@ struct ResumeEditorView: View {
         record = resume
         saved = resume["data"] ?? .null
         savedStyle = resume["style"] ?? .null
-        completeness = ResumeCompleteness.evaluate(saved)
         if editedDuringSave {
             doc = current.0; style = current.1; title = current.2
             scheduleAutosave()
@@ -622,59 +603,6 @@ private struct TitleField: View {
             .background(focused ? .white : hover ? V3.field : .clear, in: RoundedRectangle(cornerRadius: 7))
             .overlay(RoundedRectangle(cornerRadius: 7).stroke(focused ? V3.cl : .clear))
             .onHover { hover = $0 }
-    }
-}
-
-/// `WorkbenchGauge mini`：18×16，半径 7、线宽 3 的 240° 圆弧，浅灰轨道 + 灰到黑渐变弧 + 末端白色旋钮。
-struct MiniGauge: View {
-    let score: Int
-    var body: some View { WorkbenchGaugeShape(score: score, mini: true) }
-}
-
-/// Web `WorkbenchGauge`：起点 150°、扫过 240°；大号半径 78、线宽 10，带每 5 分一格的刻度（20 的倍数与 40/70/90 加长）。
-struct WorkbenchGaugeShape: View {
-    let score: Int
-    var mini = false
-    var extra: CGFloat = 0
-    static func geometry(mini: Bool, extra: CGFloat = 0) -> (r: CGFloat, sw: CGFloat, width: CGFloat, height: CGFloat, cx: CGFloat, cy: CGFloat) {
-        let r: CGFloat = mini ? 7 : 78, sw: CGFloat = mini ? 3 : 10, pad: CGFloat = mini ? 2 : 18
-        let width = ceil(2 * (r + pad)), cy = r + pad
-        return (r, sw, width, ceil(cy + r * 0.5 + sw / 2 + 2 + extra), width / 2, cy)
-    }
-    var body: some View {
-        let g = Self.geometry(mini: mini, extra: extra)
-        Canvas { context, _ in
-            func point(_ angle: Double, _ radius: CGFloat) -> CGPoint {
-                CGPoint(x: g.cx + radius * cos(angle * .pi / 180), y: g.cy + radius * sin(angle * .pi / 180))
-            }
-            func arc(_ from: Double, _ to: Double) -> Path {
-                var path = Path()
-                path.addArc(center: CGPoint(x: g.cx, y: g.cy), radius: g.r, startAngle: .degrees(from), endAngle: .degrees(to), clockwise: false)
-                return path
-            }
-            let end = 150 + 240 * max(0.5, min(100, Double(score))) / 100
-            context.stroke(arc(150, 390), with: .color(Color(hex: 0xECECEA)), style: StrokeStyle(lineWidth: g.sw, lineCap: .round))
-            context.stroke(arc(150, end), with: .linearGradient(Gradient(colors: [Color(hex: 0xA3A39C), Color(hex: 0x1D1D1B)]),
-                                                                startPoint: .zero, endPoint: CGPoint(x: g.width, y: 0)),
-                           style: StrokeStyle(lineWidth: g.sw, lineCap: .round))
-            if !mini {
-                for index in 0...20 {
-                    let value = index * 5, angle = 150 + 240 * Double(value) / 100
-                    let level = value == 40 || value == 70 || value == 90, major = value % 20 == 0 || level
-                    let r1 = g.r + g.sw / 2 + 5
-                    var tick = Path(); tick.move(to: point(angle, r1)); tick.addLine(to: point(angle, r1 + (major ? 6 : 3)))
-                    context.stroke(tick, with: .color(Color(hex: level ? 0x96968F : major ? 0xC4C4BE : 0xDCDCD8)),
-                                   style: StrokeStyle(lineWidth: level ? 1.4 : 1, lineCap: .round))
-                }
-                let halo = g.sw * 1.05, knob = point(end, g.r)
-                context.fill(Path(ellipseIn: CGRect(x: knob.x - halo, y: knob.y - halo, width: halo * 2, height: halo * 2)), with: .color(Color(hex: 0x1D1D1B).opacity(0.08)))
-            }
-            let knob = point(end, g.r), kr = g.sw * (mini ? 0.62 : 0.78)
-            let circle = Path(ellipseIn: CGRect(x: knob.x - kr, y: knob.y - kr, width: kr * 2, height: kr * 2))
-            context.fill(circle, with: .color(.white))
-            context.stroke(circle, with: .color(Color(hex: 0x1D1D1B)), lineWidth: g.sw * (mini ? 0.34 : 0.3))
-        }
-        .frame(width: g.width, height: g.height).accessibilityHidden(true)
     }
 }
 
