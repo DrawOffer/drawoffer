@@ -62,7 +62,7 @@ public sealed partial class ResumeGuidePanel
         var list = new StackPanel { Margin = new Thickness(0, 24, 0, 0) };
         foreach (var file in state.Files)
         {
-            var name = Sans(file.Name, 15, Txt, Medium);
+            var name = Sans(file.Name, 13.5, Txt, Medium);
             name.MaxLines = 1;
             var status = Sans(file.Status == "uploading" ? "上传中…" : file.Status == "failed" ? "没读出来，换一份试试"
                 : file.Status == "reading" || _running ? "已存入资料库 · 正在读…" : "已存入资料库", 13, file.Status == "failed" ? Red : Fnt);
@@ -79,7 +79,7 @@ public sealed partial class ResumeGuidePanel
                 list.Children.Add(new Border { MinHeight = 44, Padding = new Thickness(16, 0, 0, 0), Child = Sans("资料库里还没有能读的文件", 13, Fnt).Align(HorizontalAlignment.Left, VerticalAlignment.Center) });
             foreach (var item in library)
             {
-                var row = new Border { MinHeight = 44, Padding = new Thickness(16, 0, 0, 0), Child = Sans(item.Text("file_name"), 15, Txt).Align(HorizontalAlignment.Left, VerticalAlignment.Center) };
+                var row = new Border { MinHeight = 44, Padding = new Thickness(16, 0, 0, 0), Child = Sans(item.Text("file_name"), 13.5, Txt).Align(HorizontalAlignment.Left, VerticalAlignment.Center) };
                 list.Children.Add(Tap(row, () =>
                 {
                     state.Library = null;
@@ -92,15 +92,14 @@ public sealed partial class ResumeGuidePanel
                 }, item.Text("file_name")));
             }
         }
-        UIElement left = done ? new Border()
-            : TextLink(state.Files.Count == 0 ? "没有资料，直接填" : "不用资料了，直接填", Next, _running);
-        UIElement right = done ? new V3Button(G.NextLabel("materials"), Next, V3Button.Kind.Dark, height: 44) : new Border();
-        var bottom = Spread(left, right).Top(32);
+        // 05.1：快捷回答胶囊（编辑器里不用黑色按钮）
+        var bottom = (done ? ResumeTalk.Chip(G.NextLabel("materials"), Next)
+            : ResumeTalk.Chip(state.Files.Count == 0 ? "没有资料，一栏一栏填" : "不用资料了，一栏一栏填", Next, _running)).Also(c => c.HorizontalAlignment = HorizontalAlignment.Left).Top(22);
 
         var title = done ? $"读到了 {found ?? 0} 项" : reading ? "正在读资料" : question ?? "先给我一些资料吧";
         var note = done ? "后面每一步都会帮你填好，你只需要看一眼、改一改。" : "旧简历、成绩单、项目文档都行。读到的内容会帮你填好后面的每一项，上传的文件也会存进资料库。";
         var step = StepView("materials", title, note, thinking: reading, content: [list,
-            state.ReadError is { } error ? Sans(error, 15, Red).Wrap().Top(8) : null, bottom]);
+            state.ReadError is { } error ? Sans(error, 13.5, Red).Wrap().Top(8) : null, bottom]);
 
         // 拖入文件：虚线框提示（圆角 12、1.5 线宽、6 段长）
         var root = new Grid { AllowDrop = true, Background = Brush(Clear) };
@@ -260,13 +259,13 @@ public sealed partial class ResumeGuidePanel
             {
                 var position = index;
                 var skill = skills[index];
-                var name = Sans(skill.Name, 15, Txt).Frame(width: 120);
+                var name = Sans(skill.Name, 13.5, Txt).Frame(width: 120);
                 name.MaxLines = 1;
                 var levels = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 18 };
                 foreach (var level in G.SkillLevels)
                 {
                     var selected = skill.Level == level.Key;
-                    levels.Children.Add(Tap(Sans(level.Label, 15, selected ? Txt : Fnt2, selected ? Semibold : Regular),
+                    levels.Children.Add(Tap(Sans(level.Label, 13.5, selected ? Txt : Fnt2, selected ? Semibold : Regular),
                         () => { _skills![position] = (skill.Name, level.Key); Render(); }, level.Label));
                 }
                 Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(levels, $"{skill.Name} 的熟练度");
@@ -305,7 +304,7 @@ public sealed partial class ResumeGuidePanel
         foreach (var city in cities)
         {
             var remove = Tap(Icon("xmark", 9, Txt), () => { set(cities.Where(c => c != city).ToList()); Render(); }, $"去掉 {city}");
-            flow.Add(HStack(4, Sans(city, 15, Txt), remove));
+            flow.Add(HStack(4, Sans(city, 13.5, Txt), remove));
         }
         var box = PlainBox("输入城市，回车添加", _cityInput, "城市");
         box.MinWidth = 120;

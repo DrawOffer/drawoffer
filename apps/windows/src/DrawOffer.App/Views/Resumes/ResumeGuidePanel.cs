@@ -94,8 +94,8 @@ public sealed partial class ResumeGuidePanel : UserControl
         _exportPdf = exportPdf;
         _close = close;
         _lastStep = Step;
-        // Web `.wb3-guide`：440 宽、没有卡片框和白底，内边距 4/2/32；关闭靠工具卡片「引导」或 Esc（由编辑器处理）。
-        Width = 440;
+        // 分区 05：400 宽一列、没有卡片框和白底；关闭靠纸面上沿「引导」或 Esc（由编辑器处理）。
+        Width = ResumeTalk.ColumnWidth;
         VerticalAlignment = VerticalAlignment.Stretch;
         HorizontalAlignment = HorizontalAlignment.Left;
         Content = _host;
@@ -171,13 +171,13 @@ public sealed partial class ResumeGuidePanel : UserControl
         _refresh.Clear();
         _materialsUsed = _skillLevelsUsed = _citiesUsed = false;
 
-        var column = new StackPanel { Padding = new Thickness(2, 4, 2, 32), HorizontalAlignment = HorizontalAlignment.Stretch };
+        var column = new StackPanel { Padding = new Thickness(0, 12, 0, 32), HorizontalAlignment = HorizontalAlignment.Stretch };
         column.Children.Add(Body());
-        if (_notice is { } notice) column.Children.Add(Sans(notice, 13, Red).Wrap().Top(20));
+        if (_notice is { } notice) column.Children.Add(Sans(notice, 12.5, Red).Wrap().Pad(ResumeTalk.Indent, 20, 0, 0));
         if (_notice is null && _lastWrite is { } last && !_busy && !_running)
         {
-            var undo = Tap(Sans("撤销", 13, Blue), () => _ = UndoLastAsync(), "撤销");
-            column.Children.Add(HStack(8, Icon("checkmark", 11, Fnt), Sans($"{last.Label}已写进左边", 13, Fnt), undo).Top(20));
+            var undo = Tap(Sans("撤销", 12.5, Blue), () => _ = UndoLastAsync(), "撤销");
+            column.Children.Add(HStack(8, Icon("checkmark", 11, ResumeTalk.Note), Sans($"{last.Label}已写进左边", 12.5, ResumeTalk.Note), undo).Pad(ResumeTalk.Indent, 20, 0, 0));
         }
         // 子视图的状态随视图存在：这次没显示的，下次出现时从头开始（SwiftUI @State 的生命周期）
         if (!_materialsUsed) _materialsView = null;
@@ -200,73 +200,49 @@ public sealed partial class ResumeGuidePanel : UserControl
 
     void RunRefresh() { foreach (var refresh in _refresh) refresh(); }
 
-    /// <summary>每一步的骨架：返回链接与进度、7 段进度条、28px 标题（可带转圈）、15px 说明，再接各步内容。</summary>
+    /// <summary>
+    /// 每一步（分区 05「对话版」）：顶上一行小字（上一步 · 第几步），职绘问一句（头像 + 白底气泡，补充灰字），
+    /// 下面是这一步的格子与快捷回答（缩进到气泡左缘）。编辑器里不用黑色按钮。
+    /// </summary>
     FrameworkElement StepView(string step, string title, string? note = null, bool thinking = false, Action? back = null, string backLabel = "上一步",
         params UIElement?[] content)
     {
         var index = Math.Max(0, StepIndex(step)) + 1;
-        var stack = new StackPanel { Padding = new Thickness(0, 72, 0, 0) };
-        UIElement left = back is not null ? Tap(Sans($"‹ {backLabel}", 13, Fnt), back, $"‹ {backLabel}") : new Border { Width = 1 };
-        var head = Spread(left, Sans($"{(G.Labels.TryGetValue(step, out var label) ? label : "")} · {index} / {G.Steps.Count}", 13, Fnt));
-        head.MinHeight = 20;
+        var stack = new StackPanel();
+        UIElement left = back is not null ? Tap(Sans($"‹ {backLabel}", 12, ResumeTalk.Note), back, $"‹ {backLabel}") : new Border { Width = 1 };
+        var head = Spread(left, Sans($"{(G.Labels.TryGetValue(step, out var label) ? label : "")} · {index} / {G.Steps.Count}", 12, ResumeTalk.Note));
+        head.MinHeight = 18;
+        head.Margin = new Thickness(ResumeTalk.Indent, 0, 0, 0);
         stack.Children.Add(head);
-        var bars = new Grid { ColumnSpacing = 4, Margin = new Thickness(0, 12, 0, 0) };
-        for (var position = 0; position < G.Steps.Count; position++)
-        {
-            bars.ColumnDefinitions.Add(new ColumnDefinition { Width = Star() });
-            var bar = Fill(position < index ? Txt : Hl, 1.5, height: 3);
-            Grid.SetColumn(bar, position);
-            bars.Children.Add(bar);
-        }
-        AutomationProperties.SetAccessibilityView(bars, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
-        stack.Children.Add(bars);
-        var heading = Sans(title, 28, Txt, Bold).LineHeight(38).Wrap();
-        heading.CharacterSpacing = -10; // tracking -0.28pt ÷ 28px × 1000
-        var titleRow = new Grid { ColumnSpacing = 8, Margin = new Thickness(0, 52, 0, 0) };
-        titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = Auto });
-        titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = Star() });
-        titleRow.Children.Add(heading);
-        if (thinking)
-        {
-            // 与标题首行基线对齐：38 行高里 16 的转圈居中
-            var ring = new ProgressRing { IsActive = true, Width = 16, Height = 16, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 11, 0, 0) };
-            Grid.SetColumn(ring, 1);
-            titleRow.Children.Add(ring);
-        }
-        stack.Children.Add(titleRow);
-        if (note is not null) stack.Children.Add(Sans(note, 15, Sub).LineHeight(24).Wrap().Top(8));
-        foreach (var child in content) if (child is not null) stack.Children.Add(child);
+        stack.Children.Add(ResumeTalk.Assistant(title, note, thinking: thinking).Top(14));
+        var body = new StackPanel { Margin = new Thickness(ResumeTalk.Indent, 0, 0, 0) };
+        foreach (var child in content) if (child is not null) body.Children.Add(child);
+        stack.Children.Add(body);
         return stack;
     }
 
-    /// <summary>底部操作行：左边文字链接，右边唯一的黑色主按钮；`disabled` 随输入重算。</summary>
+    /// <summary>快捷回答一排：主动作在前，其余是同样的白底胶囊；`disabled` 随输入重算。</summary>
     FrameworkElement Actions(UIElement? left = null, string? primary = null, Func<bool>? disabled = null, Action? onPrimary = null)
     {
-        UIElement right = new Border();
+        var flow = new VariableSizedFlow(9);
         if (primary is not null && onPrimary is not null)
         {
-            var button = new GuidePrimaryButton(primary, onPrimary);
-            if (disabled is not null) _refresh.Add(() => button.Enabled = !disabled());
-            right = button;
+            var chip = ResumeTalk.Chip(primary, () => { if (disabled?.Invoke() != true) onPrimary(); });
+            if (disabled is not null) _refresh.Add(() => chip.Opacity = disabled() ? 0.45 : 1);
+            flow.Add(chip);
         }
-        var row = Spread(left ?? new Border(), right);
-        row.MinHeight = 44;
-        row.Margin = new Thickness(0, 40, 0, 0);
-        return row;
+        if (left is not null) flow.Add(left);
+        flow.Panel.Margin = new Thickness(0, 22, 0, 0);
+        return flow.Panel;
     }
 
-    FrameworkElement TextLink(string title, Action action, bool disabled = false)
-    {
-        var link = Tap(Sans(title, 15, Sub), action, title, () => !disabled);
-        link.Opacity = disabled ? 0.38 : 1;
-        return link;
-    }
+    FrameworkElement TextLink(string title, Action action, bool disabled = false) => ResumeTalk.Chip(title, action, disabled);
 
-    /// <summary>表单行：92 宽标签、内容、可选提示，最矮 50，下面一条细线。</summary>
+    /// <summary>表单行：72 宽灰字标签、内容、可选提示，最矮 44，下面一条细线。</summary>
     FrameworkElement Row(string label, UIElement content, string? hint = null)
     {
-        var grid = Columns(12, (Px(92), Sans(label, 15, Txt)), (Star(), content), (Auto, hint is null ? new Border() : Sans(hint, 13, Fnt)));
-        grid.MinHeight = 50;
+        var grid = Columns(12, (Px(72), Sans(label, 13, Sub)), (Star(), content), (Auto, hint is null ? new Border() : Sans(hint, 12, ResumeTalk.Note)));
+        grid.MinHeight = 44;
         foreach (var child in grid.Children.OfType<FrameworkElement>()) child.VerticalAlignment = VerticalAlignment.Center;
         return VStack(0, grid, Divider(Cl));
     }
@@ -299,7 +275,7 @@ public sealed partial class ResumeGuidePanel : UserControl
     {
         var box = new TextBox
         {
-            Text = value, PlaceholderText = placeholder, FontFamily = SansFamily, FontSize = 15, Foreground = Brush(Txt),
+            Text = value, PlaceholderText = placeholder, FontFamily = SansFamily, FontSize = 13.5, Foreground = Brush(Txt),
             PlaceholderForeground = Brush(Fnt2), Background = Brush(Clear), BorderThickness = new Thickness(0), Padding = new Thickness(0),
             MinHeight = 0, IsSpellCheckEnabled = false, VerticalAlignment = VerticalAlignment.Center,
         };
@@ -312,14 +288,14 @@ public sealed partial class ResumeGuidePanel : UserControl
         return box;
     }
 
-    /// <summary>单选文字组：选中项 15/600 墨黑，其余 #C4C4BE。</summary>
+    /// <summary>单选文字组：选中项 13.5/600 墨黑，其余 #C4C4BE。</summary>
     FrameworkElement Choice(string label, string value, IEnumerable<(string Key, string Title)> options, Action<string> set)
     {
         var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 18 };
         foreach (var option in options)
         {
             var selected = value == option.Key;
-            var item = Tap(Sans(option.Title, 15, selected ? Txt : Fnt2, selected ? Semibold : Regular), () => set(option.Key), option.Title);
+            var item = Tap(Sans(option.Title, 13.5, selected ? Txt : Fnt2, selected ? Semibold : Regular), () => set(option.Key), option.Title);
             if (selected) AutomationProperties.SetItemStatus(item, "已选中");
             row.Children.Add(item);
         }
@@ -329,7 +305,7 @@ public sealed partial class ResumeGuidePanel : UserControl
 
     static FrameworkElement Group(string text) => Sans(text, 12, Fnt).Pad(0, 28, 0, 8);
 
-    /// <summary>下划线输入：文字 + 发送键（说怎么改、添加技能）；回车发送，⇧回车换行，输入法组字时回车不发送。</summary>
+    /// <summary>输入框（分区 05 / 12 同一种）：47 高、圆角 13.5、#DCDAD2 边，右侧 30 圆形发送钮；回车发送，Shift+回车换行，输入法组字时回车不发送。</summary>
     FrameworkElement Underline(string placeholder, Func<string> get, Action<string> set, bool disabled, Action<string> send)
     {
         var box = PlainBox(placeholder, get(), placeholder);
@@ -337,7 +313,7 @@ public sealed partial class ResumeGuidePanel : UserControl
         box.TextWrapping = TextWrapping.Wrap;
         box.MaxHeight = 6 * 20;
         box.IsEnabled = !disabled;
-        box.VerticalAlignment = VerticalAlignment.Bottom;
+        box.PlaceholderForeground = Brush(ResumeTalk.Hint);
         bool Ready() => S.Trimmed(get()).Length > 0 && !disabled;
         void Submit()
         {
@@ -347,10 +323,10 @@ public sealed partial class ResumeGuidePanel : UserControl
             send(text);
             Render();
         }
-        var circle = new Border { Width = 28, Height = 28, CornerRadius = new CornerRadius(14), Child = Icon("arrow.up", 12, V3.White).Also(i => i.FontWeight = Semibold) };
+        var circle = new Border { Width = 30, Height = 30, CornerRadius = new CornerRadius(15), Child = Icon("arrow.up", 12, V3.White).Also(i => { i.FontWeight = Semibold; i.HorizontalAlignment = HorizontalAlignment.Center; }) };
         var button = Tap(circle, Submit, "发送", Ready);
-        button.VerticalAlignment = VerticalAlignment.Bottom;
-        void Paint() => circle.Background = Brush(Ready() ? Txt : Sk2);
+        button.VerticalAlignment = VerticalAlignment.Center;
+        void Paint() => circle.Background = Brush(Ready() ? Txt : ResumeTalk.LineColor);
         _refresh.Add(Paint);
         var composing = false;
         box.TextCompositionStarted += (_, _) => composing = true;
@@ -364,18 +340,20 @@ public sealed partial class ResumeGuidePanel : UserControl
             e.Handled = true;
             Submit();
         };
-        var row = Columns(8, (Star(), box), (Auto, button));
-        row.Margin = new Thickness(0, 10, 0, 10);
-        return VStack(0, row, Divider(Cl)).Top(24);
+        return new Border
+        {
+            Child = Columns(8, (Star(), box), (Auto, button)), MinHeight = 47, Padding = new Thickness(16, 8, 8, 8), CornerRadius = new CornerRadius(13.5),
+            Background = Brush(V3.White), BorderBrush = Brush(ResumeTalk.FieldLine), BorderThickness = new Thickness(1), Margin = new Thickness(0, 24, 0, 0),
+        };
     }
 
     FrameworkElement Meta(string text, string link, Action action) =>
         HStack(12, Sans(text, 13, Fnt), Tap(Sans(link, 13, Blue), action, link)).Top(16);
 
-    /// <summary>整行可点的链接行：15/500 标题、13px 右侧说明，最矮 50，下面细线。</summary>
+    /// <summary>整行可点的链接行：13.5/500 标题、13px 右侧说明，最矮 50，下面细线。</summary>
     FrameworkElement LinkRow(string title, string trailing, Action action, bool disabled = false)
     {
-        var grid = Spread(Sans(title, 15, Txt, Medium), Sans(trailing, 13, Fnt));
+        var grid = Spread(Sans(title, 13.5, Txt, Medium), Sans(trailing, 13, Fnt));
         grid.MinHeight = 50;
         var row = Tap(VStack(0, grid, Divider(Cl)), action, title, () => !disabled);
         row.Opacity = disabled ? 0.38 : 1;
@@ -385,41 +363,4 @@ public sealed partial class ResumeGuidePanel : UserControl
     /// <summary>`.buttonStyle(.plain)`：透明底的可点区域（整块可点，Enter / Space 触发）。</summary>
     static BorderControl Tap(UIElement child, Action action, string? name = null, Func<bool>? enabled = null) =>
         new BorderControl { Child = child, Background = Brush(Clear) }.OnTap(action, name, enabled);
-}
-
-/// <summary>`.wb3-guide-primary`（Swift `GuidePrimaryStyle`）：44 高胶囊、内边距 22、15/500 白字墨黑底，最宽 280；按下 85% 不透明，禁用时 #dcdcd8。</summary>
-sealed class GuidePrimaryButton : BorderControl
-{
-    readonly Action _action;
-    bool _pressed, _enabled = true;
-
-    public GuidePrimaryButton(string title, Action action)
-    {
-        _action = action;
-        var label = Sans(title, 15, V3.White, Medium);
-        label.MaxLines = 1;
-        label.VerticalAlignment = VerticalAlignment.Center;
-        Child = label;
-        Height = 44;
-        MaxWidth = 280;
-        Padding = new Thickness(22, 0, 22, 0);
-        CornerRadius = Capsule(44);
-        HorizontalAlignment = HorizontalAlignment.Right;
-        AutomationProperties.SetName(this, title);
-        PointerPressed += (_, e) => { if (_enabled) { _pressed = true; Paint(); e.Handled = true; } };
-        PointerReleased += (_, e) => { if (_pressed && _enabled) { _pressed = false; Paint(); e.Handled = true; _action(); } };
-        PointerExited += (_, _) => { _pressed = false; Paint(); };
-        PointerCanceled += (_, _) => { _pressed = false; Paint(); };
-        IsTabStop = true;
-        KeyDown += (_, e) => { if (_enabled && e.Key is Windows.System.VirtualKey.Enter or Windows.System.VirtualKey.Space) { e.Handled = true; _action(); } };
-        Paint();
-    }
-
-    public bool Enabled { get => _enabled; set { _enabled = value; Paint(); } }
-
-    void Paint()
-    {
-        Background = Brush(_enabled ? Alpha(Txt, _pressed ? 0.85 : 1) : Hex(0xDCDCD8));
-        ProtectedCursor = InputSystemCursor.Create(_enabled ? InputSystemCursorShape.Hand : InputSystemCursorShape.Arrow);
-    }
 }

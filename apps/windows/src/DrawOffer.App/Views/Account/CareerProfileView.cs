@@ -1,129 +1,736 @@
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using DrawOffer.App.DesignSystem;
 using DrawOffer.Core.Api;
 using DrawOffer.Core.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
+using Windows.UI;
 using static DrawOffer.App.DesignSystem.V3;
-using static DrawOffer.App.Views.Account.AccountPage;
 
 namespace DrawOffer.App.Views.Account;
 
-/// <summary>Mac CareerProfileView：只读行、就地编辑与独立的经历副本。</summary>
-public sealed partial class CareerProfileView : Grid
+/// <summary>
+/// 求职画像（Windows 稿 01 页「03 · 求职画像」03.02–03.08，逻辑对齐 Mac `CareerProfileView` / Web `CareerProfilePage`）：
+/// 账号唯一的一份，网申插件和 AI 都只用它。720 宽一列两栏输入框，离开输入框自动保存；
+/// 教育、实习、工作、项目各一个分区，标题右侧蓝字「＋ 添加」原地展开一段表单；技能是可切换熟练度的胶囊。
+/// </summary>
+public sealed class CareerProfileView : UserControl
 {
-    readonly AccountPage _owner;
+    static readonly Color Asked = Hex(0xC9711C);
     readonly Action _back;
-    readonly ContentControl _form=new(){HorizontalContentAlignment=HorizontalAlignment.Stretch,VerticalContentAlignment=VerticalAlignment.Stretch};
-    JsonNode? _profile,_intent;
-    bool _failed,_saving,_more,_disposed;
-    string _editing="";
-    V3Overlay? _overlay;
-    JsonNode? Experience => _profile?["experience"];
-    public CareerProfileView(AccountPage owner,Action back)
+    readonly StackPanel _column = new() { HorizontalAlignment = HorizontalAlignment.Center, Padding = new Thickness(0, 24, 0, 72) };
+    readonly TextBlock _missing = Sans("", 12, Asked, Medium), _missingLead = Sans("", 12, Fnt), _status = Sans("", 12, Faint);
+    JsonNode? _profile, _intent;
+    bool _failed, _disposed;
+    int _saving;
+    Task _queue = Task.CompletedTask;
+    /// <summary>刚点「添加」还没填的段只在页面上，第一次填写才保存，免得留下空段被插件填进表单。</summary>
+    readonly List<(string Id, string Group)> _drafts = [];
+
+    public CareerProfileView(Action back)
     {
-        _owner=owner;_back=back;Background=Brush(White);Loaded+=async(_,_)=>await Load();Unloaded+=(_,_)=>{_disposed=true;_overlay?.Close();};Render();
+        _back = back;
+        Background = Brush(White);
+        Content = Scroll(_column);
+        SizeChanged += (_, e) => _column.Width = Math.Min(720, Math.Max(480, e.NewSize.Width - 64));
+        Loaded += async (_, _) => { Render(); await LoadAsync(); };
+        Unloaded += (_, _) => _disposed = true;
     }
-    async Task Load()
+
+    JsonNode Experience => _profile?["experience"] is JsonObject value ? value : ProfileModel.EmptyExperience();
+
+    async Task LoadAsync()
     {
-        try{var profile=_owner.Request("/api/account/career-profile");var intent=_owner.Request("/api/account/user-profile");await Task.WhenAll(profile,intent);if(_disposed)return;_profile=profile.Result;_intent=intent.Result;_failed=false;}
-        catch(OperationCanceledException){return;}catch{if(_disposed)return;_failed=true;}Render();
+        try
+        {
+            var career = AccountPage.Request("/api/account/career-profile");
+            var portrait = AccountPage.Request("/api/account/user-profile");
+            await Task.WhenAll(career, portrait);
+            _profile = career.Result; _intent = portrait.Result; _failed = false;
+        }
+        catch (Exception error)
+        {
+            if (error is ApiException { Status: System.Net.HttpStatusCode.Unauthorized }) App.Session.ReportAuthenticationFailure();
+            _failed = true;
+        }
+        if (!_disposed) Render();
     }
-    async Task<bool> Save(JsonObject change,string next="")
-    {
-        if(_saving||_disposed||_profile is null)return false;var saved=false;_saving=true;_form.IsEnabled=false;
-        try{change["base_lock_version"]=_profile["lock_version"]?.DeepClone()??JsonValue.Create(1);var value=await _owner.Request("/api/account/career-profile","PUT",change);if(_disposed)return false;_profile=value;_editing=next;saved=true;return true;}
-        catch(OperationCanceledException){return false;}catch(Exception ex){if(!_disposed){_owner.Toast(Explain(ex,"请检查填写内容后重试。"),true);if(ex is ApiException {Code:"USER_PROFILE_VERSION_CONFLICT"})await Load();}return false;}
-        finally{_saving=false;_form.IsEnabled=true;if(!_disposed&&saved)Render();}
-    }
-    async Task SaveIntent(JsonObject change)
-    {
-        if(_saving||_disposed)return;var saved=false;_saving=true;_form.IsEnabled=false;
-        try{var latest=(JsonObject)await _owner.Request("/api/account/user-profile");var version=latest["lock_version"]?.DeepClone()??JsonValue.Create(1);latest.Remove("lock_version");latest.Remove("created_at");latest.Remove("updated_at");foreach(var pair in change)latest[pair.Key]=pair.Value?.DeepClone();latest["base_lock_version"]=version;_intent=await _owner.Request("/api/account/user-profile","PUT",latest);_editing="";saved=true;}
-        catch(OperationCanceledException){}catch(Exception ex){if(!_disposed){_owner.Toast(Explain(ex),true);if(ex is ApiException {Code:"USER_PROFILE_VERSION_CONFLICT"})await Load();}}
-        finally{_saving=false;_form.IsEnabled=true;if(!_disposed&&saved)Render();}
-    }
+
+    // MARK: 渲染
+
     void Render()
     {
-        if(_disposed)return;Children.Clear();
-        var body=VStack(0,HStack(12,LinkButton("← 账号",_back),Sans("/",16,Fnt),Sans("求职资料",16)).Pad(0,0,0,20));
-        if(_failed&&_profile is null)body.Children.Add(VStack(12,Serif("暂时无法读取求职资料",18),new V3Button("重新加载",()=>_=Load())).Top(40));
-        else{
-            var missing=_profile is null?[]:CareerProfileRules.Missing(_profile);
-            var progress=missing.Length==0?Sans("网申常问的信息都填好了",12,Fnt):(UIElement)HStack(4,Sans("网申常问的信息",12,Fnt),Sans($"还差 {missing.Length} 项",12,Orange,Medium),LinkButton("去补",()=>{_editing=missing[0]=="id_number"?"id":missing[0];Render();}));
-            body.Children.Add(VStack(0,Spread(VStack(6,Serif("求职资料",28).Frame(height:36),Sans("网申插件和 AI 都只用这一份。点任意一行就能修改，改完自动保存。",14,Sub).Wrap().LineHeight(22)),progress,24,VerticalAlignment.Bottom),Divider().Top(36)));
-            if(_profile is null||_intent is null)body.Children.Add(Sans("正在加载求职资料…",13,Fnt).Top(80));
-            else{
-                body.Children.Add(Section("基本信息",null,PersonalRows(CareerProfileRules.Basic.Concat(CareerProfileRules.Links))));
-                body.Children.Add(Section("身份与证件","网申常问，填一次所有公司通用",VStack(0,Identity(),PersonalRows(CareerProfileRules.Identity))));
-                body.Children.Add(Section("求职意向","AI 出题和网申都会用",IntentRows()));
-                var title=_profile["experience_resume"].Text("title");body.Children.Add(Section("经历",title.Length>0?$"读自《{title}》，改简历不会自动同步。":"从一份简历读进来，读进来后可以直接改。",ExperienceRows(),(Experience.Items("sections").Count==0?"选择简历":"切换简历",()=>_=SwitchResume())));
-                body.Children.Add(Section("技能","写简历、模拟面试都按熟练度来；读简历时一起带进来",SkillRows()));
-                var more=CareerProfileRules.MoreRows(_profile);body.Children.Add(Section("更多","偶尔会问",_more?PersonalRows(more):ValueRow($"其他 {more.Length} 项",$"身高、体重、微信、紧急联系人… 已填 {more.Count(x=>_profile["personal"].Text(x.Key).Length>0)} 项",()=>{_more=true;Render();},true)));
+        _column.Children.Clear();
+        _column.Children.Add(HStack(5, Icon("chevron.left", 10, Fnt), Sans("账号设置", 13, Fnt)).OnTap(_back, "返回账号设置"));
+        if (_failed && _profile is null)
+        {
+            _column.Children.Add(VStack(12, Label("暂时无法读取求职画像", 18, Txt, Semibold),
+                new V3Button("重新加载", () => { _failed = false; Render(); _ = LoadAsync(); })).Top(40));
+            return;
+        }
+        if (_profile is not { } profile || _intent is not { } intent) { _column.Children.Add(new V3Loading("正在加载求职画像…").Top(160)); return; }
+
+        // 03.02 页头：24/600 标题 + 13 sub 说明；右侧「网申常问的还差 N 项 · 已保存」
+        var status = HStack(0, _missingLead, _missing, _status);
+        status.VerticalAlignment = VerticalAlignment.Bottom;
+        UpdateStatus();
+        _column.Children.Add(new Border
+        {
+            BorderBrush = Brush(Line), BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(0, 14, 0, 24),
+            Child = Spread(VStack(4, Label("求职画像", 24, Txt, Semibold), Sans("网申插件和 AI 都用这一份。直接填写，离开输入框就自动保存。", 13, Sub)), status, 24, VerticalAlignment.Bottom),
+        });
+
+        _column.Children.Add(Section("基本信息", null, null, TwoColumns(ProfileModel.Basic.Select(row => Cell(PersonalField(row, profile))))));
+        var idTypes = profile["catalog"]?["id_types"].Items().Select(x => x.GetValue<string>()).ToArray() ?? [];
+        var identity = new List<(UIElement, bool)>
+        {
+            Cell(Field("证件类型", Select("证件类型", profile.Text("id_type"), idTypes, next => Save(_ => new() { ["id_type"] = next }, true)))),
+            Cell(IdNumber(profile)),
+        };
+        identity.AddRange(ProfileModel.Identity.Select(row => Cell(PersonalField(row, profile))));
+        _column.Children.Add(Section("身份与证件", "网申常问，填一次所有公司通用。证件号加密保存，页面只显示首尾几位。", null, TwoColumns(identity)));
+        _column.Children.Add(Section("求职意向", "AI 出题和网申都会用。", null, IntentFields(intent)));
+        Experiences();
+        _column.Children.Add(Section("技能", "写简历、模拟面试都按熟练度来，点一下切换熟练度。", null, Skills(), last: true));
+    }
+
+    void UpdateStatus()
+    {
+        if (_profile is null) return;
+        var missing = CareerProfileRules.Missing(_profile).Length;
+        _missingLead.Text = missing == 0 ? "网申常问的信息都填好了" : "网申常问的还差 ";
+        _missing.Text = missing == 0 ? "" : $"{missing} 项";
+        _status.Text = _saving > 0 ? " · 保存中…" : " · 已保存";
+    }
+
+    /// <summary>分区：标题 16/600，说明 12 fnt（距 6）；右侧可放蓝字「＋ 添加」；上 32、下 32，下边线。</summary>
+    static Border Section(string title, string? desc, (string Label, Action Action)? add, UIElement content, bool last = false)
+    {
+        var titles = VStack(6, Label(title, 16, Txt, Semibold), desc is null ? null : Sans(desc, 12, Fnt).Wrap());
+        UIElement head = titles;
+        if (add is { } action)
+            head = Spread(titles, HStack(4, Icon("plus", 10, Blue), Sans("添加", 13, Blue)).OnTap(action.Action, action.Label), 16);
+        return new Border
+        {
+            Padding = new Thickness(0, 32, 0, 32), BorderBrush = Brush(Line), BorderThickness = new Thickness(0, 0, 0, last ? 0 : 1),
+            Child = VStack(0, head, content is FrameworkElement element ? element.Top(20) : content),
+        };
+    }
+
+    static (UIElement, bool) Cell(UIElement element, bool wide = false) => (element, wide);
+
+    /// <summary>两栏网格：列宽相等、列距 40、行距 16；wide 的格子独占一行。</summary>
+    static StackPanel TwoColumns(IEnumerable<(UIElement Element, bool Wide)> cells)
+    {
+        var stack = new StackPanel { Spacing = 16 };
+        List<UIElement> pending = [];
+        void Flush()
+        {
+            if (pending.Count == 0) return;
+            stack.Children.Add(Columns(40, (Star(), pending[0]), (Star(), pending.Count > 1 ? pending[1] : new Border())));
+            pending.Clear();
+        }
+        foreach (var (element, wide) in cells)
+        {
+            if (wide) { Flush(); stack.Children.Add(element); continue; }
+            pending.Add(element);
+            if (pending.Count == 2) Flush();
+        }
+        Flush();
+        return stack;
+    }
+
+    /// <summary>标签在上的字段：13 sub 标签（网申常问且没填时 #C9711C），距输入框 8；标签右侧可放灰字动作。</summary>
+    static StackPanel Field(string label, UIElement control, bool asked = false, (string Title, Action Action)? action = null) =>
+        Field(Sans(label, 13, asked ? Asked : Sub), control, action);
+
+    static StackPanel Field(TextBlock label, UIElement control, (string Title, Action Action)? action = null)
+    {
+        UIElement head = label;
+        if (action is { } a) head = Spread(label, Sans(a.Title, 12, Faint).OnTap(a.Action, a.Title), 12);
+        return VStack(8, head, control);
+    }
+
+    /// <summary>输入框（Windows TextBox 32 高）：离开或回车时内容变了才保存，Esc 还原。</summary>
+    static TextBox TextInput(string label, string value, string? placeholder, Action<string> commit, bool digits = false, bool clearAfterCommit = false)
+    {
+        var box = Input(placeholder ?? "", value);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(box, label);
+        var baseline = value;
+        if (digits) box.BeforeTextChanging += (_, e) => { if (e.NewText.Any(c => !char.IsDigit(c))) e.Cancel = true; };
+        void Send()
+        {
+            var trimmed = box.Text.Trim();
+            if (trimmed != baseline.Trim()) { if (!clearAfterCommit) baseline = trimmed; commit(box.Text); }
+            if (clearAfterCommit) box.Text = "";
+        }
+        box.LostFocus += (_, _) => Send();
+        box.KeyDown += (_, e) =>
+        {
+            if (e.Key == Windows.System.VirtualKey.Enter) { e.Handled = true; Send(); }
+            if (e.Key == Windows.System.VirtualKey.Escape) { e.Handled = true; box.Text = baseline; }
+        };
+        return box;
+    }
+
+    /// <summary>多行输入：88 高，离开时内容变了才保存。</summary>
+    static TextBox TextArea(string label, string value, Action<string> commit)
+    {
+        var box = Input("", value, 4000, multiline: true);
+        box.Height = 88;
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(box, label);
+        var baseline = value;
+        box.LostFocus += (_, _) => { var trimmed = box.Text.Trim(); if (trimmed != baseline) { baseline = trimmed; commit(trimmed); } };
+        return box;
+    }
+
+    /// <summary>下拉（ComboBox 外观：32 高、圆角 4、Cl 描边、右侧小箭头），选项来自 MenuFlyout。</summary>
+    static Border Select(string label, string value, string[] options, Action<string> change)
+    {
+        var trigger = FieldBox(Sans(value.Length == 0 ? "请选择" : value, 14, value.Length == 0 ? Fnt2 : Txt), Icon("chevron.down", 10, Fnt));
+        trigger.OnTap(() =>
+        {
+            var menu = new MenuFlyout { Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.BottomEdgeAlignedLeft };
+            foreach (var option in value.Length == 0 || options.Contains(value) ? options : options.Prepend(value).ToArray())
+            {
+                var item = new ToggleMenuFlyoutItem { Text = option, IsChecked = option == value, MinWidth = trigger.ActualWidth };
+                var picked = option;
+                item.Click += (_, _) => { if (picked != value) change(picked); };
+                menu.Items.Add(item);
+            }
+            menu.ShowAt(trigger);
+        }, label);
+        return trigger;
+    }
+
+    /// <summary>与输入框同外观的点击框：32 高、白底、圆角 4、Cl 描边 + 底部 1px 深一档。</summary>
+    internal static Border FieldBox(UIElement text, UIElement trailing) => new()
+    {
+        Height = 32, CornerRadius = new CornerRadius(4), Background = Brush(White), BorderBrush = Brush(Cl), BorderThickness = new Thickness(1, 1, 1, 1),
+        Padding = new Thickness(11, 0, 10, 0),
+        Child = Columns(8, (Star(), text is FrameworkElement t ? t.Align(HorizontalAlignment.Left, VerticalAlignment.Center) : text),
+            (Auto, trailing is FrameworkElement r ? r.Align(v: VerticalAlignment.Center) : trailing)),
+    };
+
+    UIElement PersonalField((string Key, string Label, string[]? Options, string? Placeholder, bool Date) row, JsonNode profile)
+    {
+        var value = profile["personal"].Text(row.Key);
+        var title = profile["catalog"]?["fields"]?[$"profile.personal.{row.Key}"].Text("label") is { Length: > 0 } custom ? custom : row.Label;
+        var asked = CareerProfileRules.Common.Contains(row.Key) && value.Length == 0;
+        var label = Sans(title, 13, asked ? Asked : Sub);
+        void Commit(string next)
+        {
+            if (CareerProfileRules.Common.Contains(row.Key)) label.Foreground = Brush(next.Trim().Length == 0 ? Asked : Sub);
+            SavePersonal(row.Key, next);
+        }
+        UIElement control = row.Date ? DateFields.Birth(title, value, Commit)
+            : row.Options is { } options ? Select(title, value, options, next => { Commit(next); Rerender(); })
+            : TextInput(title, value, row.Placeholder, Commit);
+        return Field(label, control);
+    }
+
+    /// <summary>证件号码：只写不读；已有时占位显示脱敏号码，标签右侧可删除。</summary>
+    UIElement IdNumber(JsonNode profile)
+    {
+        var has = profile.Bool("has_id_number");
+        var box = TextInput("证件号码", "", has ? profile.Text("id_number_masked") : "证件号码", number =>
+        {
+            var trimmed = number.Trim();
+            if (trimmed.Length == 0) return;
+            var type = profile.Text("id_type") is { Length: > 0 } t ? t : profile["catalog"]?["id_types"].Items().FirstOrDefault()?.GetValue<string>() ?? "";
+            Save(_ => new() { ["id_type"] = type, ["id_number"] = trimmed }, true);
+        }, clearAfterCommit: true);
+        return Field("证件号码", box, !has, has ? ("删除", () => Save(_ => new() { ["id_number"] = "" }, true)) : null);
+    }
+
+    /// <summary>求职意向：期望城市（顿号分开）、期望薪资（K / 月，最低–最高）、工作性质。</summary>
+    UIElement IntentFields(JsonNode intent)
+    {
+        string ToK(string key) => intent.Number(key) is { } value ? Math.Round(value / 1000).ToString("0") : "";
+        var types = intent.Items("employment_types").Select(x => x.GetValue<string>()).ToArray();
+        var kind = types.Length >= 2 ? "both" : types.FirstOrDefault() ?? "";
+        (string id, string label)[] kinds = [("internship", "实习"), ("full_time", "全职"), ("both", "实习和全职都可以")];
+        var cities = string.Join("、", intent.Items("candidate_cities").Select(x => x.GetValue<string>()));
+        var low = TextInput("最低", ToK("salary_min"), "最低", _ => { }, digits: true);
+        var high = TextInput("最高", ToK("salary_max"), "最高", _ => { }, digits: true);
+        // 两个框共用一次保存：任一框提交时都把两个框的当前值一起写回
+        low.LostFocus += (_, _) => SaveSalary(low.Text, high.Text);
+        high.LostFocus += (_, _) => SaveSalary(low.Text, high.Text);
+        return TwoColumns([
+            Cell(Field("期望城市", TextInput("期望城市", cities, "用顿号分开，例如 杭州、上海", text =>
+            {
+                var list = text.Split(['、', ',', '，', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(20);
+                SaveIntent(new() { ["candidate_cities"] = new JsonArray(list.Select(x => (JsonNode?)x).ToArray()) });
+            }))),
+            Cell(Field("期望薪资（K / 月）", Columns(10, (Star(), low), (Auto, Sans("–", 14, Fnt).Align(v: VerticalAlignment.Center)), (Star(), high)))),
+            Cell(Field("工作性质", Select("工作性质", kinds.FirstOrDefault(x => x.id == kind).label ?? "", kinds.Select(x => x.label).ToArray(), label =>
+            {
+                var picked = kinds.First(x => x.label == label).id;
+                SaveIntent(new() { ["employment_types"] = new JsonArray((picked == "both" ? new[] { "internship", "full_time" } : new[] { picked }).Select(x => (JsonNode?)x).ToArray()) }, true);
+            }))),
+        ]);
+    }
+
+    string _lastSalary = "";
+    void SaveSalary(string lowText, string highText)
+    {
+        var key = lowText.Trim() + "|" + highText.Trim();
+        var initial = _intent is { } i ? $"{(i.Number("salary_min") is { } a ? Math.Round(a / 1000).ToString("0") : "")}|{(i.Number("salary_max") is { } b ? Math.Round(b / 1000).ToString("0") : "")}" : "";
+        if (key == (_lastSalary.Length > 0 ? _lastSalary : initial)) return;
+        _lastSalary = key;
+        double? min = double.TryParse(lowText, out var l) ? l * 1000 : null, max = double.TryParse(highText, out var h) ? h * 1000 : null;
+        var has = min is not null || max is not null;
+        var top = max is { } mx && min is { } mn && mx < mn ? min : max;
+        SaveIntent(new()
+        {
+            ["salary_min"] = min, ["salary_max"] = top,
+            ["salary_currency"] = has ? "CNY" : null, ["salary_period"] = has ? "month" : null,
+        });
+    }
+
+    // MARK: 经历
+
+    void Experiences()
+    {
+        var experience = Experience;
+        var supplements = experience["supplements"];
+        foreach (var group in ProfileModel.Groups(experience, _drafts))
+        {
+            var items = new StackPanel();
+            for (var index = 0; index < group.Items.Count; index++)
+            {
+                var item = group.Items[index];
+                var id = item.Entry.Text("id");
+                var form = EntryForm(index, item.Kind, item.Entry, supplements?[id] as JsonObject ?? [],
+                    update => Save(current => new() { ["experience"] = ProfileModel.ApplyEntry(ProfileModel.ExperienceOf(current), id, update, (group.Key, group.Label)) }),
+                    () =>
+                    {
+                        if (ProfileModel.SavedIds(Experience).Contains(id)) Save(current => new() { ["experience"] = ProfileModel.RemoveEntry(ProfileModel.ExperienceOf(current), id) }, true);
+                        else { _drafts.RemoveAll(x => x.Id == id); Rerender(); }
+                    });
+                if (index > 0)
+                {
+                    var dash = new Microsoft.UI.Xaml.Shapes.Line { X1 = 0, X2 = 2000, Stroke = Brush(Line), StrokeThickness = 1, StrokeDashArray = new DoubleCollection { 4, 3 }, Margin = new Thickness(0, 28, 0, 0) };
+                    items.Children.Add(new Border { Child = dash, Height = 29, HorizontalAlignment = HorizontalAlignment.Stretch });
+                }
+                items.Children.Add(form);
+            }
+            var key = group.Key;
+            (string, Action)? add = group.Addable ? ($"添加{group.Label}", () => { _drafts.Add((ProfileModel.NewId(), key)); Rerender(); }) : null;
+            _column.Children.Add(Section(group.Label, ProfileModel.GroupDescriptions.GetValueOrDefault(group.Key), add, items));
+        }
+    }
+
+    /// <summary>一段经历：「第 N 段」+ 右侧「删除」（再点一次确认）；下面是两栏输入框和描述。</summary>
+    UIElement EntryForm(int index, string kind, JsonNode entry, JsonObject supplement, Action<ProfileModel.Update> change, Action remove)
+    {
+        var inputs = ProfileModel.Inputs.GetValueOrDefault(kind, []).ToList();
+        var known = inputs.Where(x => x.Field is not null).Select(x => x.Field!).ToHashSet();
+        // 简历里读进来、这里没有专门输入框的项（例如所属单位、导师）也照样能改
+        if (entry["fields"] is JsonObject fields)
+            inputs.AddRange(fields.Select(x => x.Key).Order(StringComparer.Ordinal).Where(x => !known.Contains(x) && fields.Text(x).Length > 0).Select(x => new ProfileModel.EntryInput(x, x)));
+
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
+        void Idle()
+        {
+            actions.Children.Clear();
+            actions.Children.Add(Sans("删除", 12, Faint).OnTap(Confirming, "删除这一段"));
+        }
+        void Confirming()
+        {
+            actions.Children.Clear();
+            actions.Children.Add(Sans("确认删除", 12, Red).OnTap(remove, "确认删除"));
+            actions.Children.Add(Sans("取消", 12, Faint).OnTap(Idle, "取消"));
+        }
+        Idle();
+
+        string Value(ProfileModel.EntryInput input)
+        {
+            if (input.Gpa)
+            {
+                var gpa = supplement.Text("gpa"); var scale = supplement.Text("gpa_scale");
+                return gpa.Length == 0 ? "" : scale.Length == 0 ? gpa : $"{gpa} / {scale}";
+            }
+            if (input.Supplement is { } key && supplement.Text(key) is { Length: > 0 } value) return value;
+            return input.Field is { } field ? entry["fields"].Text(field) : "";
+        }
+
+        void Commit(ProfileModel.EntryInput input, string raw)
+        {
+            var value = raw.Trim();
+            (string Value, string? Scale)? gpa = null;
+            if (input.Gpa && value.Length > 0)
+            {
+                var match = Regex.Match(value, @"^(\d{1,9}(?:\.\d{1,4})?)\s*(?:[\/／]\s*(\d{1,9}(?:\.\d{1,4})?))?$");
+                if (!match.Success) { V3Toast.Show("没有保存", V3Toast.Kind.Error, "GPA 写成 3.6 或 3.6 / 4.0。"); return; }
+                gpa = (match.Groups[1].Value, match.Groups[2].Success ? match.Groups[2].Value : null);
+            }
+            change((current, currentSupplement) =>
+            {
+                var result = new ProfileModel.Change();
+                if (input.Gpa)
+                {
+                    var next = (JsonObject)currentSupplement.DeepClone();
+                    next.Remove("gpa"); next.Remove("gpa_scale");
+                    if (gpa is { } g) { next["gpa"] = g.Value; if (g.Scale is { } s) next["gpa_scale"] = s; }
+                    return result with { Supplement = next };
+                }
+                if (input.Supplement is { } key)
+                {
+                    var next = (JsonObject)currentSupplement.DeepClone();
+                    if (value.Length == 0) next.Remove(key); else next[key] = value;
+                    result = result with { Supplement = next };
+                }
+                if (input.Field is { } field && (input.Supplement is null || current["fields"]?[field] is not null))
+                {
+                    var next = current["fields"] is JsonObject f ? (JsonObject)f.DeepClone() : [];
+                    if (value.Length == 0) next.Remove(field); else next[field] = value;
+                    result = result with { Fields = next };
+                }
+                return result;
+            });
+        }
+
+        var cells = inputs.Select(input =>
+        {
+            var current = Value(input);
+            UIElement control = input.Month is { } month ? DateFields.YearMonth(input.Label, current, month == "end", next => Commit(input, next))
+                : input.Options is { } options ? Select(input.Label, current, options, next => { Commit(input, next); Rerender(); })
+                : TextInput(input.Label, current, input.Placeholder, next => Commit(input, next));
+            return Cell(Field(input.Label, control), input.Wide);
+        }).ToList();
+        if (kind != "education" || entry.Text("description").Length > 0)
+        {
+            var label = ProfileModel.DescriptionLabels.GetValueOrDefault(kind, "描述");
+            cells.Add(Cell(Field(label, TextArea(label, entry.Text("description"), next => change((_, _) => new ProfileModel.Change { Description = next }))), true));
+        }
+        return VStack(0, Spread(Sans($"第 {index + 1} 段", 12, Faint), actions, 12).Frame(height: 16).Top(index > 0 ? 0 : 4), TwoColumns(cells).Top(16));
+    }
+
+    // MARK: 技能
+
+    /// <summary>技能胶囊：28 高、Cl 描边；名字 13 + 熟练度 12 灰；点一下切换（了解 → 熟悉 → 熟练 → 未标注），悬停换出 ×；最后一格虚线「＋ 添加技能」。</summary>
+    UIElement Skills()
+    {
+        var skills = CareerProfileRules.Skills(Experience);
+        var flow = new VariableSizedFlow(8);
+        void SaveSkills(IEnumerable<CareerProfileRules.Skill> next) => Save(current =>
+        {
+            var experience = (JsonObject)ProfileModel.ExperienceOf(current).DeepClone();
+            experience["skills"] = new JsonArray(next.Select(x => (JsonNode?)new JsonObject { ["name"] = x.Name, ["level"] = x.Level }).ToArray());
+            return new() { ["experience"] = experience };
+        }, true);
+        var levels = CareerProfileRules.SkillLevels.Select(x => x.Id).ToList();
+        foreach (var skill in skills)
+        {
+            var close = Icon("xmark", 9, Fnt);
+            var remove = new Border { Width = 14, Height = 14, Background = Brush(Clear), Child = close.Align(HorizontalAlignment.Center, VerticalAlignment.Center), Opacity = 0 }
+                .OnTap(() => SaveSkills(skills.Where(x => x.Name != skill.Name)), $"去掉 {skill.Name}");
+            var level = CareerProfileRules.SkillLevels.FirstOrDefault(x => x.Id == skill.Level).Label ?? "未标注";
+            var name = HStack(6, Sans(skill.Name, 13, Txt), Sans(level, 12, Fnt)).OnTap(() =>
+            {
+                var position = levels.IndexOf(skill.Level ?? "");
+                SaveSkills(skills.Select(x => x.Name != skill.Name ? x : x with { Level = position == levels.Count - 1 ? null : levels[position + 1] }));
+            }, $"{skill.Name}：{level}，点一下切换熟练度").Tip("点一下切换熟练度");
+            var pill = new Border
+            {
+                Height = 28, Padding = new Thickness(12, 0, 10, 0), CornerRadius = new CornerRadius(14), BorderBrush = Brush(Cl), BorderThickness = new Thickness(1), Background = Brush(White),
+                Child = HStack(6, name.Align(v: VerticalAlignment.Center), remove.Align(v: VerticalAlignment.Center)),
+            };
+            pill.OnHover(h => remove.Opacity = h ? 1 : 0);
+            flow.Add(pill);
+        }
+        // 「＋ 添加技能」：点开换成就地输入框，顿号分开，回车确定
+        var addSlot = new ContentControl();
+        void ShowAdd()
+        {
+            var dashed = new Microsoft.UI.Xaml.Shapes.Rectangle { RadiusX = 14, RadiusY = 14, Stroke = Brush(Sk2), StrokeThickness = 1, StrokeDashArray = new DoubleCollection { 3, 2 } };
+            var label = HStack(4, Icon("plus", 10, Sub), Sans("添加技能", 13, Sub)).Pad(12, 0, 12, 0);
+            label.VerticalAlignment = VerticalAlignment.Center;
+            var cell = new Grid { Height = 28, Children = { dashed, label } };
+            addSlot.Content = cell.OnTap(ShowInput, "添加技能");
+        }
+        void ShowInput()
+        {
+            var box = Input("用顿号分开，回车确定", "");
+            box.Width = 220;
+            var done = false;
+            void Add()
+            {
+                if (done) return;
+                done = true;
+                var known = skills.Select(x => x.Name.ToLowerInvariant()).ToHashSet();
+                var seen = new HashSet<string>();
+                var added = box.Text.Split(['、', ',', '，', ';', '；', '/', '\n'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                    .Where(x => x.Length <= 60 && !known.Contains(x.ToLowerInvariant()) && seen.Add(x.ToLowerInvariant())).ToList();
+                if (added.Count > 0) SaveSkills(skills.Concat(added.Select(x => new CareerProfileRules.Skill(x, "familiar"))).Take(60));
+                else ShowAdd();
+            }
+            box.KeyDown += (_, e) =>
+            {
+                if (e.Key == Windows.System.VirtualKey.Enter) { e.Handled = true; Add(); }
+                if (e.Key == Windows.System.VirtualKey.Escape) { e.Handled = true; done = true; ShowAdd(); }
+            };
+            box.LostFocus += (_, _) => Add();
+            box.Loaded += (_, _) => box.Focus(FocusState.Programmatic);
+            addSlot.Content = box;
+        }
+        ShowAdd();
+        flow.Add(addSlot);
+        return flow.Panel;
+    }
+
+    // MARK: 保存
+
+    void Rerender() { if (!_disposed) Render(); }
+
+    /// <summary>连续失焦会各自保存一次：排队依次提交，每次都拿上一次保存后的最新画像（含版本号）算改动。</summary>
+    void Enqueue(Func<Task> work)
+    {
+        var previous = _queue;
+        _queue = Run();
+        async Task Run()
+        {
+            try { await previous; } catch { }
+            _saving++; UpdateStatus();
+            try { await work(); }
+            finally { _saving--; UpdateStatus(); }
+        }
+    }
+
+    async Task FailAsync(Exception error)
+    {
+        var code = (error as ApiException)?.Code ?? "";
+        var message = ErrorText.From(error, "请检查填写内容后重试。", new Dictionary<string, string>
+        {
+            ["AUTOFILL_ID_STORAGE_UNAVAILABLE"] = "证件号码暂时无法保存，请稍后再试。",
+            ["USER_PROFILE_VERSION_CONFLICT"] = "画像在别处改过了，已刷新为最新内容，请再改一次。",
+            ["RESUME_NOT_FOUND"] = "这份简历不存在或已删除。",
+        });
+        V3Toast.Show("没有保存", V3Toast.Kind.Error, message);
+        if (code == "USER_PROFILE_VERSION_CONFLICT") await LoadAsync();
+    }
+
+    /// <summary>写 `/api/account/career-profile`；<paramref name="rerender"/> 为 true 时保存后重画（结构变化），否则只更新页头状态，不打断正在输入的框。</summary>
+    void Save(Func<JsonNode, JsonObject> change, bool rerender = false) => Enqueue(async () =>
+    {
+        if (_profile is not { } current) return;
+        var body = change(current);
+        body["base_lock_version"] = current["lock_version"]?.DeepClone() ?? JsonValue.Create(1);
+        try
+        {
+            _profile = await AccountPage.Request("/api/account/career-profile", "PUT", body);
+            var saved = ProfileModel.SavedIds(Experience);
+            _drafts.RemoveAll(x => saved.Contains(x.Id));
+            if (rerender) Rerender();
+            else UpdateStatus();
+        }
+        catch (Exception error) { await FailAsync(error); }
+    });
+
+    void SavePersonal(string key, string value) => Save(current =>
+    {
+        var personal = current["personal"] is JsonObject p ? (JsonObject)p.DeepClone() : [];
+        var trimmed = value.Trim();
+        if (trimmed.Length == 0) personal.Remove(key);
+        else personal[key] = ProfileModel.UrlKeys.Contains(key) ? ProfileModel.WithScheme(trimmed) : trimmed;
+        return new() { ["personal"] = personal };
+    });
+
+    /// <summary>求职意向走 `/api/account/user-profile`：先读最新版本，合并改动后整体写回。</summary>
+    void SaveIntent(JsonObject change, bool rerender = false) => Enqueue(async () =>
+    {
+        try
+        {
+            if (await AccountPage.Request("/api/account/user-profile") is not JsonObject latest) return;
+            var version = latest["lock_version"]?.DeepClone() ?? JsonValue.Create(1);
+            latest.Remove("lock_version"); latest.Remove("created_at"); latest.Remove("updated_at");
+            foreach (var (key, value) in change) latest[key] = value?.DeepClone();
+            latest["base_lock_version"] = version;
+            _intent = await AccountPage.Request("/api/account/user-profile", "PUT", latest);
+            if (rerender) Rerender();
+        }
+        catch (Exception error) { await FailAsync(error); }
+    });
+}
+
+/// <summary>求职画像的输入项与经历改写（对齐 Web `CareerProfilePage.tsx` 的 ENTRY_INPUTS / applyEntryChange / removeEntry）。</summary>
+static class ProfileModel
+{
+    public static readonly (string Key, string Label, string[]? Options, string? Placeholder, bool Date)[] Basic =
+    [
+        ("name", "姓名", null, null, false), ("gender", "性别", ["男", "女", "其他", "不愿透露"], null, false),
+        ("birth_date", "出生日期", null, null, true), ("phone", "手机号", null, null, false),
+        ("email", "邮箱", null, null, false), ("github", "GitHub", null, "主页地址或用户名", false),
+        ("website", "个人网站", null, "主页地址", false), ("portfolio_url", "作品链接", null, "作品集或网盘链接", false),
+    ];
+    public static readonly (string Key, string Label, string[]? Options, string? Placeholder, bool Date)[] Identity =
+    [
+        ("ethnicity", "民族", null, "例如 汉族", false),
+        ("political_status", "政治面貌", ["中共党员", "中共预备党员", "共青团员", "群众", "其他"], null, false),
+        ("native_place", "籍贯", null, "例如 江苏南京", false), ("home_city", "家庭所在城市", null, null, false),
+    ];
+    public static readonly HashSet<string> UrlKeys = ["website", "portfolio_url"];
+
+    public static string WithScheme(string value)
+    {
+        var match = Regex.Match(value, "^https?://", RegexOptions.IgnoreCase);
+        return match.Success ? match.Value.ToLowerInvariant() + value[match.Length..] : "https://" + value;
+    }
+
+    public sealed record EntryInput(string Label, string? Field = null, string? Supplement = null, string? Placeholder = null,
+        string[]? Options = null, bool Wide = false, bool Gpa = false, string? Month = null);
+
+    public static readonly Dictionary<string, EntryInput[]> Inputs = new()
+    {
+        ["education"] =
+        [
+            new("学校", "学校"), new("学院", "学院"),
+            new("学历学位", "学历学位", Options: ["博士", "硕士", "本科", "大专", "高中"]), new("专业", "专业"),
+            new("开始时间", "开始时间", Month: "start"), new("结束时间", "结束时间", Month: "end"),
+            new("GPA", Supplement: "gpa", Placeholder: "例如 3.6 / 4.0", Gpa: true), new("专业排名", Supplement: "major_rank", Placeholder: "例如 5 / 120"),
+            new("主修课程", "主修课程", Placeholder: "用顿号分开，例如 数据结构、操作系统", Wide: true),
+        ],
+        ["work"] =
+        [
+            new("公司名称", "单位"), new("部门", "部门", "department", "例如 交易平台部"),
+            new("职位", "职位"), new("城市", "地点"),
+            new("开始时间", "开始时间", Month: "start"), new("结束时间", "结束时间", Month: "end"),
+        ],
+        ["project"] =
+        [
+            new("项目名称", "项目名称"), new("角色", "角色"),
+            new("开始时间", "开始时间", Month: "start"), new("结束时间", "结束时间", Month: "end"),
+            new("链接", "链接", Placeholder: "作品或代码地址", Wide: true),
+        ],
+        ["other"] =
+        [
+            new("名称", "名称"), new("角色", "角色"),
+            new("开始时间", "开始时间", Month: "start"), new("结束时间", "结束时间", Month: "end"),
+        ],
+    };
+    public static readonly Dictionary<string, string> DescriptionLabels = new() { ["education"] = "在校经历", ["work"] = "工作内容", ["project"] = "项目描述", ["other"] = "描述" };
+    static readonly (string Key, string Label)[] GroupLabels = [("education", "教育经历"), ("internship", "实习经历"), ("work", "工作经历"), ("project", "项目经历"), ("campus", "校园经历"), ("other", "奖项与证书")];
+    public static readonly Dictionary<string, string> GroupDescriptions = new()
+    {
+        ["education"] = "从最高学历填起，网申插件按这里填学校、专业和在校时间。", ["internship"] = "每段实习单独一份，网申插件逐段填表。",
+        ["work"] = "全职工作经历，应届生可以先空着。", ["project"] = "课程、比赛、个人项目都可以，写清楚你负责的部分和结果。",
+    };
+
+    public static JsonObject EmptyExperience() => new()
+    {
+        ["schema_version"] = 1, ["extra_basics"] = new JsonObject(), ["sections"] = new JsonArray(),
+        ["supplements"] = new JsonObject(), ["records"] = new JsonObject(), ["skills"] = new JsonArray(),
+    };
+
+    public static JsonObject ExperienceOf(JsonNode profile) => profile["experience"] is JsonObject value ? value : EmptyExperience();
+
+    public static string NewId() => "e_" + Base36(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) + Guid.NewGuid().ToString("N")[..6];
+    static string Base36(long value)
+    {
+        const string digits = "0123456789abcdefghijklmnopqrstuvwxyz";
+        var text = "";
+        do { text = digits[(int)(value % 36)] + text; value /= 36; } while (value > 0);
+        return text;
+    }
+
+    public sealed record Item(JsonNode Entry, string Kind);
+    public sealed record Group(string Key, string Label, bool Addable, List<Item> Items);
+
+    public static List<Group> Groups(JsonNode experience, IEnumerable<(string Id, string Group)> drafts)
+    {
+        var result = GroupLabels.Select(x => new Group(x.Key, x.Label, x.Key is not ("campus" or "other"), [])).ToList();
+        foreach (var section in experience.Items("sections"))
+        {
+            var raw = section.Text("kind");
+            if (CareerProfileRules.TextKinds.Contains(raw)) continue;
+            var kind = CareerProfileRules.EntryKind(raw);
+            foreach (var entry in section.Items("entries"))
+            {
+                var key = kind == "work" ? (entry.Bool("intern") ? "internship" : "work") : raw == "activity" ? "campus" : kind;
+                result.FirstOrDefault(x => x.Key == key)?.Items.Add(new(entry, kind));
             }
         }
-        _form.Content=new ScrollViewer {Content=new Border {Child=body,MaxWidth=948,Padding=new Thickness(24,51,24,64),HorizontalAlignment=HorizontalAlignment.Stretch},HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled};Children.Add(_form);
+        foreach (var (id, group) in drafts)
+        {
+            var kind = group is "internship" or "work" ? "work" : CareerProfileRules.EntryKind(group);
+            var entry = new JsonObject { ["id"] = id, ["fields"] = new JsonObject(), ["description"] = "", ["ambiguous"] = new JsonArray(), ["intern"] = group == "internship" };
+            result.FirstOrDefault(x => x.Key == group)?.Items.Add(new(entry, kind));
+        }
+        return result.Where(x => x.Addable || x.Items.Count > 0).ToList();
     }
-    FrameworkElement Section(string title,string? description,UIElement content,(string Label,Action Action)? action=null)
+
+    public static HashSet<string> SavedIds(JsonNode experience) =>
+        experience.Items("sections").SelectMany(x => x.Items("entries")).Select(x => x.Text("id")).ToHashSet();
+
+    /// <summary>一段经历的改动：字段、描述、网申补充；null 表示不改这一项。</summary>
+    public sealed record Change
     {
-        var left=VStack(6,Sans(title,14,Txt,Bold).Frame(height:22),description is null?null:Sans(description,12,Fnt).Wrap().LineHeight(19),action is {} a?LinkButton(a.Label,a.Action):null);
-        return VStack(0,Columns(40,(Px(160),left),(Star(),content)).Pad(0,28,0,28),Divider());
+        public JsonObject? Fields { get; init; }
+        public string? Description { get; init; }
+        public JsonObject? Supplement { get; init; }
     }
-    static FrameworkElement ValueRow(string label,string value,Action edit,bool first=false)
+
+    public delegate Change? Update(JsonNode entry, JsonObject supplement);
+
+    /// <summary>把一段经历的改动写回整份经历；这段还不存在时（刚点了添加），第一次保存才放进对应分组。</summary>
+    public static JsonObject ApplyEntry(JsonObject experience, string id, Update update, (string Group, string Label) create)
     {
-        var row=Columns(16,(Px(112),Sans(label,13,Fnt).Wrap().LineHeight(22)),(Star(),Sans(value.Length==0?"未填":value,14,value.Length==0?Orange:Txt).Wrap().LineHeight(22)),(Auto,Sans(value.Length==0?"填写":"›",12.5,value.Length==0?Blue:Hex(0xC2C2BE))));
-        var button=new Button {Content=row,Padding=new Thickness(0,12,0,12),HorizontalAlignment=HorizontalAlignment.Stretch,HorizontalContentAlignment=HorizontalAlignment.Stretch,Background=Brush(Clear),BorderThickness=new(0),MinHeight=46};button.Click+=(_,_)=>edit();
-        return new Border {Child=button,BorderBrush=Brush(Hex(0xF2F1EE)),BorderThickness=new(0,first?0:1,0,0)};
+        var root = (JsonObject)experience.DeepClone();
+        var sections = root["sections"] as JsonArray ?? [];
+        root["sections"] = sections;
+        var current = sections.SelectMany(x => x.Items("entries")).FirstOrDefault(x => x.Text("id") == id);
+        var intern = create.Group == "internship";
+        var entry = current is not null ? (JsonObject)current.DeepClone()
+            : new JsonObject { ["id"] = id, ["fields"] = new JsonObject(), ["description"] = "", ["ambiguous"] = new JsonArray(), ["intern"] = intern };
+        var supplements = root["supplements"] as JsonObject ?? [];
+        root["supplements"] = supplements;
+        var existing = supplements[id] is JsonObject value ? (JsonObject)value.DeepClone() : [];
+        if (update(entry, existing) is not { } change) return experience;
+        if (change.Supplement is { } nextSupplement)
+        {
+            if (nextSupplement.Count == 0) supplements.Remove(id); else supplements[id] = nextSupplement.DeepClone();
+        }
+        if (change.Fields is { } fields)
+        {
+            entry["fields"] = fields.DeepClone();
+            entry["ambiguous"] = new JsonArray(entry.Items("ambiguous").Where(x => fields.Text(x.GetValue<string>()).Length == 0).Select(x => x.DeepClone()).ToArray());
+        }
+        if (change.Description is { } description) entry["description"] = description;
+
+        if (current is not null)
+        {
+            foreach (var section in sections.OfType<JsonObject>())
+                if (section["entries"] is JsonArray entries)
+                    for (var i = 0; i < entries.Count; i++)
+                        if (entries[i].Text("id") == id) entries[i] = entry.DeepClone();
+        }
+        else
+        {
+            var kind = intern ? "work" : create.Group;
+            var same = sections.OfType<JsonObject>().Where(x => x.Text("kind") == kind).ToList();
+            // 实习和工作都在 work 分组里：优先放进标题对得上的那一组
+            var target = (kind == "work" ? same.FirstOrDefault(x => x.Text("title").Contains("实习") == intern) : null) ?? same.FirstOrDefault();
+            if (target is not null)
+            {
+                if (target["entries"] is not JsonArray entries) target["entries"] = entries = [];
+                entries.Add(entry);
+            }
+            else sections.Add(new JsonObject { ["id"] = "", ["kind"] = kind, ["title"] = create.Label, ["lines"] = new JsonArray(), ["entries"] = new JsonArray(entry) });
+        }
+        return root;
     }
-    FrameworkElement EditBox(string label,UIElement fields,Action done,string? hint=null,UIElement? extra=null,Action? cancel=null)
+
+    public static JsonObject RemoveEntry(JsonObject experience, string id)
     {
-        var actions=HStack(14,extra,LinkButton("取消",()=>{if(cancel is not null)cancel();else{_editing="";Render();}}),LinkButton(_saving?"保存中…":"完成",()=>{if(!_saving)done();}));
-        return Fill(Hex(0xF7F7F5),10,child:VStack(10,Columns(16,(Px(98),Sans(label,13,Fnt)),(Star(),fields)),Spread(Sans(hint??"",11.5,Fnt).Wrap(),actions,14))).WithPadding(new(14,12,14,14)).Pad(0,4,0,4);
-    }
-    FrameworkElement PersonalRows(IEnumerable<CareerProfileRules.Row> rows)
-    {
-        var panel=VStack(0);var first=true;
-        foreach(var row in rows){var key=row.Key;var value=_profile?["personal"].Text(key)??"";var label=_profile?["catalog"]?["fields"]?["profile.personal."+key].Text("label");if(string.IsNullOrEmpty(label))label=row.Label;
-            if(_editing==key){var input=Input(value,label);string draft=value;UIElement field=input;if(row.Options is {} options){var segment=new V3Segmented<string>(options.Select(x=>(x,x)),value);segment.Changed+=next=>draft=next;field=segment;}else input.TextChanged+=(_,_)=>draft=input.Text;
-                void Done(){var personal=(_profile?["personal"] as JsonObject)?.DeepClone() as JsonObject??new();if(draft.Trim().Length==0)personal.Remove(key);else personal[key]=draft.Trim();_=Save(new(){["personal"]=personal});}
-                input.KeyDown+=(_,e)=>{if(e.Key==Windows.System.VirtualKey.Enter)Done();else if(e.Key==Windows.System.VirtualKey.Escape){_editing="";Render();}};panel.Children.Add(EditBox(label,field,Done,row.Hint));
-            }else panel.Children.Add(ValueRow(label,value,()=>{if(!_saving){_editing=key;Render();}},first));first=false;
-        }return panel;
-    }
-    FrameworkElement Identity()
-    {
-        if(_editing!="id")return ValueRow("证件",_profile.Bool("has_id_number")?_profile.Text("id_type")+" · "+_profile.Text("id_number_masked")+"\n加密保存，只在网申时填进表单，不发给 AI":"",()=>{_editing="id";Render();},true);
-        var types=_profile?["catalog"].Items("id_types").Select(x=>x.GetValue<string>()).ToArray()??[];var combo=new ComboBox {ItemsSource=types,SelectedItem=_profile.Text("id_type"),Width=180,Height=34,MinHeight=0};if(combo.SelectedIndex<0&&types.Length>0)combo.SelectedIndex=0;
-        var number=Input("","证件号码");number.PlaceholderText=_profile.Bool("has_id_number")?"输入新的号码替换 "+_profile.Text("id_number_masked"):"证件号码";
-        return EditBox("证件",Columns(8,(Auto,combo),(Star(),number)),()=>{if(number.Text.Trim().Length==0){_editing="";Render();}else Consent(combo.SelectedItem as string??"",number.Text.Trim());},"加密保存，只在网申时填进表单，不发给 AI",_profile.Bool("has_id_number")?LinkButton("删除证件号码",()=>_=Save(new(){["id_number"]=""})):null);
-    }
-    void Consent(string type,string number)
-    {
-        var agreed=new CheckBox {Content="我同意 DrawOffer 按以上方式保存我的证件号码",FontSize=13};var version=_profile?["catalog"].Text("consent_version")??"";var busy=false;
-        _overlay=V3Overlay.Show(XamlRoot,close=>{
-            var error=Sans("",13,Red).Wrap();var cancel=new V3Button("暂不保存",()=>{if(!busy)close();},height:36);V3Button? submit=null;submit=new V3Button("同意并保存",()=>_=Accept(),V3Button.Kind.Dark,height:36){Enabled=false};agreed.Click+=(_,_)=>submit.Enabled=agreed.IsChecked==true&&!busy;
-            async Task Accept(){if(busy||agreed.IsChecked!=true)return;busy=true;cancel.Enabled=submit!.Enabled=false;submit.Title="保存中…";if(await Save(new(){["id_type"]=type,["id_number"]=number,["id_number_consent"]=new JsonObject{["accepted"]=true,["version"]=version}}))close();else{busy=false;cancel.Enabled=true;submit.Enabled=agreed.IsChecked==true;submit.Title="同意并保存";error.Text="没有保存，请检查填写内容后重试。";}}
-            return V3Dialog.Make(VStack(16,V3DialogHead.Make("保存证件号码","证件号码属于敏感个人信息，保存前需要你单独同意。"),Notes("只在你使用网申插件时，填进招聘网站的表单","加密保存；页面上只显示前 6 位和后 4 位","不发给 AI，不用于其他任何用途","随时可以在「求职资料」里删除，删除后不再保留"),agreed, Sans("说明版本 "+version,11.5,Fnt),error),[cancel,submit],()=>{if(!busy)close();},460,closable:false);
-        },dismissible:false);
-    }
-    FrameworkElement IntentRows()
-    {
-        var panel=VStack(0);var cities=string.Join("、",_intent.Items("candidate_cities").Select(x=>x.GetValue<string>()));var kinds=_intent.Items("employment_types").Select(x=>x.GetValue<string>()).ToHashSet();
-        foreach(var (key,label,value) in new[]{("intent.cities","期望城市",cities),("intent.salary","期望薪资",CareerProfileRules.SalaryText(_intent!)),("intent.kinds","工作性质",string.Join("、",kinds.Select(x=>x=="internship"?"实习":"全职")))}){
-            if(_editing!=key){panel.Children.Add(ValueRow(label,value,()=>{_editing=key;Render();},panel.Children.Count==0));continue;}
-            var input=Input(cities,label);input.PlaceholderText="用顿号分开，例如 杭州、上海";var low=Input(_intent.Number("salary_min") is {} l?Math.Round(l/1000,MidpointRounding.AwayFromZero).ToString():"","最低");low.Width=96;var high=Input(_intent.Number("salary_max") is {} h?Math.Round(h/1000,MidpointRounding.AwayFromZero).ToString():"","最高");high.Width=96;
-            var choices=HStack(8);foreach(var (id,text) in new[]{("internship","实习"),("full_time","全职")}){var check=new CheckBox {Content=text,IsChecked=kinds.Contains(id)};check.Click+=(_,_)=>{if(check.IsChecked==true)kinds.Add(id);else kinds.Remove(id);};choices.Children.Add(check);}
-            void Done(){JsonObject change;if(key=="intent.cities")change=new(){["candidate_cities"]=new JsonArray(input.Text.Split(['、',',','，',' ','\n'],StringSplitOptions.RemoveEmptyEntries).Select(x=>x.Trim()).Where(x=>x.Length>0).Take(20).Select(x=>(JsonNode?)JsonValue.Create(x)).ToArray())};else if(key=="intent.kinds")change=new(){["employment_types"]=new JsonArray(kinds.Select(x=>(JsonNode?)JsonValue.Create(x)).ToArray())};else{double? min=double.TryParse(low.Text,out var a)&&double.IsFinite(a)&&a>=0?a*1000:null;double? max=double.TryParse(high.Text,out var b)&&double.IsFinite(b)&&b>=0?b*1000:null;if(min is not null&&max<min)max=min;var has=min is not null||max is not null;change=new(){["salary_min"]=min,["salary_max"]=max,["salary_currency"]=has?"CNY":null,["salary_period"]=has?"month":null};}_=SaveIntent(change);}
-            panel.Children.Add(EditBox(label,key=="intent.cities"?input:key=="intent.salary"?HStack(8,low,Sans("–",13,Sub),high,Sans("K / 月",13,Sub)):choices,Done));
-        }return panel;
-    }
-    async Task SwitchResume()
-    {
-        if(_saving)return;var list=VStack(0,Sans("正在读取简历…",11.5,Fnt));var choices=new ContentControl{Content=list,HorizontalContentAlignment=HorizontalAlignment.Stretch};string choice="";var current=_profile?["experience_resume"].Display("id")??"";var hasExperience=Experience.Items("sections").Count>0;var submitTitle=hasExperience?"换成这份":"读取";var busy=false;var error=Sans("",13,Red).Wrap();V3Button? submit=null;
-        _overlay=V3Overlay.Show(XamlRoot,close=>{var cancel=new V3Button("取消",()=>{if(!busy)close();},height:36);submit=new V3Button(submitTitle,()=>_=Read(),V3Button.Kind.Dark,height:36){Enabled=false};async Task Read(){if(busy||choice.Length==0||_profile is null)return;busy=true;choices.IsEnabled=false;cancel.Enabled=submit!.Enabled=false;submit.Title="读取中…";error.Text="";try{var value=await _owner.Request("/api/account/career-profile/read-resume","POST",new JsonObject{["base_lock_version"]=_profile["lock_version"]?.DeepClone()??JsonValue.Create(1),["resume_id"]=choice});if(_disposed)return;_profile=value;_editing="";close();Render();_owner.Toast("经历已读入");}catch(OperationCanceledException){}catch(Exception ex){error.Text=Explain(ex);if(ex is ApiException{Code:"USER_PROFILE_VERSION_CONFLICT"})await Load();}finally{busy=false;choices.IsEnabled=true;cancel.Enabled=true;submit.Enabled=choice.Length>0;submit.Title=submitTitle;}}
-            return V3Dialog.Make(VStack(16,V3DialogHead.Make("从哪份简历读取经历","只换教育、实习、项目、奖项和技能；个人信息和求职意向不变。"),new ScrollViewer{Content=choices,MaxHeight=320},hasExperience?Notes("同一所学校、同一家公司下补过的 GPA、部门等会保留","新简历里没有的经历会被移除，这里只保存一份","不用 AI，几秒完成；读进来后照样可以改"):null,error),[cancel,submit],()=>{if(!busy)close();},460,closable:false);},dismissible:false);
-        var overlay=_overlay;
-        try{var result=await _owner.Request("/api/resumes");if(_disposed||overlay?.IsOpen!=true||overlay!=_overlay)return;var resumes=result.Items("resumes");list.Children.Clear();if(resumes.Count==0)list.Children.Add(Sans("还没有简历，先去「我的简历」新建一份。",11.5,Fnt));choice=(resumes.FirstOrDefault(x=>x.Display("id")!=current)??resumes.FirstOrDefault()).Display("id");foreach(var resume in resumes){var id=resume.Display("id");var radio=new RadioButton{Content=resume.Text("title")+(id==current?" · 正在使用":""),GroupName="career-resume",IsChecked=id==choice,Padding=new Thickness(14,12,14,12)};radio.Checked+=(_,_)=>choice=id;list.Children.Add(radio);}submit!.Enabled=choice.Length>0;}
-        catch(OperationCanceledException){}catch{if(!_disposed&&overlay==_overlay&&overlay?.IsOpen==true){list.Children.Clear();list.Children.Add(VStack(12,Sans("暂时无法读取简历，请重试。",13,Sub),new V3Button("重新加载",()=>{_overlay?.Close();_=SwitchResume();})));}}
+        var root = (JsonObject)experience.DeepClone();
+        (root["supplements"] as JsonObject)?.Remove(id);
+        foreach (var section in (root["sections"] as JsonArray ?? []).OfType<JsonObject>())
+            if (section["entries"] is JsonArray entries)
+                for (var i = entries.Count - 1; i >= 0; i--)
+                    if (entries[i].Text("id") == id) entries.RemoveAt(i);
+        return root;
     }
 }

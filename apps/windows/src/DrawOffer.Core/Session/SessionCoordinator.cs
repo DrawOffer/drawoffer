@@ -120,6 +120,40 @@ public sealed class SessionCoordinator(IDesktopTransport transport, ITokenStore 
         return envelope.User;
     }
 
+    /// <summary>
+    /// 开发/本地环境的邮箱密码登录（与 Mac `passwordLogin` 一致）：服务端校验后返回一次性授权码，
+    /// 再用本地 PKCE verifier 走 browser/exchange 换会话。生产环境服务端不开放该接口（404）。
+    /// </summary>
+    public async Task<User> PasswordLoginAsync(string email, string password, string clientVersion, CancellationToken ct = default)
+    {
+        var generation = Guid.NewGuid();
+        await SignOutAsync(generation);
+        lock (_gate)
+        {
+            if (_generation != generation) throw InvalidSession();
+            _disabled = false;
+        }
+        var verifier = Base64Url(RandomNumberGenerator.GetBytes(32));
+        var challenge = Base64Url(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)));
+        var issued = await transport.SendAsync("/api/auth/desktop/password", new()
+        {
+            ["platform"] = "windows", ["client_version"] = clientVersion, ["code_challenge"] = challenge,
+            ["code_challenge_method"] = "S256", ["email"] = email, ["password"] = password,
+        }, ct: ct);
+        lock (_gate) { CheckGeneration(generation); }
+        var envelope = Decode(await transport.SendAsync("/api/auth/desktop/browser/exchange", new()
+        {
+            ["code"] = issued["code"]!.GetValue<string>(), ["code_verifier"] = verifier, ["request_id"] = Guid.NewGuid().ToString(),
+        }, ct: ct));
+        lock (_gate)
+        {
+            ct.ThrowIfCancellationRequested();
+            CheckGeneration(generation);
+            Persist(envelope, null);
+        }
+        return envelope.User;
+    }
+
     public async Task<DesktopLoginChallenge> BeginLoginAsync(string clientVersion, CancellationToken ct = default)
     {
         var generation = Guid.NewGuid();

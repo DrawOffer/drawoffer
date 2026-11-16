@@ -12,12 +12,15 @@ public static class MockInterviewRequest {
         if(path=="/api/mock-interviews")return method is "GET" or "POST";
         if(path=="/api/datasets")return method=="GET";
         if(path=="/api/mock-interviews/speech-capability")return method=="GET";
+        // 首页 / 全部记录的概览、导入面试记录、复盘页的上下文（Windows 稿 09 · 01、08、09、10）
+        if(path is "/api/mock-interviews/overview" or "/api/mock-interviews/review-context")return method=="GET";
+        if(path=="/api/mock-interviews/imports")return method=="POST";
         var p=path.Split('/');if(p.Length is < 4 or > 7||p[0]!=""||p[1]!="api"||p[2]!="mock-interviews"||!Guid.TryParseExact(p[3],"D",out var id)||id.ToString("D")!=p[3])return false;
         if(p.Length==4)return method is "GET" or "DELETE";
         if(p.Length==5){if(p[4]=="recordings")return method=="DELETE";return method=="POST"&&new[]{"answers","skip","reply:retry","finish","abandon","retry","repeat","transcripts:correct","answer-mode"}.Contains(p[4]);}
         if(p.Length==6){if(p[4]=="actions")return method=="PUT"&&p[5].Length is >= 1 and <= 3&&p[5].All(c=>c is >= '0' and <= '9');return p[4]=="speech"&&p[5]=="playback"&&method=="POST";}
         if(p[4]!="questions"||p[5].Length==0||!p[5].All(c=>c is >= '0' and <= '9'))return false;
-        return p[6] switch{"transcript"=>method=="PUT","re-evaluate"=>method=="POST","recording"=>method=="GET",_=>false};
+        return p[6] switch{"transcript"=>method=="PUT","re-evaluate"=>method=="POST","recording"=>method=="GET","judgement"=>method=="PUT",_=>false};
     }
     public static JsonNode DecodeEvents(string source) {
         if(System.Text.Encoding.UTF8.GetByteCount(source)>MaximumTurnBytes)throw new InvalidDataException();

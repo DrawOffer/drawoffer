@@ -24,12 +24,19 @@ public static class ParityRequest
         (["GET"], "/api/announcements"),
         (["GET"], "/api/announcements/unread-count"),
         (["POST"], "/api/announcements/read-all"),
+        (["DELETE"], "/api/announcements/[A-Za-z0-9_-]{1,64}"),
+        (["GET"], "/api/notifications(/unread-count|/preferences)?"),
+        (["PUT"], "/api/notifications/preferences"),
+        (["POST"], "/api/notifications/(read-all|[A-Za-z0-9_-]{1,64}/(read|open))"),
+        (["DELETE"], "/api/notifications/[A-Za-z0-9_-]{1,64}"),
+        (["GET", "POST"], "/api/account/api-keys"),
+        (["DELETE"], "/api/account/api-keys/[1-9][0-9]{0,19}"),
         (["GET"], "/api/billing/(summary|ledger|feature-prices|invite-code|invite-rewards)"),
         (["POST"], "/api/billing/invite-codes/check"),
-        (["GET"], "/api/memory/(home|atlas|outline|overview|brief|match-evidence|checkins|constraints|review-links|review-repeats|review-comparison|feedback)"),
+        (["GET"], "/api/memory/(home|home/graph|atlas|outline|overview|brief|match-evidence|checkins|constraints|review-links|review-repeats|review-comparison|feedback)"),
         (["POST"], "/api/memory/(home/disclosures|checkins|constraints)"),
         (["DELETE"], "/api/memory/constraints/[A-Za-z0-9_-]{1,64}"),
-        (["GET"], "/api/job-pool(/filters|/companies|/companies/[1-9][0-9]{0,19}|/[1-9][0-9]{0,19})?"),
+        (["GET"], "/api/job-pool(/filters|/companies|/companies/page|/companies/[1-9][0-9]{0,19}|/[1-9][0-9]{0,19})?"),
         (["POST"], "/api/job-pool/[1-9][0-9]{0,19}/join"),
     }.Select(x => (x.Item1, new Regex("^" + x.Item2 + "$", RegexOptions.CultureInvariant))).ToArray();
 
@@ -76,7 +83,7 @@ public static partial class ResumeRequest
             "share" => method is "GET" or "POST" or "PATCH" or "DELETE",
             "default" => method == "PUT",
             "guide" => method is "GET" or "PUT" or "PATCH",
-            "section-review:analyze" or "section-review:rewrite" => method == "POST",
+            "section-review:analyze" or "section-review:rewrite" or "review:check" => method == "POST",
             "section-reviews" => method == "GET",
             _ => false,
         };
@@ -85,8 +92,8 @@ public static partial class ResumeRequest
     /// <summary>Web `RETIRED_RESUME_TEMPLATE_KEYS`。</summary>
     public static readonly HashSet<string> RetiredTemplateKeys = ["blank-cn"];
 
-    /// <summary>Web `MAX_RESUMES_PER_USER`，仅用于提前禁用按钮。</summary>
-    public const int MaximumPerUser = 10;
+    /// <summary>Web `MAX_RESUMES_PER_USER`（每人最多 20 份），仅用于提前禁用按钮。</summary>
+    public const int MaximumPerUser = 20;
 }
 
 /// <summary>Mac `Agent.swift` 的 `AgentRequest`：用户侧 `/api/agent/*`。</summary>

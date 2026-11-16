@@ -211,7 +211,7 @@ public sealed class HttpApiClient(DrawOffer.Core.Session.SessionCoordinator coor
     public Task<PaperPreparation> PreparePaperAsync(ResumeRenderRequest request, CancellationToken ct = default) => Coordinator.PreparePaperAsync(request, ct);
     public Task<User?> CurrentUserAsync(CancellationToken ct = default) => Coordinator.RestoreAsync(ct);
     public Task<User> SignInAsync(string email, string password, CancellationToken ct = default)
-        => throw new ApiException(HttpStatusCode.MethodNotAllowed, "DESKTOP_WECHAT_LOGIN_REQUIRED");
+        => Coordinator.PasswordLoginAsync(email, password, typeof(HttpApiClient).Assembly.GetName().Version is { } v ? $"{v.Major}.{v.Minor}.{v.Build}" : "0.1.0", ct);
     public Task SignOutAsync(CancellationToken ct = default) => Coordinator.SignOutAsync();
     public async Task<IReadOnlyList<ResumeTemplate>> ListResumeTemplatesAsync(CancellationToken ct = default)
         => (await Coordinator.RequestAsync("/api/resume-templates", ct))["templates"]?.Deserialize<List<ResumeTemplate>>() ?? [];

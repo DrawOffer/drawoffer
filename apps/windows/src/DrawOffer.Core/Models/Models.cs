@@ -89,7 +89,7 @@ public static class WorkspaceSections
     /// <summary>Segoe Fluent Icons 字形；Mac 端对应 SF Symbols（sun.max、doc.text、rectangle.3.group、…）。</summary>
     public static string Glyph(this WorkspaceSection section) => section switch
     {
-        WorkspaceSection.Home => "\uE706",
+        WorkspaceSection.Home => "\uE80F",
         WorkspaceSection.Resumes => "\uE8A5",
         WorkspaceSection.Templates => "\uF0E2",
         WorkspaceSection.Jobs => "\uE8FD",

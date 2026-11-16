@@ -110,8 +110,8 @@ sealed class ScheduleDetailDialog : UserControl
         _body.Children.Clear();
         var status = Status;
         var pill = new Border { Child = Sans(status.Text, 11, status.Ink, Medium).Align(v: VerticalAlignment.Center), Padding = new Thickness(8, 0, 8, 0), Height = 22, CornerRadius = new CornerRadius(11), Background = Brush(status.Soft) };
-        var close = Icon("xmark", 12, Fnt).Also(i => i.FontWeight = Medium).OnTap(_close, "关闭");
-        _body.Children.Add(Columns(10, (Auto, Serif(Current.Company + " · " + Stage, 20).Align(v: VerticalAlignment.Center)), (Auto, pill.Align(v: VerticalAlignment.Center)), (Star(), new Border()), (Auto, close.Align(v: VerticalAlignment.Center))).Frame(height: 29));
+        // Windows 稿：弹窗不放 ×，底部「关闭」或 Esc 关闭
+        _body.Children.Add(Columns(10, (Auto, Label(Current.Company + " · " + Stage, 20, Txt, Semibold).Align(v: VerticalAlignment.Center)), (Auto, pill.Align(v: VerticalAlignment.Center)), (Star(), new Border())).Frame(height: 29));
         _body.Children.Add(Sans(Current.Title + Relative, 12.5, Sub).Top(5));
         if (_busy && _item is null) _body.Children.Add(Sans("正在加载完整面试详情…", 11.5, Fnt).Top(8));
         _body.Children.Add(new V3DotStage(Art(), 160).Top(18));
@@ -123,7 +123,7 @@ sealed class ScheduleDetailDialog : UserControl
 
         var left = HStack(10);
         if (Primary is not null || (IsWindow && CanEdit))
-            left.Children.Add(HStack(4, Sans("查看求职记录", 12, CareerPalette.Blue, Medium), Icon("arrow.right", 10, CareerPalette.Blue)).OnTap(_openRecord, "查看求职记录"));
+            left.Children.Add(HStack(4, Sans("查看求职记录", 13, Txt), Icon("arrow.right", 11, Txt)).OnTap(_openRecord, "查看求职记录"));
         var right = HStack(10);
         if (IsWindow && CanEdit && Current.Text("answer_plan_start_at").Length > 0) right.Children.Add(new V3Button("清除计划", () => _ = SavePlanAsync(true), height: 36) { Enabled = !_busy });
         right.Children.Add(new V3Button("关闭", _close, height: 36));
@@ -271,7 +271,7 @@ sealed class ScheduleSessionForm : UserControl
     readonly Action _completed, _close;
     readonly StackPanel _content = new() { Spacing = 16, Padding = new Thickness(24) };
     readonly Border _footer = new() { BorderBrush = Brush(V3.Line), BorderThickness = new Thickness(0, 1, 0, 0) };
-    readonly TextBlock _title = Serif("", 20);
+    readonly TextBlock _title = Label("", 20, Txt, Semibold);
     ScheduledInterview? _item;
     string _kind = "detail";
     DateTimeOffset _start, _end;
@@ -288,7 +288,7 @@ sealed class ScheduleSessionForm : UserControl
     ScheduleSessionForm(ScheduleAction action, IReadOnlyList<ScheduledInterview> interviews, Action completed, Action close)
     {
         _action = action; _interviews = interviews; _completed = completed; _close = close;
-        var head = Spread(_title, Icon("xmark", 12, Fnt).Also(i => i.FontWeight = Medium).OnTap(close, "关闭", () => !_busy));
+        var head = new Border { Child = _title };
         head.Padding = new Thickness(28, 26, 28, 16);
         var grid = new Grid();
         grid.RowDefinitions.Add(new RowDefinition { Height = Auto });

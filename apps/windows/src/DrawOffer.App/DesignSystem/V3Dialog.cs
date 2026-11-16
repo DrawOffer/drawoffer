@@ -1,90 +1,98 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
-using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using static DrawOffer.App.DesignSystem.V3;
 
 namespace DrawOffer.App.DesignSystem;
 
 /// <summary>
-/// `.v3-dialog`，对应 Swift `V3Dialog`：正文 28/32/24 内边距，右上 28×28 关闭（距边 26），底部 88 高、顶线分隔的按钮区（左侧可放说明）。
-/// 宽度 ≤500 时按 `@container dialog (max-width: 500px)`：正文 24/20、关闭 20/16、页脚上下 16 左右 20、按钮在说明下方靠左。
+/// Windows 稿 ContentDialog：宽 440（大表单 560/680），圆角 8、1px #E4E4E0 边；正文内边距 24；
+/// 底部 CommandSpace #F4F4F1、内边距 24、按钮间距 8，按钮等宽、主按钮在右；不放右上角 ×，Esc 关闭。
+/// 左侧说明（<paramref name="left"/>）存在时按钮不再等宽，说明在左、按钮靠右。
 /// </summary>
 public static class V3Dialog
 {
     public static Border Make(UIElement content, IEnumerable<UIElement> foot, Action close, double width = 440, bool closable = true,
         IEnumerable<UIElement>? left = null, bool padded = true)
     {
-        var narrow = width <= 500;
         var leftItems = left?.ToArray() ?? [];
-        var body = new Border
+        var buttons = foot.ToArray();
+        var body = new Border { Child = content, Padding = padded ? new Thickness(24) : new Thickness(0) };
+        UIElement commands;
+        if (leftItems.Length > 0)
         {
-            Child = content,
-            Padding = padded ? new Thickness(narrow ? 20 : 32, narrow ? 24 : 28, narrow ? 20 : 32, 24) : new Thickness(0),
-        };
-        UIElement footer;
-        if (narrow)
-        {
-            footer = VStack(10, leftItems.Length > 0 ? HStack(20, leftItems) : null, HStack(10, foot.ToArray()))
-                .Pad(20, 16, 20, 16);
-            ((FrameworkElement)footer).MinHeight = 40;
+            commands = Spread(HStack(16, leftItems), HStack(8, buttons), 12);
         }
         else
         {
-            var row = Spread(HStack(20, leftItems), HStack(10, foot.ToArray()), 10);
-            row.Padding = new Thickness(32, 0, 32, 0);
-            row.MinHeight = 88;
-            footer = row;
+            var grid = new Grid { ColumnSpacing = 8 };
+            for (var i = 0; i < buttons.Length; i++)
+            {
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = Star() });
+                if (buttons[i] is FrameworkElement element) { element.HorizontalAlignment = HorizontalAlignment.Stretch; element.Width = double.NaN; Grid.SetColumn(element, i); }
+                grid.Children.Add(buttons[i]);
+            }
+            commands = grid;
         }
-        var footBorder = new Border { Child = footer, BorderBrush = Brush(Line), BorderThickness = new Thickness(0, 1, 0, 0) };
-        var stack = new Grid();
-        stack.RowDefinitions.Add(new RowDefinition { Height = Star() });
-        stack.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        stack.Children.Add(new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
-        Grid.SetRow(footBorder, 1);
-        stack.Children.Add(footBorder);
-        if (closable)
+        var commandSpace = new Border
         {
-            var x = CloseButton(close).Align(HorizontalAlignment.Right, VerticalAlignment.Top).Pad(0, narrow ? 20 : 26, narrow ? 16 : 26, 0);
-            Grid.SetRowSpan(x, 2);
-            stack.Children.Add(x);
-        }
+            Child = commands, Padding = new Thickness(24), Background = Brush(Stage),
+            BorderBrush = Brush(Line), BorderThickness = new Thickness(0, 1, 0, 0),
+            Visibility = buttons.Length == 0 && leftItems.Length == 0 ? Visibility.Collapsed : Visibility.Visible,
+        };
+        var stack = new Grid();
+        stack.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        stack.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        stack.Children.Add(Scroll(body));
+        Grid.SetRow(commandSpace, 1);
+        stack.Children.Add(commandSpace);
         return Frame(stack, width);
     }
 
-    /// <summary>不带页脚的弹窗外框：1px 边、16 圆角、白底、`--v3-shadow-dialog`。</summary>
+    /// <summary>不带 CommandSpace 的弹窗外框：1px #E4E4E0 边、圆角 8、白底、Pop 阴影。</summary>
     public static Border Frame(UIElement child, double width) => new Border
     {
-        Child = child, Width = width, CornerRadius = new CornerRadius(16), Background = Brush(V3.White),
+        Child = child, Width = width, CornerRadius = new CornerRadius(8), Background = Brush(V3.White),
         BorderBrush = Brush(Cl), BorderThickness = new Thickness(1),
     }.Elevate(32);
 
-    /// <summary>`.v3-dialog-close`：28×28、圆角 7，悬停灰底。</summary>
-    public static Border CloseButton(Action close)
+    /// <summary>一句话确认（稿：一句话确认也用 ContentDialog，440 宽）。返回是否点了主按钮。</summary>
+    public static Task<bool> ConfirmAsync(XamlRoot root, string title, string? message, string confirm, bool danger = false, string cancel = "取消")
     {
-        var button = new Border { Width = 28, Height = 28, CornerRadius = new CornerRadius(7), Child = Icon("xmark", 12, Fnt).Align(HorizontalAlignment.Center, VerticalAlignment.Center) }.Tip("关闭");
-        button.Background = Brush(Clear);
-        button.PointerEntered += (_, _) => button.Background = Brush(Field);
-        button.PointerExited += (_, _) => button.Background = Brush(Clear);
-        button.PointerReleased += (_, _) => close();
-        return button;
+        var result = new TaskCompletionSource<bool>();
+        V3Overlay.Show(root, close =>
+        {
+            var primary = new V3Button(confirm, () => { result.TrySetResult(true); close(); }, danger ? V3Button.Kind.Danger : V3Button.Kind.Dark);
+            return Make(V3DialogHead.Make(title, message), [new V3Button(cancel, close), primary], close);
+        }, dismissed: () => result.TrySetResult(false));
+        return result.Task;
+    }
+
+    /// <summary>只有一个「知道了」的提示。</summary>
+    public static Task AlertAsync(XamlRoot root, string title, string? message = null, string button = "知道了")
+    {
+        var done = new TaskCompletionSource();
+        V3Overlay.Show(root, close => Make(V3DialogHead.Make(title, message), [new V3Button(button, close, V3Button.Kind.Dark)], close),
+            dismissed: () => done.TrySetResult());
+        return done.Task;
     }
 }
 
 /// <summary>
-/// 模态层（`.v3-overlay`）：盖住整个窗口的 rgb(29 29 27 / 32%) 遮罩，弹窗居中，四周留 clamp(12, 3vw, 24) 边距；Esc 关闭。
-/// 对应 SwiftUI 的 `.sheet`。WinUI 的 ContentDialog 有固定的系统外观，所以用 Popup 自建。
+/// 模态层（ContentDialog / Smoke）：#000 30% 遮罩盖住整个窗口（含侧栏与标题栏区域，系统最小化/最大化/关闭仍在最上面），
+/// 弹窗在窗口正中，四周至少留 24；Esc 关闭。用 Popup 自建而不是系统 ContentDialog，以便放任意内容并统一外观。
 /// </summary>
 public sealed class V3Overlay
 {
     readonly Popup _popup;
     readonly Action? _dismiss;
+    static readonly List<V3Overlay> Open = [];
 
     V3Overlay(XamlRoot root, Func<Action, FrameworkElement> build, bool dismissible, Action? dismissed)
     {
         _dismiss = dismissed;
-        var scrim = new Grid { Background = Brush(Alpha(Txt, 0.32)) };
+        var scrim = new Grid { Background = Brush(Alpha(Microsoft.UI.Colors.Black, 0.3)) };
         var dialog = build(Close);
         dialog.HorizontalAlignment = HorizontalAlignment.Center;
         dialog.VerticalAlignment = VerticalAlignment.Center;
@@ -92,16 +100,14 @@ public sealed class V3Overlay
         void Fit()
         {
             var size = root.Size;
-            var gutter = Math.Clamp(size.Width * 0.03, 12, 24);
             scrim.Width = size.Width;
             scrim.Height = size.Height;
-            scrim.Padding = new Thickness(gutter);
-            dialog.MaxHeight = Math.Max(0, size.Height - gutter * 2);
-            dialog.MaxWidth = Math.Max(0, size.Width - gutter * 2);
+            scrim.Padding = new Thickness(24);
+            dialog.MaxHeight = Math.Max(0, size.Height - 48);
+            dialog.MaxWidth = Math.Max(0, size.Width - 48);
         }
         Fit();
         root.Changed += (_, _) => Fit();
-        scrim.PointerReleased += (_, e) => { if (dismissible && ReferenceEquals(e.OriginalSource, scrim)) Close(); };
         scrim.KeyDown += (_, e) => { if (dismissible && e.Key == Windows.System.VirtualKey.Escape) { e.Handled = true; Close(); } };
         _popup = new Popup { XamlRoot = root, Child = scrim, IsLightDismissEnabled = false };
     }
@@ -111,6 +117,7 @@ public sealed class V3Overlay
     {
         var overlay = new V3Overlay(root, build, dismissible, dismissed);
         overlay._popup.IsOpen = true;
+        Open.Add(overlay);
         ((FrameworkElement)overlay._popup.Child).Loaded += (_, _) => ((Control?)FindFocusable(overlay._popup.Child))?.Focus(FocusState.Programmatic);
         return overlay;
     }
@@ -121,7 +128,14 @@ public sealed class V3Overlay
     {
         if (!_popup.IsOpen) return;
         _popup.IsOpen = false;
+        Open.Remove(this);
         _dismiss?.Invoke();
+    }
+
+    /// <summary>退出登录、换账号时关掉所有弹窗。</summary>
+    public static void CloseAll()
+    {
+        foreach (var overlay in Open.ToArray()) overlay.Close();
     }
 
     static DependencyObject? FindFocusable(DependencyObject node)
@@ -133,17 +147,35 @@ public sealed class V3Overlay
     }
 }
 
-/// <summary>锚定在某个元素上的浮层（SwiftUI `.popover`）：白底 12 圆角、1px 边、阴影，点外面关闭。</summary>
+/// <summary>
+/// Windows 稿 Flyout（替代 macOS Popover）：无箭头，贴着触发控件 4px 弹出；白底、圆角 8、#E4E4E0 细边、Pop 阴影，默认内边距 16。
+/// 菜单类内容传 padding 4（MenuFlyout 观感）。
+/// </summary>
 public static class V3Popover
 {
-    public static Flyout Show(FrameworkElement anchor, UIElement content, FlyoutPlacementMode placement = FlyoutPlacementMode.Bottom, double padding = 6)
+    public static Flyout Show(FrameworkElement anchor, UIElement content, FlyoutPlacementMode placement = FlyoutPlacementMode.Bottom, double padding = 16)
     {
-        var flyout = new Flyout
-        {
-            Content = content, Placement = placement,
-            FlyoutPresenterStyle = PresenterStyle(padding),
-        };
+        var flyout = Make(content, placement, padding);
         flyout.ShowAt(anchor);
+        return flyout;
+    }
+
+    public static Flyout Make(UIElement content, FlyoutPlacementMode placement = FlyoutPlacementMode.Bottom, double padding = 16) => new()
+    {
+        Content = content, Placement = placement, FlyoutPresenterStyle = PresenterStyle(padding), AreOpenCloseAnimationsEnabled = true,
+    };
+
+    /// <summary>菜单浮层（MenuFlyout 观感）：传入若干 <see cref="V3MenuRow"/>，点任一行后自动关闭。</summary>
+    public static Flyout Menu(FrameworkElement anchor, double width, params UIElement[] rows)
+    {
+        var stack = new StackPanel { Width = width };
+        Flyout? flyout = null;
+        foreach (var row in rows)
+        {
+            if (row is V3MenuRow menuRow) menuRow.PointerReleased += (_, _) => flyout?.Hide();
+            stack.Children.Add(row);
+        }
+        flyout = Show(anchor, stack, FlyoutPlacementMode.BottomEdgeAlignedLeft, 4);
         return flyout;
     }
 
@@ -154,10 +186,11 @@ public static class V3Popover
         style.Setters.Add(new Setter(Control.BackgroundProperty, Brush(V3.White)));
         style.Setters.Add(new Setter(Control.BorderBrushProperty, Brush(Cl)));
         style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
-        style.Setters.Add(new Setter(Control.CornerRadiusProperty, new CornerRadius(12)));
+        style.Setters.Add(new Setter(Control.CornerRadiusProperty, new CornerRadius(8)));
         style.Setters.Add(new Setter(FrameworkElement.MinWidthProperty, 0d));
         style.Setters.Add(new Setter(FrameworkElement.MinHeightProperty, 0d));
-        style.Setters.Add(new Setter(FrameworkElement.MaxWidthProperty, 640d));
+        style.Setters.Add(new Setter(FrameworkElement.MaxWidthProperty, 720d));
+        style.Setters.Add(new Setter(ScrollViewer.VerticalScrollBarVisibilityProperty, ScrollBarVisibility.Auto));
         return style;
     }
 }

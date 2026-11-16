@@ -14,28 +14,26 @@ using static DrawOffer.App.DesignSystem.V3;
 namespace DrawOffer.App.Views.Resumes;
 
 /// <summary>
-/// 「我的简历」，对应 Mac `ResumesView.swift`：按 Web `features/home/HomePage.tsx` 的 02.1 列表结构，读取本人简历、预览纸面、导出 PDF，
-/// 并提供编辑、导入、重命名、复制、分享与删除。新建经新建弹窗；编辑进入原生编辑器（正文、格式、版式与模板）。
+/// 「我的简历」（Windows 稿 02.1，对应 Mac `ResumesView.swift`）：读取本人简历、预览纸面、导出 PDF，
+/// 并提供编辑、导入、重命名、复制、分享与删除。新建经新建弹窗；编辑进入原生编辑器。游客不会进入本页（外壳只给游客首页）。
 /// </summary>
 public sealed class ResumesView : UserControl
 {
+    /// <summary>稿中眉题、数量与时间的浅灰字 #96968F。</summary>
+    static readonly Windows.UI.Color Hint = Hex(0x96968F);
+
     readonly Action _browse;
-    readonly Action _login;
     readonly string _account;
     readonly StackPanel _root = new();
     readonly V3SearchField _search;
     List<ResumeSummary> _resumes = [];
     string? _defaultId;
     bool _loaded, _loading, _loadError, _active, _deleteBusy;
-    /// <summary>Mac 的 `importing` 只由直接上传（`importFile`，界面未接入）置位；导入都走导入弹窗，这里保持 false。</summary>
-    readonly bool _importing = false;
     string _query = "";
     string? _exportingId;
     (string text, bool failed)? _notice;
     List<JsonNode> _imports = [];
     CancellationTokenSource? _poll;
-    /// <summary>刚创建的简历：列表加载后自动打开预览（Mac `focusResumeID`）。</summary>
-    string? _focusResumeId;
 
     bool AtLimit => _loaded && _resumes.Count >= ResumeRequest.MaximumPerUser;
 
@@ -48,18 +46,18 @@ public sealed class ResumesView : UserControl
         }
     }
 
-    public ResumesView(string account, Action browse, Action login)
+    public ResumesView(string account, Action browse)
     {
         _account = account;
         _browse = browse;
-        _login = login;
+        // 02.1 工具行搜索：220×30、圆角 7、#F4F4F2 底、12 号字
         _search = new V3SearchField("搜索简历…", width: 220, height: 30);
         _search.Box.FontSize = 12;
         _search.Box.CornerRadius = new CornerRadius(7);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(_search.Box, "搜索简历");
         _search.Changed += text => { _query = text; RenderList(); };
-        // `.hv3-page`：顶部 51（内容卡自带 1px 描边，合起来是画板的 52）
-        Content = new V3Page(_root, top: 51);
+        // Figma 02.1：内容区距顶 64（眉题）
+        Content = new V3Page(_root, top: 64);
         Render();
         Loaded += async (_, _) =>
         {
@@ -77,18 +75,13 @@ public sealed class ResumesView : UserControl
     void Render()
     {
         _root.Children.Clear();
-        var signedIn = _account.Length > 0;
-        var actions = new List<UIElement>();
-        // Web 空列表时不显示头部按钮（空态里有同样的两个入口）
-        if (signedIn && !(_loaded && _resumes.Count == 0 && _imports.Count == 0))
-        {
-            actions.Add(new V3Button(_importing ? "正在上传…" : "导入简历", OpenImport, icon: "square.and.arrow.up") { Enabled = !_importing });
-            actions.Add(new V3Button("新建简历", CheckCapacityThenBrowse, V3Button.Kind.Dark, icon: "plus"));
-        }
-        _root.Children.Add(V3PageHead.Make(["RESUMES", !signedIn ? "游客预览" : _loaded ? $"{_resumes.Count} 份" : "个人工作区"],
-            "我的简历", "每份简历独立编辑，需要时复制一份按岗位修改。", compact: true, actions: actions.ToArray()));
-        if (!signedIn) _root.Children.Add(GuestEmpty());
-        else if (_loadError && !_loaded) _root.Children.Add(LoadFailure());
+        // 页头按钮：胶囊。「导入简历」31 高白底细边，「新建简历」32 高墨黑；12/500 字、图标 9
+        var import = new V3Button("导入简历", OpenImport, height: 31, icon: "square.and.arrow.up") { Enabled = !AtLimit };
+        var create = new V3Button("新建简历", CheckCapacityThenBrowse, V3Button.Kind.Dark, height: 32, icon: "plus");
+        _root.Children.Add(Head(_loaded ? $"{_resumes.Count} 份" : "个人工作区",
+            AtLimit ? $"已达到 {ResumeRequest.MaximumPerUser} 份上限。删除不用的简历后，才能新建、导入或复制。" : "每份简历独立编辑，需要时复制一份按岗位修改。",
+            AtLimit, import, create));
+        if (_loadError && !_loaded) _root.Children.Add(LoadFailure());
         else if (!_loaded) _root.Children.Add(Skeleton());
         else if (_resumes.Count == 0 && _imports.Count == 0) _root.Children.Add(EmptyList());
         else { _root.Children.Add(_listHost); RenderList(); }
@@ -99,38 +92,55 @@ public sealed class ResumesView : UserControl
         }
     }
 
+    /// <summary>02.1 页头：眉题 11 灰「RESUMES · N 份」，标题 28 衬线，说明 13（到上限时橙色）；按钮距顶 32。</summary>
+    static FrameworkElement Head(string count, string subtitle, bool warn, params UIElement[] actions)
+    {
+        var text = VStack(0,
+            Sans($"RESUMES · {count}", 11, Hint).Frame(height: 13),
+            Serif("我的简历", 28, Txt).Frame(height: 40).Top(13),
+            Sans(subtitle, 13, warn ? V3.Orange : Sub).Frame(height: 16).Top(2));
+        var buttons = HStack(10, actions);
+        buttons.VerticalAlignment = VerticalAlignment.Top;
+        return Spread(text, buttons.Top(32), 24);
+    }
+
     void RenderList()
     {
         _listHost.Children.Clear();
-        // `.hv3-toolbar`：距头部 26、高 30；标题 16px 半粗，数字 11px；搜索 220×30、圆角 7、输入 12px
-        var heading = new TextBlock { FontSize = 16 };
-        heading.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = "全部简历 ", FontWeight = Semibold, Foreground = Brush(Txt) });
-        heading.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = $"{_resumes.Count}", FontSize = 11, FontWeight = Medium, Foreground = Brush(Fnt) });
+        // 02.1 工具行：距头部 32、高 30；「全部简历」13/500，数字 11 灰
+        var heading = new TextBlock { FontSize = 13, VerticalAlignment = VerticalAlignment.Center };
+        heading.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = "全部简历  ", FontWeight = Medium, Foreground = Brush(Txt) });
+        heading.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = $"{_resumes.Count}", FontSize = 11, FontWeight = Medium, Foreground = Brush(Hint) });
         if (_search.Parent is Panel old) old.Children.Remove(_search);
-        _listHost.Children.Add(Spread(heading, _search).Frame(height: 30).Top(26));
+        _listHost.Children.Add(Spread(heading, _search).Frame(height: 30).Top(32));
         _listHost.Children.Add(Divider().Top(2));
         var visible = Visible.ToList();
         if (visible.Count == 0)
         {
-            // Web `.hv3-empty.is-search`
-            _listHost.Children.Add(VStack(8,
-                Serif($"没有找到「{_query.Trim()}」", 18).Align(HorizontalAlignment.Center),
-                Sans("试试更短的关键词，比如公司名或岗位名；也可以回到「全部」查看所有简历。", 13, Sub).Align(HorizontalAlignment.Center),
-                new V3Button("清除搜索", () => _search.Box.Text = "", icon: "magnifyingglass").Align(HorizontalAlignment.Center).Top(8))
-                .Also(s => { s.MinHeight = 200; s.VerticalAlignment = VerticalAlignment.Center; }).Top(60));
+            // 02.1 ③ 搜索没有结果：三张小纸 + 放大镜，标题 17/500，说明 13，「清除搜索」胶囊
+            _listHost.Children.Add(VStack(0,
+                SearchArt().Align(HorizontalAlignment.Center),
+                Sans($"没有找到「{_query.Trim()}」", 17, Txt, Medium).Align(HorizontalAlignment.Center).Top(42),
+                Sans("试试更短的关键词，比如公司名或岗位名；也可以回到「全部」查看所有简历。", 13, Sub).Align(HorizontalAlignment.Center).Top(13),
+                new V3Button("清除搜索", () => _search.Box.Text = "", height: 31, icon: "magnifyingglass").Align(HorizontalAlignment.Center).Top(27))
+                .Top(160));
             return;
         }
-        var grid = new AdaptiveGrid(199, 20, 37) { Margin = new Thickness(0, 27, 0, 0) };
+        var grid = new AdaptiveGrid(199, 20, 37) { Margin = new Thickness(0, 18, 0, 0) };
         if (_query.Length == 0) foreach (var task in _imports) grid.Children.Add(ImportCard(task));
         var defaultId = ResumeRequest.DefaultResume(_resumes, _defaultId)?.Id;
         foreach (var resume in visible) grid.Children.Add(Card(resume, resume.Id == defaultId));
         if (_query.Length == 0)
         {
+            // 02.1 ② 达到上限时这一格变成「已达 N 份上限」，不能点
+            var atLimit = AtLimit;
             var dash = new Rectangle { RadiusX = 6, RadiusY = 6, Stroke = Brush(0xC9C9C3), StrokeThickness = 1, StrokeDashArray = [4, 4] };
-            var label = VStack(10, Icon("plus", 20, Fnt).Align(HorizontalAlignment.Center), Sans("新建空白简历", 12, Fnt))
+            var label = VStack(12, Icon("plus", 14, Hint).Align(HorizontalAlignment.Center),
+                    Sans(atLimit ? $"已达 {ResumeRequest.MaximumPerUser} 份上限" : "新建空白简历", 12, Hint))
                 .Align(HorizontalAlignment.Center, VerticalAlignment.Center);
+            label.Opacity = atLimit ? 0.7 : 1;
             var blank = new A4Box(Layer(new Border { Background = Brush(V3.White), CornerRadius = new CornerRadius(6) }, dash, label));
-            grid.Children.Add(blank.OnTap(CheckCapacityThenBrowse, "新建空白简历"));
+            grid.Children.Add(blank.OnTap(CheckCapacityThenBrowse, atLimit ? "已达简历上限" : "新建空白简历", () => !AtLimit));
         }
         _listHost.Children.Add(grid);
     }
@@ -161,42 +171,72 @@ public sealed class ResumesView : UserControl
         return VStack(0, Divider().Top(58), card.Top(55).Align(HorizontalAlignment.Center));
     }
 
-    /// <summary>`.hv3-empty.is-list`：分隔线距头部 24，下方 53 处 520 宽的卡片，236 高点阵舞台，120×36 的深色「新建简历 →」与文字链「导入简历」。</summary>
-    FrameworkElement EmptyList()
+    /// <summary>
+    /// 02.1 空列表：分隔线下居中一张小纸（两侧「教育经历」「项目经历」小模块），标题 17/500「还没有简历」，两行 13 号说明；
+    /// 入口就是右上角两个按钮，不在空态里重复。
+    /// </summary>
+    static FrameworkElement EmptyList()
     {
-        var create = new V3Button("新建简历", CheckCapacityThenBrowse, V3Button.Kind.Dark, height: 36, width: 120);
-        create.Also(b => ((StackPanel)((Border)b.Content).Child).Children.Add(Icon("arrow.right", 10, V3.White)));
-        var import = HStack(5, Icon("square.and.arrow.up", 11, Sub), Sans("导入简历", 14, Sub, Medium)).OnTap(OpenImport, "导入简历", () => !_importing);
-        var card = V3EmptyCard.Make("从第一份简历开始", "新建时选一套模板、起个名字；已有简历文件可以用「导入简历」。",
-            EmptyResumeArt.Make().Frame(504, 236), [create, import], stageHeight: 236, inset: 8, messageTop: 8, actionsTop: 32);
-        return VStack(0, Divider().Top(24), card.Top(53).Align(HorizontalAlignment.Center));
+        var message = Sans("用右上角「新建简历」选一套模板开始，每份简历都能复制一份按岗位修改。\n已有简历文件，可以用「导入简历」直接读进来。", 13, Sub)
+            .LineHeight(23).Also(t => t.TextAlignment = TextAlignment.Center);
+        return VStack(0, Divider().Top(24),
+            VStack(0,
+                BlankArt().Align(HorizontalAlignment.Center),
+                Sans("还没有简历", 17, Txt, Medium).Align(HorizontalAlignment.Center).Top(36),
+                message.Align(HorizontalAlignment.Center).Top(13)).Top(222));
     }
 
-    /// <summary>游客空状态：沿用 Web 新用户引导，不代表已查询到账号没有简历。</summary>
-    FrameworkElement GuestEmpty()
+    /// <summary>02.1 空列表插图：64×88 白纸（标题条 + 三个虚线模块位），左「教育经历」、右「项目经历」两个小模块签。</summary>
+    static FrameworkElement BlankArt()
     {
-        var import = HStack(6, Icon("square.and.arrow.up", 13, Txt), Label("导入简历", 13)).OnTap(_login, "导入简历");
-        var body = VStack(12,
-            EmptyResumeArt.Make().Frame(504, 236).Align(HorizontalAlignment.Center),
-            Serif("从第一份简历开始", 18).Align(HorizontalAlignment.Center),
-            Sans("新建时选一套模板、起个名字；已有简历文件可以用「导入简历」。", 13, Sub).Align(HorizontalAlignment.Center),
-            HStack(20, WebAction("新建简历 →", _browse), import).Align(HorizontalAlignment.Center).Top(8),
-            Sans("内置示例可离线预览；登录后可查看和导出你的简历。", 12, Fnt).Align(HorizontalAlignment.Center).Top(8));
-        return VStack(0, Divider(Hex(0xE4E4E0)).Top(24), body.Top(42));
-    }
-
-    /// <summary>Mac `WebActionStyle`：13px 中粗白字，左右 16、上下 10，#17191C 底、圆角 8，按下 80% 不透明。</summary>
-    internal static FrameworkElement WebAction(string title, Action action, Func<bool>? enabled = null)
-    {
-        var button = new Border
+        var blocks = VStack(0,
+            Fill(Txt, 1, 26, 4).Align(HorizontalAlignment.Left).Top(10),
+            Fill(Hex(0xD9D9D4), 1, 38, 2).Align(HorizontalAlignment.Left).Top(4));
+        for (var i = 0; i < 3; i++)
+            blocks.Children.Add(new Rectangle { Width = 47, Height = 12, RadiusX = 2.5, RadiusY = 2.5, Stroke = Brush(0xD6D6D1), StrokeThickness = 1, StrokeDashArray = [3, 2], HorizontalAlignment = HorizontalAlignment.Left }.Top(6));
+        var paper = new Border
         {
-            Child = Label(title, 13, V3.White, Medium), Padding = new Thickness(16, 10, 16, 10), CornerRadius = new CornerRadius(8), Background = Brush(0x17191C),
+            Width = 64, Height = 88, Padding = new Thickness(8, 0, 0, 0), Background = Brush(V3.White), CornerRadius = new CornerRadius(4),
+            BorderBrush = Brush(Cl), BorderThickness = new Thickness(1), Child = blocks,
         };
-        button.PointerPressed += (_, _) => button.Opacity = 0.8;
-        button.PointerReleased += (_, _) => button.Opacity = 1;
-        button.PointerExited += (_, _) => button.Opacity = 1;
-        button.Loaded += (_, _) => { if (enabled is not null && !enabled()) button.Opacity = 0.5; };
-        return button.OnTap(action, title, enabled);
+        var canvas = new Canvas { Width = 200, Height = 88, IsHitTestVisible = false };
+        canvas.Children.Add(paper.At(70, 0));
+        canvas.Children.Add(Tag("教育经历").At(0, 18));
+        canvas.Children.Add(Tag("项目经历").At(140, 48));
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAccessibilityView(canvas, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
+        return canvas;
+
+        static Border Tag(string text) => new()
+        {
+            Width = 60, Height = 24, CornerRadius = new CornerRadius(6), Background = Brush(V3.White), BorderBrush = Brush(Cl), BorderThickness = new Thickness(1),
+            Child = Sans(text, 10.5, Sub, Medium).Align(HorizontalAlignment.Center, VerticalAlignment.Center),
+        };
+    }
+
+    /// <summary>02.1 ③ 搜索没有结果插图：两侧两张小纸、中间一张稍大的纸，右下压一个放大镜。</summary>
+    static FrameworkElement SearchArt()
+    {
+        var canvas = new Canvas { Width = 81, Height = 47, IsHitTestVisible = false };
+        canvas.Children.Add(Paper(32, 43).At(0, 3));
+        canvas.Children.Add(Paper(32, 43).At(49, 3));
+        canvas.Children.Add(Paper(35, 47).At(23, 0));
+        canvas.Children.Add(new Border
+        {
+            Width = 17, Height = 17, CornerRadius = new CornerRadius(8.5), Background = Brush(V3.White),
+            Child = Icon("magnifyingglass", 13, Sub).Align(HorizontalAlignment.Center, VerticalAlignment.Center),
+        }.At(48, 25));
+        return canvas;
+
+        static Border Paper(double width, double height)
+        {
+            var lines = VStack(3, Fill(Txt, 0.5, width * 0.4, 2).Align(HorizontalAlignment.Left));
+            for (var i = 0; i < 3; i++) lines.Children.Add(Fill(V3.Line, 0.5, width * 0.6, 1.5).Align(HorizontalAlignment.Left));
+            return new Border
+            {
+                Width = width, Height = height, Padding = new Thickness(5), CornerRadius = new CornerRadius(1.6), Background = Brush(V3.White),
+                BorderBrush = Brush(Cl), BorderThickness = new Thickness(1), Child = lines,
+            };
+        }
     }
 
     // MARK: 卡片
@@ -242,29 +282,51 @@ public sealed class ResumesView : UserControl
         }
         // 与 Web 同一组菜单：点卡片本身就能打开编辑，这里放「设为默认简历」（已是默认时不显示）
         if (!isDefault) Add("设为默认简历", "pin", () => _ = SetDefaultAsync(resume));
-        Add("重命名", "character.cursor.ibeam", () => ResumeTitleSheet.Show(XamlRoot, ResumeTitleSheet.Mode.Rename, resume, title => { _notice = ($"已将简历重命名为「{title}」", false); _ = LoadAsync(); }));
-        Add("复制为新简历", "doc.on.doc", () => CheckCapacity(() => ResumeTitleSheet.Show(XamlRoot, ResumeTitleSheet.Mode.Copy, resume, title => { _notice = ($"已复制为「{title}」", false); _ = LoadAsync(); })));
+        Add("重命名", "character.cursor.ibeam", () => ResumeTitleSheet.Show(XamlRoot, ResumeTitleSheet.Mode.Rename, resume,
+            title => { _notice = ($"已将简历重命名为「{title}」", false); _ = LoadAsync(); },
+            copy: () => CheckCapacity(() => Copy(resume))));
+        Add("复制为新简历", "doc.on.doc", () => CheckCapacity(() => Copy(resume)));
         Add("分享链接", "link", () => ResumeShareSheet.Show(XamlRoot, resume));
         Add(exporting ? "正在导出…" : "导出 PDF", "arrow.down.doc", () => _ = ExportAsync(resume), !exporting);
         menu.Items.Add(new MenuFlyoutSeparator());
-        Add("删除", "trash", () => _ = ConfirmDeleteAsync(resume), danger: true);
+        Add("删除", "trash", () => ResumeDeleteSheet.Show(XamlRoot, resume, DeleteAsync), danger: true);
         return menu;
     }
 
+    void Copy(ResumeSummary resume) => ResumeTitleSheet.Show(XamlRoot, ResumeTitleSheet.Mode.Copy, resume, title => { _notice = ($"已复制为「{title}」", false); _ = LoadAsync(); });
+
+    /// <summary>
+    /// 02.1c 导入任务卡：#F4F4F2 圆角底里一张白纸，中间一个白色状态签（解析中带转圈）；失败时淡红底、红边、红字，右下「移除记录」。
+    /// </summary>
     FrameworkElement ImportCard(JsonNode task)
     {
         var failed = task.Text("upload_status") == "failed" || task.Text("parse_status") == "failed";
-        var stage = task.Text("upload_status") == "uploading" ? "正在上传" : "正在解析";
-        var state = VStack(10,
-            failed ? Icon("exclamationmark.triangle", 24, Red).Align(HorizontalAlignment.Center) : new ProgressRing { Width = 16, Height = 16, IsActive = true },
-            Sans(failed ? (task.Text("upload_status") == "failed" ? "上传失败" : "解析失败") : stage + "…", 12, failed ? Red : Sub).Align(HorizontalAlignment.Center))
-            .Align(HorizontalAlignment.Center, VerticalAlignment.Center);
-        var foot = failed
-            ? Spread(Sans("可以删除记录后重新导入", 11, Red), Sans("删除记录", 11, Link).OnTap(() => _ = DeleteImportAsync(task), "删除记录"), 8)
-            : (FrameworkElement)Sans($"{stage} · 请稍候", 11, Fnt);
-        return VStack(10,
-            new A4Box(new Border { Background = Brush(failed ? RedSoft : V3.Stage), CornerRadius = new CornerRadius(6), Child = state }),
-            Sans(task.Text("source_filename"), 13, Txt, Medium),
+        var uploading = task.Text("upload_status") == "uploading";
+        var stage = uploading ? "正在上传" : "正在解析";
+        var label = failed ? (task.Text("upload_status") == "failed" ? "上传失败" : "解析失败") : uploading ? "上传中" : "解析中";
+        var failLine = Hex(0xF3D6D6);
+        var chipBody = HStack(6);
+        if (!failed) chipBody.Children.Add(new ProgressRing { Width = 12, Height = 12, IsActive = true });
+        chipBody.Children.Add(Sans(label, 11.5, failed ? Red : Txt, Medium).Align(v: VerticalAlignment.Center));
+        var chip = new Border
+        {
+            Child = chipBody, Padding = new Thickness(14, 0, 14, 0), Height = failed ? 28 : 32, CornerRadius = new CornerRadius(8),
+            Background = Brush(V3.White), BorderBrush = Brush(failed ? failLine : Cl), BorderThickness = new Thickness(1),
+        }.Align(HorizontalAlignment.Center, VerticalAlignment.Center);
+        var paper = new Border
+        {
+            Margin = new Thickness(23, 19, 23, 19), CornerRadius = new CornerRadius(3.5), Background = Brush(V3.White), BorderBrush = Brush(Cl), BorderThickness = new Thickness(1),
+        };
+        var stageBox = new A4Box(new Border
+        {
+            CornerRadius = new CornerRadius(10), Background = Brush(failed ? Hex(0xFDF5F5) : Field),
+            BorderBrush = Brush(failed ? failLine : Clear), BorderThickness = new Thickness(1), Child = Layer(paper, chip),
+        });
+        UIElement foot = Sans(failed ? $"{label} · 可以移除后重新导入" : $"{stage} · 请稍候", 11, failed ? Red : Hint);
+        if (failed) foot = Spread(foot, new V3Button("移除记录", () => _ = DeleteImportAsync(task), height: 25, small: true), 4);
+        return VStack(6,
+            stageBox,
+            Sans(task.Text("source_filename"), 13, Txt, Medium).Frame(height: 16).Top(4),
             foot);
     }
 
@@ -282,11 +344,6 @@ public sealed class ResumesView : UserControl
             _defaultId = page["default_resume_id"].String();
             _loaded = true;
             await LoadImportsAsync();
-            if (_focusResumeId is { } focus)
-            {
-                _focusResumeId = null;
-                if (_resumes.FirstOrDefault(r => r.Id == focus) is { } created) { _notice = ($"已创建「{created.Title}」", false); ResumePreviewSheet.Show(XamlRoot, created, this); }
-            }
         }
         catch (OperationCanceledException) { }
         catch (Exception error)
@@ -369,24 +426,6 @@ public sealed class ResumesView : UserControl
         finally { _exportingId = null; if (_active) Render(); }
     }
 
-    async Task ConfirmDeleteAsync(ResumeSummary resume)
-    {
-        var dialog = new ContentDialog
-        {
-            XamlRoot = XamlRoot, Title = "删除这份简历？", CloseButtonText = "取消", PrimaryButtonText = "删除",
-            Content = $"「{resume.Title}」删除后无法恢复：公开分享链接会立即失效，关联的求职记录会解除关联，其他简历不受影响。",
-        };
-        dialog.PrimaryButtonClick += async (_, args) =>
-        {
-            var deferral = args.GetDeferral();
-            dialog.PrimaryButtonText = "正在删除…";
-            dialog.IsPrimaryButtonEnabled = false;
-            await DeleteAsync(resume);
-            deferral.Complete();
-        };
-        await dialog.ShowAsync();
-    }
-
     async Task DeleteAsync(ResumeSummary resume)
     {
         if (_deleteBusy) return;
@@ -455,9 +494,6 @@ public sealed class ResumesView : UserControl
         var cleaned = new string(title.Select(c => "/:\\\0".Contains(c) ? '-' : c).ToArray()).Trim();
         return (cleaned.Length == 0 ? "resume" : cleaned) + ".pdf";
     }
-
-    /// <summary>新建成功后由外壳调用：列表加载完自动打开预览（Mac `focusResumeID`）。</summary>
-    public void Focus(string id) => _focusResumeId = id;
 }
 
 /// <summary>A4 比例（210 : 297）的框，宽度随列宽。</summary>
@@ -548,124 +584,4 @@ static class ClipExtensions
 {
     /// <summary>圆角裁切（SwiftUI `.clipShape(RoundedRectangle)`）：Border 的 CornerRadius 会裁掉子元素，这里只需确保背景透明。</summary>
     public static void Clip(this Border border, double radius) => border.CornerRadius = new CornerRadius(radius);
-}
-
-/// <summary>只读预览，对应 Mac `ResumePreviewSheet`（960×720）：连续纸面 + 导出 PDF。私有图片经桌面会话下载后注入，失败时保留正文并提示。</summary>
-static class ResumePreviewSheet
-{
-    public static void Show(XamlRoot root, ResumeSummary resume, ResumesView owner)
-    {
-        V3Overlay.Show(root, close =>
-        {
-            var exporting = false;
-            V3Button export = null!;
-            export = new V3Button("导出 PDF", async () =>
-            {
-                if (exporting) return;
-                exporting = true; export.Title = "正在导出…"; export.Enabled = false;
-                await owner.ExportAsync(resume);
-                exporting = false; export.Title = "导出 PDF"; export.Enabled = true;
-            }, V3Button.Kind.Dark);
-            var head = Spread(
-                VStack(4, Label(resume.Title, 15, Txt, Semibold), Sans($"{resume.UpdatedLabel()} · 已保存", 12, Fnt)),
-                HStack(12,
-                    new V3Button("编辑", () => { close(); owner.Edit(resume.Id); }),
-                    new V3Button("分享", () => { close(); ResumeShareSheet.Show(root, resume); }),
-                    export,
-                    Label("关闭", 13).OnTap(close, "关闭")), 12);
-            head.Padding = new Thickness(20);
-            var hint = Sans("点“编辑”在原生编辑器修改内容、格式、版式与模板。最终排版以 PDF 为准，字体、换行与分页可能不同。", 12, Fnt).Wrap().Pad(20, 0, 20, 12);
-            var missing = Sans("部分图片不可用，正文仍可预览", 12, V3.Orange).Pad(0, 0, 0, 8).Align(HorizontalAlignment.Center);
-            missing.Visibility = Visibility.Collapsed;
-            var error = Sans("", 12.5, Red).Pad(0, 0, 0, 8).Align(HorizontalAlignment.Center);
-            error.Visibility = Visibility.Collapsed;
-            var paperHost = new Grid { Padding = new Thickness(24) };
-            var loading = VStack(8, new ProgressRing { Width = 20, Height = 20, IsActive = true }, Sans("加载预览…", 13, Sub)).Align(HorizontalAlignment.Center).Pad(40, 40, 40, 40);
-            paperHost.Children.Add(loading);
-            var scroller = new ScrollViewer
-            {
-                Content = paperHost, Background = Brush(V3.Stage),
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollMode = ScrollMode.Auto,
-            };
-            void Fail(string text) { error.Text = text; error.Visibility = Visibility.Visible; paperHost.Children.Remove(loading); }
-            scroller.Loaded += async (_, _) =>
-            {
-                if (resume.ToRenderRequest() is not { } request) { Fail("这份简历暂时没有可用的预览，请打开编辑器保存一次后重试。"); return; }
-                try
-                {
-                    var result = await App.Session.Api.PreparePaperAsync(request);
-                    var paper = new ResumePaperView { Width = 794, Height = 1123 };
-                    paper.Rendered += (_, height) => paper.Height = Math.Max(1123, height);
-                    paper.RenderFailed += (_, message) => Fail(message);
-                    paper.Render(result.Request);
-                    paperHost.Children.Clear();
-                    paperHost.Children.Add(paper);
-                    if (result.MissingImageCount > 0) missing.Visibility = Visibility.Visible;
-                }
-                catch (OperationCanceledException) { }
-                catch (Exception failure)
-                {
-                    if (SheetErrors.Unauthorized(failure)) { Fail("登录已失效，请重新登录。"); return; }
-                    Fail("预览加载失败，请重试。");
-                }
-            };
-            var grid = new Grid();
-            for (var i = 0; i < 4; i++) grid.RowDefinitions.Add(new RowDefinition { Height = Auto });
-            grid.RowDefinitions.Add(new RowDefinition { Height = Star() });
-            grid.Children.Add(head);
-            Grid.SetRow(hint, 1); grid.Children.Add(hint);
-            Grid.SetRow(missing, 2); grid.Children.Add(missing);
-            Grid.SetRow(error, 3); grid.Children.Add(error);
-            Grid.SetRow(scroller, 4); grid.Children.Add(scroller);
-            var frame = V3Dialog.Frame(grid, 960);
-            frame.Height = 720;
-            return frame;
-        });
-    }
-}
-
-/// <summary>Mac `EmptyResumeArt`（Shell/WorkspaceView.swift）：504×236，12 点距灰点阵、居中一张带虚线模块的空白简历纸与三张倾斜的模块标签。</summary>
-public static class EmptyResumeArt
-{
-    public static FrameworkElement Make()
-    {
-        var canvas = new Canvas { Width = 504, Height = 236, IsHitTestVisible = false };
-        var dot = Brush(Alpha(Microsoft.UI.Colors.Gray, 0.15));
-        for (var x = 0.0; x <= 504; x += 12)
-            for (var y = 0.0; y <= 236; y += 12)
-            {
-                var e = new Ellipse { Width = 1, Height = 1, Fill = dot };
-                Canvas.SetLeft(e, x); Canvas.SetTop(e, y);
-                canvas.Children.Add(e);
-            }
-        var blocks = VStack(14,
-            Fill(Hex(0x17191C), 2, 48, 7).Align(HorizontalAlignment.Left),
-            Fill(Hex(0xDCDCD8), 0, 72, 3).Align(HorizontalAlignment.Left));
-        for (var i = 0; i < 3; i++)
-            blocks.Children.Add(new Rectangle { Height = 28, RadiusX = 4, RadiusY = 4, Stroke = Brush(0xE9E9E5), StrokeThickness = 1, StrokeDashArray = [3, 3] });
-        var paper = new Border
-        {
-            Width = 132, Height = 176, Padding = new Thickness(16), Background = Brush(V3.White), CornerRadius = new CornerRadius(5),
-            BorderBrush = Brush(0xE4E4E0), BorderThickness = new Thickness(1), Child = blocks,
-        }.Elevate(4);
-        Canvas.SetLeft(paper, 186); Canvas.SetTop(paper, 30);
-        canvas.Children.Add(paper);
-        canvas.Children.Add(Chip("教育经历", 90, 68, -4));
-        canvas.Children.Add(Chip("项目经历", 336, 110, 3));
-        canvas.Children.Add(Chip("专业技能", 104, 158, 2));
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAccessibilityView(canvas, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
-        return canvas;
-    }
-
-    static FrameworkElement Chip(string title, double x, double y, double angle)
-    {
-        var chip = new Border
-        {
-            Padding = new Thickness(10), Background = Brush(V3.White), BorderBrush = Brush(0xE4E4E0), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(5),
-            Child = HStack(6, Icon("square.grid.2x2", 11), Label(title, 11)),
-            RenderTransformOrigin = new Windows.Foundation.Point(0.5, 0.5), RenderTransform = new RotateTransform { Angle = angle },
-        };
-        Canvas.SetLeft(chip, x); Canvas.SetTop(chip, y);
-        return chip;
-    }
 }

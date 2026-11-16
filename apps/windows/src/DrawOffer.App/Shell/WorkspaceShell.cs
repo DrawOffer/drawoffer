@@ -9,12 +9,15 @@ using static DrawOffer.App.DesignSystem.V3;
 namespace DrawOffer.App.Shell;
 
 /// <summary>
-/// 工作区外壳，对应 Mac `Shell/WorkspaceView.swift`：#F1F1EF 底，左侧 216 宽侧栏，间隔 13，右侧白色内容卡
-/// （圆角 16、1px #E4E4E0 边，上下右各留 12）。编辑器等铺满页面用 <see cref="Bare"/> 隐藏侧栏。
+/// 工作区外壳（Windows 稿 00 页「窗口模板」6:959）：单层窗口——左侧 248 宽侧栏贴边到顶，中间 1px #ECECEA 分隔线，
+/// 右侧白色内容区铺满，不再嵌圆角卡片。内容区顶部 48 是标题栏拖动区（右上角系统最小化/最大化/关闭）。
+/// 编辑器、模拟面试场次用 <see cref="Bare"/> 隐藏侧栏，页面自己画 TitleBar / CommandBar 并用 <see cref="SetDragRegion"/> 指定拖动区。
+/// 游客（未登录）只能看首页，点其他入口留在原处并打开整窗登录页（稿 01 页 02）。
 /// </summary>
 public sealed class WorkspaceShell : Grid
 {
     public static WorkspaceShell Current { get; private set; } = null!;
+    public const double TitleBarHeight = 48;
 
     public AgentSessions Sessions { get; } = new();
     public AnnouncementCenter Announcements { get; } = new();
@@ -22,53 +25,77 @@ public sealed class WorkspaceShell : Grid
     public string? ActiveChatId { get; private set; }
 
     readonly Sidebar _sidebar;
-    readonly Border _card = new() { Background = Brush(V3.White), BorderBrush = Brush(Cl), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(16) };
+    readonly Border _divider = new() { Width = 1, Background = Brush(Line) };
+    readonly Grid _main = new() { Background = Brush(V3.White) };
+    readonly Border _strip = new() { Height = TitleBarHeight, Background = Brush(Clear), VerticalAlignment = VerticalAlignment.Top };
     readonly StackPanel _banner = new();
     readonly ContentControl _content = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
-    V3Overlay? _login;
-    string _homeDraft = "";
+    SignInView? _login;
     string? _accountId;
-    /// <summary>当前对话（Mac `ChatTarget`）：sessionID 为空表示新对话，initial 是首页带过来的第一条消息；token 变化时重建对话页。</summary>
-    (string? sessionId, string? initial, string? model, Guid token)? _chat;
-    /// <summary>首页“带着它去练”带过去的练习重点（Mac `mockFocus`）；模拟面试页移植后读取。</summary>
+    /// <summary>当前对话：sessionId 为空表示新对话，initial 是首页带过来的第一条消息；token 变化时重建对话页。</summary>
+    (string? sessionId, string? initial, string? model, string? draft, Guid token)? _chat;
+    /// <summary>首页“带着它去练”带过去的练习重点（模拟面试首页读取后清空）。</summary>
     public object? MockFocus { get; set; }
-    /// <summary>要直接打开编辑器的简历（Mac `editResumeID`）；简历页移植后读取。</summary>
+    /// <summary>首页点开某一场模拟面试（面试纸 / 报告纸）。</summary>
+    public string? MockSession { get; set; }
+    /// <summary>要直接打开编辑器的简历。</summary>
     public string? PendingEditResume { get; set; }
-    /// <summary>“添加资料 / 导入简历”请求（Mac `importRequest`）；简历页移植后读取。</summary>
+    /// <summary>“添加资料 / 导入简历”请求：我的简历页收到后打开导入。</summary>
     public Guid? ImportRequest { get; set; }
-    /// <summary>登录前选中的示例模板 key（Mac `pendingCreateKey`）：登录后回到模板页，按 key 匹配真实模板并打开创建弹窗。</summary>
+    /// <summary>登录前选中的示例模板 key：登录后回到模板页，按 key 匹配真实模板并打开创建弹窗。</summary>
     public string? PendingCreateKey { get; set; }
-    /// <summary>登录弹窗携带的模板（Mac `loginRequest?.template`）。</summary>
+    /// <summary>从岗位广场 / 对话卡片打开的投递（投递看板读取后清空）。</summary>
+    public string? PendingApplication { get; set; }
+    /// <summary>个人菜单「求职画像」：账号页读取后切到求职画像。</summary>
+    public bool CareerProfileRequested { get; set; }
     ResumeTemplate? _loginTemplate;
     bool _bare;
 
     public WorkspaceShell()
     {
         Current = this;
-        Background = Brush(0xF1F1EF);
+        Background = Brush(V3.White);
+        ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         ColumnDefinitions.Add(new ColumnDefinition { Width = Star() });
         _sidebar = new Sidebar(this);
         Children.Add(_sidebar);
-        var inner = new Grid();
-        inner.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        inner.RowDefinitions.Add(new RowDefinition { Height = Star() });
-        inner.Children.Add(_banner);
-        SetRow(_content, 1);
-        inner.Children.Add(_content);
-        _card.Child = inner;
-        SetColumn(_card, 1);
-        Children.Add(_card);
+        SetColumn(_divider, 1);
+        Children.Add(_divider);
+
+        _main.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        _main.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        _main.RowDefinitions.Add(new RowDefinition { Height = Star() });
+        _main.Children.Add(_strip);
+        SetRow(_banner, 1);
+        _main.Children.Add(_banner);
+        SetRow(_content, 2);
+        _main.Children.Add(_content);
+        var toasts = new Grid { IsHitTestVisible = false, VerticalAlignment = VerticalAlignment.Top };
+        SetRow(toasts, 2);
+        _main.Children.Add(toasts);
+        V3Toast.Host = toasts;
+        SetColumn(_main, 2);
+        Children.Add(_main);
         Layout();
 
         App.Session.PropertyChanged += (_, e) =>
         {
-            if (e.PropertyName is nameof(SessionViewModel.Phase) or nameof(SessionViewModel.User) or nameof(SessionViewModel.ErrorMessage)) OnSessionChanged();
+            if (e.PropertyName is nameof(SessionViewModel.Phase) or nameof(SessionViewModel.User) or nameof(SessionViewModel.ErrorMessage))
+                DispatcherQueue.TryEnqueue(OnSessionChanged);
         };
-        Loaded += (_, _) => OnSessionChanged();
+        Loaded += (_, _) => { OnSessionChanged(); SetDragRegion(null); };
+        KeyboardAccelerators.Add(Accelerator(Windows.System.VirtualKey.N, () => { if (SignedInUser is not null) NewChat(); }));
     }
 
-    /// <summary>编辑器与模拟面试场次不显示侧栏（Web `V3Shell bare`）；编辑器还去掉内容卡的边距与圆角。</summary>
+    static Microsoft.UI.Xaml.Input.KeyboardAccelerator Accelerator(Windows.System.VirtualKey key, Action action)
+    {
+        var accelerator = new Microsoft.UI.Xaml.Input.KeyboardAccelerator { Key = key, Modifiers = Windows.System.VirtualKeyModifiers.Control };
+        accelerator.Invoked += (_, e) => { e.Handled = true; action(); };
+        return accelerator;
+    }
+
+    /// <summary>编辑器与模拟面试场次不显示侧栏（Web `V3Shell bare`），也不留 48 高的空标题栏行，页面自己画。</summary>
     public bool Bare
     {
         get => _bare;
@@ -77,11 +104,19 @@ public sealed class WorkspaceShell : Grid
 
     void Layout()
     {
-        var edge = _bare && Selection == WorkspaceSection.Resumes;
+        var hide = _bare || _login is not null;
         _sidebar.Visibility = _bare ? Visibility.Collapsed : Visibility.Visible;
-        _card.Margin = edge ? new Thickness(0) : new Thickness(_bare ? 12 : 13, 12, 12, 12);
-        _card.CornerRadius = new CornerRadius(edge ? 0 : 16);
-        _card.BorderThickness = new Thickness(edge ? 0 : 1);
+        _divider.Visibility = _bare ? Visibility.Collapsed : Visibility.Visible;
+        _strip.Visibility = _bare ? Visibility.Collapsed : Visibility.Visible;
+        if (!hide) SetDragRegion(null);
+    }
+
+    /// <summary>
+    /// 指定窗口拖动区（标题栏）：传 null 恢复为内容区顶部 48 的空白条；无侧栏页面传自己 CommandBar 里的空白区域。
+    /// </summary>
+    public void SetDragRegion(FrameworkElement? region)
+    {
+        if (App.NativeWindow is MainWindow window) window.SetDragRegion(region ?? (_bare ? null : _strip));
     }
 
     User? SignedInUser => App.Session.Phase == SessionViewModel.SessionPhase.SignedIn ? App.Session.User : null;
@@ -89,19 +124,25 @@ public sealed class WorkspaceShell : Grid
     void OnSessionChanged()
     {
         var user = SignedInUser;
-        // 先取出登录弹窗携带的模板：关闭弹窗会触发 dismissed 清空它
+        // 先取出登录页携带的模板：关闭登录页会清空它
         var template = user is not null ? _loginTemplate : null;
-        if (user is not null) { _loginTemplate = null; _login?.Close(); }
+        if (user is not null) { _loginTemplate = null; CloseLogin(); }
         if (_accountId != user?.Id)
         {
-            // 退出或换账号：与 Mac 一样清空对话、草稿，回到首页
-            if (_accountId is not null) { ActiveChatId = null; _chat = null; _homeDraft = ""; PendingEditResume = null; PendingCreateKey = null; MockFocus = null; Selection = WorkspaceSection.Home; Bare = false; }
+            // 退出或换账号：清空对话、草稿和弹窗，回到首页
+            if (_accountId is not null)
+            {
+                V3Overlay.CloseAll();
+                ActiveChatId = null; _chat = null; PendingEditResume = null; PendingCreateKey = null; PendingApplication = null;
+                MockFocus = null; MockSession = null; CareerProfileRequested = false; Selection = WorkspaceSection.Home; _bare = false;
+            }
+            if (user is null) { Selection = WorkspaceSection.Home; _bare = false; }
             _accountId = user?.Id;
             Announcements.Reset(user?.Id ?? "");
             _ = RefreshAccountDataAsync(user?.Id ?? "");
         }
-        // 登录前选中的示例模板：回到模板页，按 key 匹配真实模板后打开创建弹窗
-        if (template is not null) { PendingCreateKey = template.Key; Selection = WorkspaceSection.Templates; Bare = false; }
+        if (template is not null) { PendingCreateKey = template.Key; Selection = WorkspaceSection.Templates; _bare = false; }
+        Layout();
         RenderBanner();
         _sidebar.Render();
         ShowSection();
@@ -115,7 +156,7 @@ public sealed class WorkspaceShell : Grid
         if (Announcements.Detail is not null) AnnouncementDetail.Show(this);
     }
 
-    /// <summary>窗口重新激活时刷新公告（Mac `didBecomeActiveNotification`）。</summary>
+    /// <summary>窗口重新激活时刷新公告。</summary>
     public async void OnActivated()
     {
         await Announcements.RefreshAsync(App.Session.Api);
@@ -123,75 +164,93 @@ public sealed class WorkspaceShell : Grid
         if (Announcements.Detail is not null) AnnouncementDetail.Show(this);
     }
 
-    /// <summary>登录恢复失败等提示条（Mac 顶部黄色横条），恢复中时带“重试恢复”。</summary>
+    /// <summary>登录恢复失败等常驻提示：InfoBar（Warning，不可关闭），恢复中时带「重试恢复」。</summary>
     void RenderBanner()
     {
         _banner.Children.Clear();
-        if (App.Session.ErrorMessage is not { } message) return;
-        var row = HStack(12, Label(message, 13, Txt));
-        if (App.Session.Phase == SessionViewModel.SessionPhase.Restoring) row.Children.Add(new V3Button("重试恢复", () => _ = App.Session.RestoreAsync(), V3Button.Kind.Ghost, height: 28, small: true));
-        row.HorizontalAlignment = HorizontalAlignment.Center;
-        _banner.Children.Add(new Border { Child = row, Padding = new Thickness(12), Background = Brush(Alpha(Hex(0xFFCC00), 0.1)) });
+        if (App.Session.ErrorMessage is not { } message || _login is not null) return;
+        var retry = App.Session.Phase == SessionViewModel.SessionPhase.Restoring ? ("重试恢复", (Action)(() => _ = App.Session.RestoreAsync())) : ((string, Action)?)null;
+        _banner.Children.Add(V3InfoBar.Make(V3InfoBar.Severity.Warning, message, null, null, retry).Pad(24, 0, 24, 8));
     }
 
     public void Select(WorkspaceSection section)
     {
+        // 游客只开放首页：点其他入口留在原处，打开登录页
+        if (SignedInUser is null && section != WorkspaceSection.Home)
+        {
+            _ = RequestLoginAsync(reason: section.Title());
+            return;
+        }
         Selection = section;
         if (section != WorkspaceSection.Resumes) PendingEditResume = null;
         if (section != WorkspaceSection.Assistant) ActiveChatId = null;
+        if (section != WorkspaceSection.Account) CareerProfileRequested = false;
         Bare = false;
         _sidebar.Render();
         ShowSection();
     }
 
-    /// <summary>把一段文字放进首页对话输入框，等用户确认后发送（Mac `router.jump(.draft(text))`：截到 4000 字，切到首页）。</summary>
+    public void Navigate(WorkspaceSection section) => Select(section);
+
+    /// <summary>把一段文字放进新对话的输入框，等用户确认后再发送（截到 4000 字）。</summary>
     public void Draft(string text)
     {
         var info = new System.Globalization.StringInfo(text);
-        _homeDraft = info.LengthInTextElements <= 4000 ? text : info.SubstringByTextElements(0, 4000);
-        Select(WorkspaceSection.Home);
+        var draft = info.LengthInTextElements <= 4000 ? text : info.SubstringByTextElements(0, 4000);
+        if (SignedInUser is null) { _ = RequestLoginAsync(); return; }
+        _chat = (null, null, null, draft, Guid.NewGuid());
+        ActiveChatId = null;
+        ShowChat();
     }
-
-    /// <summary>兼容旧页面：`WorkspacePage.Current.Navigate(section)`。</summary>
-    public void Navigate(WorkspaceSection section) => Select(section);
 
     public void OpenChat(string id)
     {
-        _chat = (id, null, null, Guid.NewGuid());
+        _chat = (id, null, null, null, Guid.NewGuid());
         ActiveChatId = id;
-        Selection = WorkspaceSection.Assistant;
-        Bare = false;
-        _sidebar.Render();
-        ShowSection();
+        ShowChat();
     }
 
-    /// <summary>从首页发起新对话（Mac `startChat`）：带上第一条消息与首页选好的模型，清空首页草稿。</summary>
+    /// <summary>发起新对话：带上第一条消息与选好的模型。</summary>
     public void StartChat(string text, string? model)
     {
-        _chat = (null, text, model, Guid.NewGuid());
-        _homeDraft = "";
+        _chat = (null, text, model, null, Guid.NewGuid());
+       
         ActiveChatId = null;
+        ShowChat();
+    }
+
+    /// <summary>侧栏「新对话」（稿 02B·01 方案 A）：打开空白的新建对话页。</summary>
+    public void NewChat()
+    {
+        _chat = (null, null, null, null, Guid.NewGuid());
+        ActiveChatId = null;
+        ShowChat();
+    }
+
+    void ShowChat()
+    {
         Selection = WorkspaceSection.Assistant;
         Bare = false;
         _sidebar.Render();
         ShowSection();
-    }
-
-    public void NewChat()
-    {
-        _homeDraft = "";
-        _chat = null;
-        Select(WorkspaceSection.Home);
     }
 
     public void ChatDeleted(string id)
     {
-        if (ActiveChatId == id) { ActiveChatId = null; _chat = null; Select(WorkspaceSection.Home); }
+        if (ActiveChatId == id || _chat?.sessionId == id) { ActiveChatId = null; _chat = null; Select(WorkspaceSection.Home); }
     }
 
-    /// <summary>打开简历编辑器（Mac `editResumeID = id; selection = .resumes`）。</summary>
+    /// <summary>新对话发出第一条后拿到会话 ID：侧栏高亮这一条。</summary>
+    public void ChatCreated(string id)
+    {
+        ActiveChatId = id;
+        ReloadSessions();
+    }
+
+    /// <summary>打开简历编辑器（铺满窗口、不显示侧栏）。</summary>
     public void EditResume(string id)
     {
+        if (SignedInUser is null) { _ = RequestLoginAsync(); return; }
         PendingEditResume = id;
         Selection = WorkspaceSection.Resumes;
         ActiveChatId = null;
@@ -200,25 +259,48 @@ public sealed class WorkspaceShell : Grid
         ShowSection();
     }
 
-    /// <summary>编辑器关闭（Mac `editResumeID = nil; reload = UUID()`）：回到简历列表并重新读取。</summary>
     void CloseEditor()
     {
         PendingEditResume = null;
         Select(WorkspaceSection.Resumes);
     }
 
-    /// <summary>首页“带着它去练”（Mac `mockFocus = focus; selection = .mock`）。</summary>
+    /// <summary>首页“带着它去练”。</summary>
     public void Practice(object? focus)
     {
         MockFocus = focus;
         Select(WorkspaceSection.Mock);
     }
 
-    /// <summary>首页“添加资料 / 选择文件”（Mac `importRequest = UUID(); selection = .resumes`）。</summary>
+    /// <summary>首页点开某一场模拟面试。</summary>
+    public void OpenMockSession(string id)
+    {
+        MockSession = id;
+        Select(WorkspaceSection.Mock);
+    }
+
+    /// <summary>打开某条投递的详情（岗位广场、对话卡片）。</summary>
+    public void OpenApplication(string id)
+    {
+        PendingApplication = id;
+        Select(WorkspaceSection.Jobs);
+    }
+
+    /// <summary>首页“选择文件”导入简历。</summary>
     public void RequestImport()
     {
         ImportRequest = Guid.NewGuid();
         Select(WorkspaceSection.Resumes);
+    }
+
+    public void OpenCareerProfile()
+    {
+        CareerProfileRequested = true;
+        Selection = WorkspaceSection.Account;
+        Bare = false;
+        _sidebar.Render();
+        _content.Content = null;
+        ShowSection();
     }
 
     /// <summary>对话创建、删除、改名后刷新侧栏最近对话。</summary>
@@ -237,12 +319,6 @@ public sealed class WorkspaceShell : Grid
 
     public void OpenPlans() => PlansDialog.Show(this);
 
-    /// <summary>
-    /// 登录后的首页（星图）。首页界面依赖 Core 的首页规则，由 <c>Views/Home</c> 在加载时注册；
-    /// 未注册时（Core 首页规则尚未合并）退回引导首页。
-    /// </summary>
-    public static Func<string, Func<string>, Action<string>, UIElement>? SignedInHome { get; set; }
-
     void ShowSection()
     {
         var signedIn = SignedInUser is not null;
@@ -250,73 +326,48 @@ public sealed class WorkspaceShell : Grid
         if (Selection == WorkspaceSection.Account && _content.Content is Views.Account.AccountPage) return;
         _content.Content = Selection switch
         {
-            // 登录后与 Web 一致：首页是“哪里要提升”星图；游客仍显示引导首页
-            WorkspaceSection.Home when signedIn && SignedInHome is { } home => home(SignedInUser!.Id, () => _homeDraft, text => _homeDraft = text),
-            WorkspaceSection.Assistant when signedIn && _chat is { } chat => new Views.Assistant.AssistantChatView(chat.sessionId, chat.initial, chat.model),
-            WorkspaceSection.Home => new AssistantHomePage(signedIn ? App.Session.User?.Nickname : null, _homeDraft, text => _homeDraft = text,
-                () => Select(WorkspaceSection.Templates), () => RequestLoginAsync(reason: "登录 DrawOffer；你的输入会保留。"), ShowPluginAsync),
-            WorkspaceSection.Account => new Views.Account.AccountPage(),
-            WorkspaceSection.Datasets => new DatasetLibraryPage(),
-            WorkspaceSection.Mock => new Views.Mock.MockInterviewView(this),
-            WorkspaceSection.Schedule => new Views.Career.InterviewScheduleView(() => _ = RequestLoginAsync(reason: "登录后管理面试安排。")),
-            WorkspaceSection.Jobs => new Views.Career.JobsBoardView(() => _ = RequestLoginAsync(reason: "登录后管理岗位和求职进度。")),
-            // 与 Mac 一致：岗位广场只对已登录用户开放；从广场打开求职进程时切到投递看板并进入详情
-            WorkspaceSection.Opportunities when signedIn => new Views.JobPool.JobPoolView(id => { Views.Career.JobsBoardView.OpenApplication = id; Select(WorkspaceSection.Jobs); }),
-            WorkspaceSection.Templates => new TemplatesPage(),
-            // 与 Mac `ResumesView.body` 一致：有待编辑的简历时直接进编辑器（铺满窗口、不显示侧栏），关闭后回到列表
+            WorkspaceSection.Home when signedIn => new Views.Home.HomeMemoryView(),
+            WorkspaceSection.Home => Views.Home.HomeMemoryView.Guest(() => _ = RequestLoginAsync(reason: "登录 DrawOffer，开始你的第一份简历。")),
+            WorkspaceSection.Assistant when signedIn && _chat is { } chat => new Views.Assistant.AssistantChatView(chat.sessionId, chat.initial, chat.model, chat.draft),
+            WorkspaceSection.Assistant when signedIn => new Views.Assistant.AssistantChatView(null, null, null, null),
+            WorkspaceSection.Account when signedIn => new Views.Account.AccountPage(),
+            WorkspaceSection.Datasets when signedIn => new DatasetLibraryPage(),
+            WorkspaceSection.Mock when signedIn => new Views.Mock.MockInterviewView(this),
+            WorkspaceSection.Schedule when signedIn => new Views.Career.InterviewScheduleView(),
+            WorkspaceSection.Jobs when signedIn => new Views.Career.JobsBoardView(),
+            WorkspaceSection.Opportunities when signedIn => new Views.JobPool.JobPoolView(OpenApplication),
+            WorkspaceSection.Templates when signedIn => new TemplatesPage(),
             WorkspaceSection.Resumes when signedIn && PendingEditResume is { } edit => new Views.Resumes.ResumeEditorView(edit, CloseEditor),
-            WorkspaceSection.Resumes => new Views.Resumes.ResumesView(SignedInUser?.Id ?? "", () => Select(WorkspaceSection.Templates), () => _ = RequestLoginAsync()),
-            _ => Placeholder(Selection),
+            WorkspaceSection.Resumes when signedIn => new Views.Resumes.ResumesView(SignedInUser!.Id, () => Select(WorkspaceSection.Templates)),
+            _ => Views.Home.HomeMemoryView.Guest(() => _ = RequestLoginAsync()),
         };
-    }
-
-    /// <summary>尚未移植的栏目（Mac `PlaceholderView`）：标题、图标与“原生版本待实现”。</summary>
-    static UIElement Placeholder(WorkspaceSection section) => VStack(10,
-        new FontIcon { Glyph = section.Glyph(), FontSize = 28, FontFamily = IconFamily, Foreground = Brush(Fnt) },
-        Serif(section.Title(), 20),
-        Label("原生版本待实现", 13, Sub)).Align(HorizontalAlignment.Center, VerticalAlignment.Center);
-
-    async Task ShowPluginAsync()
-    {
-        var dialog = new ContentDialog
-        {
-            XamlRoot = XamlRoot, Title = "安装浏览器插件",
-            Content = "浏览器插件在 Chrome / Edge 中使用，安装包与安装说明在 Web 的岗位看板页面提供。",
-            PrimaryButtonText = "在浏览器打开", CloseButtonText = "知道了",
-        };
-        if (await dialog.ShowAsync() == ContentDialogResult.Primary) WebBridge.Open("/career/applications");
     }
 
     /// <summary>
-    /// 需要登录时打开登录弹窗（Mac `LoginRequest` sheet：520×560、顶部原因与“暂不登录”）；已登录时与 Mac 一样提示“此功能尚未开放”。
+    /// 需要登录时打开整窗登录页（稿 01 页 02，盖住侧栏，右上「暂不登录」回到游客模式）；已登录时提示「此功能尚未开放」。
     /// </summary>
     public async Task RequestLoginAsync(ResumeTemplate? template = null, string? reason = null)
     {
-        if (_login is { IsOpen: true }) return;
         if (SignedInUser is not null)
         {
-            var notice = new ContentDialog { XamlRoot = XamlRoot, Title = "此功能尚未开放", Content = "此功能将在后续版本开放。你已输入的内容会保留，可以继续浏览模板。", CloseButtonText = "知道了" };
-            await notice.ShowAsync();
+            await V3Dialog.AlertAsync(XamlRoot, "此功能尚未开放", "此功能将在后续版本开放。你已输入的内容会保留。");
             return;
         }
-        var text = reason ?? (template is null ? "登录后查看和同步你的简历。" : $"登录后继续使用「{template.Name}」。");
-        var finished = new TaskCompletionSource();
         _loginTemplate = template;
-        _login = V3Overlay.Show(XamlRoot, close =>
-        {
-            var head = Spread(Label(text, 15, Txt, Semibold), new V3Button("暂不登录", close, V3Button.Kind.Text));
-            head.Margin = new Thickness(20);
-            var body = new Grid();
-            body.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            body.RowDefinitions.Add(new RowDefinition { Height = Star() });
-            body.Children.Add(head);
-            var sign = new SignInView();
-            SetRow(sign, 1);
-            body.Children.Add(sign);
-            var frame = V3Dialog.Frame(body, 520);
-            frame.Height = 560;
-            return frame;
-        }, dismissed: () => { _loginTemplate = null; finished.TrySetResult(); });
-        await finished.Task;
+        if (_login is not null) return;
+        _login = new SignInView(() => { _loginTemplate = null; CloseLogin(); });
+        SetColumnSpan(_login, 3);
+        Children.Add(_login);
+        RenderBanner();
+        if (App.NativeWindow is MainWindow window) window.SetDragRegion(null);
+    }
+
+    void CloseLogin()
+    {
+        if (_login is null) return;
+        Children.Remove(_login);
+        _login = null;
+        RenderBanner();
+        SetDragRegion(null);
     }
 }

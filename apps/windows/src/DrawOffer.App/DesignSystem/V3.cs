@@ -39,10 +39,19 @@ public static class V3
     public static readonly Color White = Colors.White;
     public static readonly Color Clear = Colors.Transparent;
 
-    /// <summary>字体文件内登记的家族名是旧品牌名 `LinkResume Library …`，必须按文件里的名字引用才能加载。</summary>
-    public static readonly FontFamily SansFamily = new("ms-appx:///Assets/Library/LibrarySans-Regular.otf#LinkResume Library Sans");
-    public static readonly FontFamily SerifFamily = new("ms-appx:///Assets/Library/LibrarySerif-SemiBold.ttf#LinkResume Library Serif");
+    /// <summary>
+    /// Windows 稿：Web 现行字体是 Inter + vivo Sans，Windows 不随系统提供，回退到 Segoe UI Variable（西文、数字）+ Microsoft YaHei UI（中文）。
+    /// 标题也用无衬线（稿内不再用宋体），<see cref="Serif"/> 只保留为“标题字重”的写法。
+    /// </summary>
+    public static readonly FontFamily SansFamily = new("Segoe UI Variable Text, Microsoft YaHei UI");
+    public static readonly FontFamily SerifFamily = SansFamily;
     public static readonly FontFamily IconFamily = new("Segoe Fluent Icons,Segoe MDL2 Assets");
+
+    /// <summary>稿里的提示灰 #96968F（说明、计数、骨架页辅助字）与侧栏分组灰 #8A8A82。</summary>
+    public static readonly Color Faint = Hex(0x96968F);
+    public static readonly Color Side = Hex(0x8A8A82);
+    /// <summary>窗口底色 `--v3-win`（侧栏）与 ContentDialog 底部 CommandSpace。</summary>
+    public static readonly Color Win = Hex(0xF1F1EF);
 
     public static Color Hex(uint hex) => Color.FromArgb(255, (byte)(hex >> 16), (byte)(hex >> 8), (byte)hex);
     public static Color Alpha(Color color, double opacity) => Color.FromArgb((byte)Math.Round(opacity * 255), color.R, color.G, color.B);
@@ -67,16 +76,16 @@ public static class V3
         Foreground = Brush(color ?? Txt), TextTrimming = TextTrimming.CharacterEllipsis,
     };
 
-    /// <summary>`V3.serif`：字体文件只有 SemiBold 一个字重。</summary>
+    /// <summary>标题字（Windows 稿统一无衬线 Semibold，原 Mac 版衬线标题都走这里）。</summary>
     public static TextBlock Serif(string text, double size, Color? color = null) => new()
     {
-        Text = text, FontSize = size, FontFamily = SerifFamily, Foreground = Brush(color ?? Txt), TextTrimming = TextTrimming.CharacterEllipsis,
+        Text = text, FontSize = size, FontFamily = SansFamily, FontWeight = Semibold, Foreground = Brush(color ?? Txt), TextTrimming = TextTrimming.CharacterEllipsis,
     };
 
     /// <summary>系统字体文字（Swift `.font(.system(size:weight:))`）。</summary>
     public static TextBlock Label(string text, double size, Color? color = null, FontWeight? weight = null) => new()
     {
-        Text = text, FontSize = size, FontWeight = weight ?? Regular, Foreground = Brush(color ?? Txt), TextTrimming = TextTrimming.CharacterEllipsis,
+        Text = text, FontSize = size, FontFamily = SansFamily, FontWeight = weight ?? Regular, Foreground = Brush(color ?? Txt), TextTrimming = TextTrimming.CharacterEllipsis,
     };
 
     /// <summary>`V3.number`：系统字体等宽数字。</summary>
@@ -102,6 +111,14 @@ public static class V3
         block.MaxLines = maxLines;
         block.TextTrimming = maxLines > 0 ? TextTrimming.CharacterEllipsis : TextTrimming.None;
         return block;
+    }
+
+    /// <summary>Canvas 内绝对定位。</summary>
+    public static T At<T>(this T element, double x, double y) where T : UIElement
+    {
+        Microsoft.UI.Xaml.Controls.Canvas.SetLeft(element, x);
+        Microsoft.UI.Xaml.Controls.Canvas.SetTop(element, y);
+        return element;
     }
 
     public static T Pad<T>(this T element, double left, double top, double right, double bottom) where T : FrameworkElement
@@ -220,6 +237,50 @@ public static class V3
         Glyph = Icons.Glyph(symbol), FontSize = size, FontFamily = IconFamily, Foreground = Brush(color ?? Txt),
     };
 
+    /// <summary>
+    /// 滚动容器：WinUI 自动隐藏的悬浮细条（只在滚动时出现，无灰轨道，不占布局宽度）；默认只竖向滚动。
+    /// 整个客户端只用这一种，横向只在确实需要横滑的区域（投递看板列）打开，不允许嵌套多余的滚动框。
+    /// </summary>
+    public static ScrollViewer Scroll(UIElement? content = null, bool horizontal = false) => new()
+    {
+        Content = content,
+        VerticalScrollBarVisibility = horizontal ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto,
+        VerticalScrollMode = horizontal ? ScrollMode.Disabled : ScrollMode.Auto,
+        HorizontalScrollBarVisibility = horizontal ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled,
+        HorizontalScrollMode = horizontal ? ScrollMode.Auto : ScrollMode.Disabled,
+    };
+
+    /// <summary>
+    /// Windows 稿 TextBox 外观：32 高（多行最小 96）、圆角 4、#E4E4E0 细边、13px；聚焦与悬停不换系统强调色
+    /// （覆盖 TextControl* 轻量样式资源，底部强调线由 <see cref="V3TextInput"/> 画）。
+    /// </summary>
+    public static TextBox Input(string placeholder, string text = "", int maxLength = 255, bool multiline = false)
+    {
+        var box = new TextBox
+        {
+            Text = text, PlaceholderText = placeholder, MaxLength = maxLength, FontSize = 13, FontFamily = SansFamily,
+            MinHeight = multiline ? 96 : 0, Height = multiline ? double.NaN : 32, Padding = new Thickness(12, multiline ? 8 : 6, 12, multiline ? 8 : 0),
+            CornerRadius = new CornerRadius(4), BorderThickness = new Thickness(1), BorderBrush = Brush(Cl),
+            Background = Brush(White), Foreground = Brush(Txt), PlaceholderForeground = Brush(Fnt2),
+            AcceptsReturn = multiline, TextWrapping = multiline ? TextWrapping.Wrap : TextWrapping.NoWrap,
+        };
+        Quiet(box.Resources);
+        return box;
+    }
+
+    /// <summary>把 WinUI 文本框 / 下拉 / 日期控件的悬停、聚焦配色换成 v3：白底、细边、墨黑字，不出现系统蓝。</summary>
+    public static void Quiet(ResourceDictionary resources)
+    {
+        foreach (var key in new[] { "TextControlBackgroundFocused", "TextControlBackgroundPointerOver", "ComboBoxBackgroundPointerOver", "ComboBoxBackgroundFocused", "CalendarDatePickerBackgroundPointerOver" })
+            resources[key] = Brush(White);
+        foreach (var key in new[] { "TextControlBorderBrushFocused", "TextControlBorderBrushPointerOver", "ComboBoxBorderBrushPointerOver", "ComboBoxBorderBrushFocused", "CalendarDatePickerBorderBrushPointerOver" })
+            resources[key] = Brush(Cl);
+        resources["TextControlForegroundFocused"] = Brush(Txt);
+        resources["TextControlSelectionHighlightColor"] = Brush(Alpha(Blue, 0.3));
+        resources["AccentFillColorDefaultBrush"] = Brush(Txt);
+        resources["SystemAccentColor"] = Txt;
+    }
+
     /// <summary>`Shadow`：WinUI 只有 ThemeShadow（基于 Z 轴），用 Translation.Z 近似 CSS 的柔和投影。</summary>
     public static T Elevate<T>(this T element, float z = 8) where T : UIElement
     {
@@ -240,7 +301,7 @@ public static class Icons
         ["arrow.uturn.backward"] = "\uE7A7", ["arrow.uturn.forward"] = "\uE7A6", ["arrow.up.right.square"] = "\uE8A7",
         ["ellipsis"] = "\uE712", ["magnifyingglass"] = "\uE721", ["xmark.circle.fill"] = "\uEA39",
         ["exclamationmark.triangle"] = "\uE7BA", ["exclamationmark.circle"] = "\uE783", ["exclamationmark.arrow.triangle.2.circlepath"] = "\uE895",
-        ["info.circle"] = "\uE946", ["square.and.arrow.up"] = "\uE72D", ["square.and.pencil"] = "\uE70F", ["pencil"] = "\uE70F",
+        ["info.circle"] = "\uE946", ["questionmark.circle"] = "\uE9CE", ["arrow.triangle.2.circlepath"] = "\uE895", ["square.and.arrow.up"] = "\uE72D", ["square.and.pencil"] = "\uE70F", ["pencil"] = "\uE70F",
         ["ticket"] = "\uE8C7", ["sparkle"] = "\uE945", ["lock"] = "\uE72E", ["line.3.horizontal"] = "\uE700",
         ["line.3.horizontal.decrease"] = "\uE71C", ["envelope"] = "\uE715", ["doc.text"] = "\uE8A5", ["bell"] = "\uEA8F",
         ["trash"] = "\uE74D", ["textformat"] = "\uE8D2", ["textformat.size.smaller"] = "\uE8E7", ["textformat.size.larger"] = "\uE8E8",
@@ -252,7 +313,9 @@ public static class Icons
         ["photo"] = "\uE91B", ["doc.on.doc"] = "\uE8C8", ["tray.and.arrow.down"] = "\uE896", ["bubble.left"] = "\uE8BD",
         ["square"] = "\uE739", ["checkmark.square.fill"] = "\uE73D", ["circle"] = "\uEA3A", ["largecircle.fill.circle"] = "\uECCB",
         ["clock.arrow.circlepath"] = "\uE81C", ["gauge.with.dots.needle.33percent"] = "\uEC4A", ["arrow.down.left.and.arrow.up.right"] = "\uE73F",
-        ["arrow.up.left.and.arrow.down.right"] = "\uE740", ["doc"] = "\uE8A5",
+        ["arrow.up.left.and.arrow.down.right"] = "\uE740", ["arrow.down.right.and.arrow.up.left"] = "\uE73F", ["doc"] = "\uE8A5",
+        ["book"] = "\uE82D", ["bookmark"] = "\uE8A4", ["crown"] = "\uE734", ["doc.richtext"] = "\uE8A5", ["flag"] = "\uE7C1", ["paperplane"] = "\uE724",
+        ["person"] = "\uE77B", ["rectangle.3.group"] = "\uE80A", ["target"] = "\uE81D",
         ["pin"] = "\uE718", ["character.cursor.ibeam"] = "\uE8AC", ["arrow.down.doc"] = "\uE896", ["square.grid.2x2"] = "\uF0E2",
         // 简历编辑器（工具轨、排版、检查、富文本工具条、行内图标）
         ["list.bullet.indent"] = "\uE8FD", ["rectangle.on.rectangle"] = "\uE81E", ["rectangle.split.2x1"] = "\uE89A", ["sparkles"] = "\uE945",
@@ -264,6 +327,10 @@ public static class Icons
         // 求职看板
         ["eye"] = "\uE7B3", ["nosign"] = "\uF140", ["list.bullet"] = "\uEA37", ["paperclip"] = "\uE723",
         // 求职阶段详情、资料与复盘报告
+        // 侧栏、个人菜单（Windows 稿）
+        ["chevron.up.chevron.down"] = "\uE8CB", ["person.text.rectangle"] = "\uE77B", ["gearshape"] = "\uE713",
+        ["rectangle.portrait.and.arrow.right"] = "\uF3B1", ["sidebar.left"] = "\uE700", ["safari"] = "\uE774",
+        ["square.split.1x2"] = "\uF246", ["arrow.down.to.line"] = "\uE896", ["arrow.up.doc"] = "\uE898",
         ["play.fill"] = "\uE768", ["pause.fill"] = "\uE769", ["wand.and.stars"] = "\uE945", ["text.alignleft"] = "\uE8E4",
     };
 

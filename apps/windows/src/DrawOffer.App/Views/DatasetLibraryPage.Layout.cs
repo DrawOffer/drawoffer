@@ -24,7 +24,14 @@ public sealed partial class DatasetLibraryPage
             else _results.Children.Add(ProjectGrid(projects.Select(JobCard).ToList(), false));
             return;
         }
-        var folders = _folders.OrderByDescending(x => Math.Max(JobProjects.Time(S(x, "updated_at")), _files.Where(f => f.Folder == S(x, "id")).Select(f => JobProjects.Time(f.Text("created_at"))).DefaultIfEmpty(0).Max())).Where(x => S(x, "name").Contains(keyword, StringComparison.OrdinalIgnoreCase)).ToList();
+        double Recent(JsonNode x) => Math.Max(JobProjects.Time(S(x, "updated_at")), _files.Where(f => f.Folder == S(x, "id")).Select(f => JobProjects.Time(f.Text("created_at"))).DefaultIfEmpty(0).Max());
+        var matched = _folders.Where(x => S(x, "name").Contains(keyword, StringComparison.OrdinalIgnoreCase));
+        var folders = (_sort switch
+        {
+            "name" => matched.OrderBy(x => S(x, "name"), StringComparer.CurrentCulture),
+            "count" => matched.OrderByDescending(x => _files.Count(f => f.Folder == S(x, "id"))).ThenByDescending(Recent),
+            _ => matched.OrderByDescending(Recent),
+        }).ToList();
         if (keyword.Length > 0 && folders.Count == 0) { _results.Children.Add(T("没有匹配的项目。", 13, true).Top(40)); return; }
         if (_folders.Count == 0)
         {
@@ -33,29 +40,21 @@ public sealed partial class DatasetLibraryPage
             _results.Children.Add(Blank("还没有自己的项目", ["按一件事把资料放在一起，比如一次秋招、一门复习或一套证书。", "在求职进度里上传的录音和笔记，会自动归到「求职进程」。"], false, chips.ToArray())); return;
         }
         var cards = folders.Select(FolderCard).ToList();
-        if (keyword.Length == 0)
-        {
-            var content = VStack(10, T("＋", 20).Align(HorizontalAlignment.Center), T("新建项目", 13).Align(HorizontalAlignment.Center), T("把同一件事的资料放在一起", 11, true).Align(HorizontalAlignment.Center));
-            var create = Click(content, () => _ = Rename("create"));
-            create.BorderThickness = new Thickness(0);
-            var dashed = new Rectangle { RadiusX = 16, RadiusY = 16, Stroke = Brush(Fnt2), StrokeThickness = 1, StrokeDashArray = new DoubleCollection { 4, 3 }, IsHitTestVisible = false };
-            cards.Add(Layer(create, dashed));
-        }
         _results.Children.Add(ProjectGrid(cards));
     }
     Grid ProjectGrid(List<FrameworkElement> cards, bool aspect = true)
     {
-        var grid = new Grid { ColumnSpacing = 20, RowSpacing = 20, Margin = new Thickness(0, 18, 0, 0) };
+        var grid = new Grid { ColumnSpacing = 20, RowSpacing = 24 };
         void Layout(double width)
         {
-            var columns = Math.Max(1, (int)((width + 20) / 293)); var cellWidth = Math.Max(0, (width - (columns - 1) * 20) / columns);
+            var columns = Math.Max(1, (int)((width + 20) / 282)); var cellWidth = Math.Max(0, (width - (columns - 1) * 20) / columns);
             grid.Children.Clear(); grid.ColumnDefinitions.Clear(); grid.RowDefinitions.Clear();
             for (var i = 0; i < columns; i++) grid.ColumnDefinitions.Add(new());
             for (var i = 0; i < (cards.Count + columns - 1) / columns; i++) grid.RowDefinitions.Add(new() { Height = GridLength.Auto });
-            for (var i = 0; i < cards.Count; i++) { var card = cards[i]; if (aspect) card.Height = cellWidth * 172 / 273; Grid.SetColumn(card, i % columns); Grid.SetRow(card, i / columns); grid.Children.Add(card); }
+            for (var i = 0; i < cards.Count; i++) { var card = cards[i]; if (aspect) card.Height = cellWidth * 189 / 272; Grid.SetColumn(card, i % columns); Grid.SetRow(card, i / columns); grid.Children.Add(card); }
         }
         grid.SizeChanged += (_, e) => { if (Math.Abs(e.NewSize.Width - e.PreviousSize.Width) > .5) Layout(e.NewSize.Width); };
-        Layout(Math.Max(273, ActualWidth - V3Page.Gutter(ActualWidth) * 2)); return grid;
+        Layout(Math.Max(262, ActualWidth - V3Page.Gutter(ActualWidth) * 2)); return grid;
     }
     static Button Click(UIElement content, Action action)
     {

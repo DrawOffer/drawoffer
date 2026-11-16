@@ -23,7 +23,7 @@ public sealed partial class ResumeGuidePanel
             var note = string.Join("　", new[] { counts.Done.Count == 0 ? "" : $"已写好：{string.Join("、", counts.Done)}", $"还差：{string.Join("、", counts.Left)}" }.Where(x => x.Length > 0));
             return StepView(Step, $"欢迎回来，还差 {counts.Left.Count} 步", note, content: [
                 Actions(TextLink("结束引导，自己改", () => _ = Try(async () => { await ChangeAsync("dismiss"); _close(); })), "接着写", onPrimary: () => { _welcome = false; Render(); }),
-                Sans("结束后，可以从右侧工具栏的「引导」重新打开。", 12, Fnt).Wrap().Top(20),
+                Sans("结束后，可以从纸面上沿的「引导」重新打开。", 12, ResumeTalk.Note).Wrap().Top(20),
             ]);
         }
         if (_failure is { } failure)
@@ -72,7 +72,7 @@ public sealed partial class ResumeGuidePanel
             Row("岗位", Field("比如：后端开发", intent.Role, 60, v => intent.Role = v)),
             Row("城市", CityChips(intent.Cities, v => intent.Cities = v)),
             Row("类型", Choice("求职类型", intent.Type, [("campus", "校招"), ("internship", "实习"), ("any", "都可以")], v => { intent.Type = v; Render(); })),
-            Row("毕业", HStack(4, year, Sans("届", 15, Fnt)), yearHint)).Top(24);
+            Row("毕业", HStack(4, year, Sans("届", 13.5, Fnt)), yearHint)).Top(24);
         return StepView("job_profile", "你想投什么样的工作？", "后面每一步都按它来写，也会记进求职画像。", back: Back, content: [rows,
             Actions(primary: "确认", disabled: () => _busy || S.Trimmed(intent.Role).Length == 0, onPrimary: () => _ = Try(async () =>
             {
@@ -109,7 +109,7 @@ public sealed partial class ResumeGuidePanel
     {
         if (_education is not { } form) return LoadingStep("education", "在哪里读书？", "正在读你的求职画像");
         var time = HStack(8,
-            Field("2022.09", form.Start, 20, v => form.Start = v, "入学时间", 88), Sans("–", 15, Fnt),
+            Field("2022.09", form.Start, 20, v => form.Start = v, "入学时间", 88), Sans("–", 13.5, Fnt),
             Field("2026.06", form.End, 20, v => form.End = v, "毕业时间", 88));
         var rows = VStack(0,
             Row("学校", Field("比如：浙江工业大学", form.School, 100, v => form.School = v)),
@@ -223,7 +223,7 @@ public sealed partial class ResumeGuidePanel
         var list = new StackPanel { Margin = new Thickness(0, 24, 0, 0) };
         foreach (var item in items)
         {
-            var name = Sans(item.Form.Name, 15, Txt, Medium);
+            var name = Sans(item.Form.Name, 13.5, Txt, Medium);
             name.MaxLines = 1;
             var meta = Sans(item.Form.Meta, 13, Fnt);
             meta.MaxLines = 1;
@@ -266,7 +266,7 @@ public sealed partial class ResumeGuidePanel
             : "从最近的一段开始。写大白话就行，我来整理成要点。";
         Action? back = fromList ? () => { _phase = "list"; Render(); } : first ? Back : null;
         var time = HStack(8,
-            Field("2025.07", form.Start, 20, v => form.Start = v, "开始时间", 88), Sans("–", 15, Fnt),
+            Field("2025.07", form.Start, 20, v => form.Start = v, "开始时间", 88), Sans("–", 13.5, Fnt),
             Field("至今", form.End, 20, v => form.End = v, "结束时间", 88));
         var rows = VStack(0,
             Row("类型", Choice("经历类型", form.Kind, G.ExperienceKinds.Select(k => (k.Key, k.Label)), v => { form.Kind = v; Render(); })),

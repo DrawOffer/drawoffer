@@ -10,13 +10,13 @@ using static DrawOffer.App.DesignSystem.V3;
 namespace DrawOffer.App.Shell;
 
 /// <summary>
-/// 公告铃（Mac `AnnouncementBell`，Web `AnnouncementCenter.tsx`）：28×28，14 号铃铛 #55554F，未读时右上 7px #E5484D 圆点（距边 5）。
+/// 公告铃（Mac `AnnouncementBell`，Web `AnnouncementCenter.tsx`）：28×28，14 号铃铛 #55554F，未读时右上 6px 橙色圆点（Windows 稿侧栏：未读点统一橙色）。
 /// 点开时强制刷新并把列表全部标为已读。
 /// </summary>
 public sealed class AnnouncementBell : Grid
 {
     readonly WorkspaceShell _shell;
-    readonly Border _dot = new() { Width = 7, Height = 7, CornerRadius = new CornerRadius(3.5), Background = Brush(0xE5484D), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 5, 5, 0) };
+    readonly Border _dot = new() { Width = 6, Height = 6, CornerRadius = new CornerRadius(3), Background = Brush(Orange), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 5, 5, 0) };
     Flyout? _open;
 
     public AnnouncementBell(WorkspaceShell shell)
@@ -69,7 +69,7 @@ public sealed class AnnouncementListView : StackPanel
     {
         Children.Clear();
         var center = _shell.Announcements;
-        var head = HStack(8, Serif("公告", 17));
+        var head = HStack(8, Label("公告", 16, Txt, Semibold));
         if (center.Items.Count > 0)
         {
             var fresh = center.Items.Count(x => center.FreshIds.Contains(x.Id));
@@ -128,7 +128,7 @@ public sealed class AnnouncementListView : StackPanel
 }
 
 /// <summary>
-/// 公告详情弹窗（Mac `AnnouncementDetailSheet`）：520 宽；顶部 #EEF3FC 分类带（40×40 白底 70% 图标、分类与日期、关闭），
+/// 公告详情弹窗（Mac `AnnouncementDetailSheet`）：520 宽；顶部 #EEF3FC 分类带（40×40 白底 70% 图标、分类与日期；不放 ×，Esc 关闭），
 /// 标题 20/600 衬线、Markdown 正文（最高 320）；多条时左下分页点（7px，当前 #17191C），右侧“下一条 →”或“知道了”。
 /// </summary>
 public static class AnnouncementDetail
@@ -163,10 +163,9 @@ public static class AnnouncementDetail
                 var meta = VStack(2, categoryRow, item.DateText.Length > 0 ? Label($"{item.DateText}发布", 11.5, Hex(0x6F6F69)) : null);
                 var icon = new Border { Width = 40, Height = 40, CornerRadius = new CornerRadius(10), Background = Brush(Alpha(V3.White, 0.7)),
                     Child = new FontIcon { Glyph = item.CategoryGlyph, FontSize = 18, FontFamily = IconFamily, Foreground = Brush(Txt) } };
-                var x = V3Dialog.CloseButton(() => { center.Detail = null; close(); });
-                var band = new Border { Background = Brush(0xEEF3FC), Padding = new Thickness(20), Child = Columns(12, (Auto, icon), (Star(), meta.Align(v: VerticalAlignment.Center)), (Auto, x)) };
-                var body = VStack(12, Serif(item.Title, 20).Wrap(),
-                    new ScrollViewer { Content = NativeMarkdownView.Render(item.Body), MaxHeight = 320 }).Pad(20, 20, 20, 20);
+                var band = new Border { Background = Brush(0xEEF3FC), Padding = new Thickness(24, 20, 24, 20), Child = Columns(12, (Auto, icon), (Star(), meta.Align(v: VerticalAlignment.Center))) };
+                var body = VStack(12, Label(item.Title, 20, Txt, Bold).Wrap(),
+                    new ScrollViewer { Content = NativeMarkdownView.Render(item.Body), MaxHeight = 320 }).Pad(24, 20, 24, 24);
                 var dots = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
                 if (ids.Count > 1)
                     for (var position = 0; position < ids.Count; position++)
@@ -177,10 +176,10 @@ public static class AnnouncementDetail
                         dots.Children.Add(dot);
                     }
                 var action = index < ids.Count - 1
-                    ? new V3Button("下一条", () => GoTo(index + 1), V3Button.Kind.Dark, height: 36, icon: "arrow.right")
-                    : new V3Button("知道了", () => { center.Detail = null; close(); }, V3Button.Kind.Dark, height: 36);
-                var foot = Spread(dots, action);
-                foot.Margin = new Thickness(20, 0, 20, 20);
+                    ? new V3Button("下一条", () => GoTo(index + 1), V3Button.Kind.Dark, icon: "arrow.right")
+                    : new V3Button("知道了", () => { center.Detail = null; close(); }, V3Button.Kind.Dark);
+                // CommandSpace：#F4F4F1 底、上边细线；Windows 稿弹窗不放 ×，Esc 关闭
+                var foot = new Border { Background = Brush(Stage), BorderBrush = Brush(Line), BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(24), Child = Spread(dots, action) };
                 host.Content = VStack(0, band, body, foot);
             }
             Render();

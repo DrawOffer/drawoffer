@@ -13,6 +13,7 @@ public static class CareerRequest {
         if(!path.StartsWith("/api/") || path.Contains("//") || path.EndsWith("/") || path.Contains('?') || path.Contains('#') || path.Contains("..")) return false;
         if(method == "GET" && new[] { "/api/resumes", "/api/job-applications", "/api/interview-overview", "/api/interview-sessions", "/api/job-descriptions" }.Contains(path)) return true;
         if(method == "POST" && new[] { "/api/job-descriptions", "/api/job-descriptions/parse-draft", "/api/job-applications" }.Contains(path)) return true;
+        if(path=="/api/plugin-releases/current")return method=="GET";
         if(path=="/api/job-matches/recommendations")return method=="GET";
         if(path=="/api/job-matches/recommendations:ensure")return method=="POST";
         var p = path.TrimStart('/').Split('/');
@@ -33,11 +34,15 @@ public static class CareerRequest {
         static bool Numeric(string value) => value.Length > 0 && value.All(c => c is >= '0' and <= '9');
         if(p.Length == 4) return p[3] switch {
             "assets" => method is "GET" or "POST",
+            // 笔试题：确认导入（整体替换，带识别出的作答与判分）
+            "written-questions" => method == "PUT",
             "review-notes" => method == "PUT",
-            "written-questions:extract" or "review:generate" or "prep-items:generate" or "record:structure" => method == "POST",
+            "written-questions:extract" or "review:generate" or "prep-items:generate" or "record:structure" or "record-topics" => method == "POST",
             _ => null,
         };
         if(p.Length == 5 && p[3] == "review-notes") return Numeric(p[4]) && method == "DELETE";
+        // 笔试题逐题标对错
+        if(p.Length == 5 && p[3] == "written-questions") return Numeric(p[4]) && method == "PATCH";
         if(p.Length == 5 && p[3] == "transcriptions") {
             var segment = p[4].Split(':');
             return segment.Length == 2 && Numeric(segment[0]) && segment[1] is "retry" or "apply" && method == "POST";

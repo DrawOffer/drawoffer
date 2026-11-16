@@ -7,6 +7,34 @@ using Microsoft.Web.WebView2.Core;
 
 namespace DrawOffer.App.Paper;
 
+/// <summary>纸上临时显示的一处改法（分区 12：浅蓝底 = 还没换上，橙色 = 要核实）。只是装饰，不改正文（Mac `PaperLineChange`）。</summary>
+/// <param name="Before">AI 看到的原句：纸上这一行已经不是它时不预览。</param>
+public sealed record PaperLineChange(string LineId, string Before, string Text, IReadOnlyList<string> Risky)
+{
+    internal JsonObject Json => new()
+    {
+        ["lineId"] = LineId, ["before"] = Before, ["text"] = Text,
+        ["risky"] = new JsonArray(Risky.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray()),
+    };
+}
+
+/// <summary>检查简历纸边的小圆圈（12.7–12.11）：空心 = 还没看，蓝 = 正在看，灰 = 看过（Mac `PaperMark`）。</summary>
+public sealed record PaperMark(string Key, IReadOnlyList<string> NodeIds, PaperMark.State Status)
+{
+    public enum State { Pending, Current, Done }
+    internal JsonObject Json => new()
+    {
+        ["key"] = Key, ["nodeIds"] = new JsonArray(NodeIds.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray()),
+        ["state"] = Status switch { State.Current => "current", State.Done => "done", _ => "pending" },
+    };
+}
+
+/// <summary>光标 / 选区所在的行（纸面 `line` 事件，Mac `PaperLine`）。坐标是纸面视图里的点（CSS px），已含缩放。</summary>
+/// <param name="Selection">只选了一行里的几个字时的字符范围（含 start、不含 end）。</param>
+/// <param name="Rect">第一行的位置。</param>
+/// <param name="Paper">纸面（第一页所在的整张纸）的位置。</param>
+public sealed record PaperLine(string UnitId, IReadOnlyList<string> LineIds, (int Start, int End)? Selection, Windows.Foundation.Rect Rect, Windows.Foundation.Rect Paper);
+
 /// <summary>原生 → 可编辑纸面的指令（editor protocol 1，见 `apps/native/renderer/editor.tsx`），对应 Mac `ResumeEditorCommand`。</summary>
 public sealed record ResumeEditorCommand(JsonObject Json)
 {
@@ -19,6 +47,22 @@ public sealed record ResumeEditorCommand(JsonObject Json)
     public static ResumeEditorCommand Rename(string id, string title) => new(new JsonObject { ["type"] = "rename", ["nodeId"] = id, ["title"] = title });
     public static ResumeEditorCommand Remove(string id) => new(new JsonObject { ["type"] = "remove", ["nodeId"] = id });
     public static ResumeEditorCommand Add(string kind, string title) => new(new JsonObject { ["type"] = "add", ["kind"] = kind, ["title"] = title });
+    /// <summary>临时高亮这几行、把改法预览在纸上；同一 source 再发一次即替换，两项都空即清除。</summary>
+    public static ResumeEditorCommand Decorate(string source, IEnumerable<string> highlight, IEnumerable<PaperLineChange> preview) => new(new JsonObject
+    {
+        ["type"] = "decorate", ["source"] = source,
+        ["highlight"] = new JsonArray(highlight.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray()),
+        ["preview"] = new JsonArray(preview.Select(x => (JsonNode?)x.Json).ToArray()),
+    });
+    public static ResumeEditorCommand Marks(IEnumerable<PaperMark> marks) => new(new JsonObject
+    {
+        ["type"] = "marks", ["marks"] = new JsonArray(marks.Select(x => (JsonNode?)x.Json).ToArray()),
+    });
+    /// <summary>滚到这几行（放在屏幕中间）。</summary>
+    public static ResumeEditorCommand Reveal(IEnumerable<string> ids) => new(new JsonObject
+    {
+        ["type"] = "reveal", ["nodeIds"] = new JsonArray(ids.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray()),
+    });
 }
 
 /// <summary>纸面 → 原生的事件，对应 Mac `ResumeEditorEvent`。</summary>
@@ -30,6 +74,14 @@ public abstract record ResumeEditorEvent
     public sealed record Ask(string UnitId, string LineId, string Text, string Instruction) : ResumeEditorEvent;
     public sealed record Zoom(double Value) : ResumeEditorEvent;
     public sealed record Error(string Message) : ResumeEditorEvent;
+    /// <summary>光标所在的可改写行；null 表示不在可改的行上（或正在打字）。</summary>
+    public sealed record Line(PaperLine? Value) : ResumeEditorEvent;
+    /// <summary>在纸面里按了 Ctrl+K。</summary>
+    public sealed record LineOpen(PaperLine Value) : ResumeEditorEvent;
+    /// <summary>纸面总页数。</summary>
+    public sealed record Pages(int Count) : ResumeEditorEvent;
+    /// <summary>点了纸边的小圆圈。</summary>
+    public sealed record Mark(string Key) : ResumeEditorEvent;
     /// <summary>Windows 专有：焦点在网页里时 Ctrl+= / Ctrl+- / Ctrl+0 不会到达原生快捷键，由注入脚本转回（Mac 的 ⌘ 菜单快捷键始终先到原生）。</summary>
     public sealed record Key(string Name) : ResumeEditorEvent;
 }
@@ -41,6 +93,8 @@ public sealed class ResumeEditorChannel
     public void Send(ResumeEditorCommand command) => Bridge?.Call("command", command.Json);
     /// <summary>原生改写正文（引导写入、AI 采纳）：页面按当前模板重新排版。</summary>
     public void ReplaceData(JsonNode? data) => Bridge?.Call("replaceData", data);
+    /// <summary>07.2 模板悬停预览：`template-preview` 接口返回的 preview（data / style / layout_plan）；null 恢复原纸面。不改正文、不保存。</summary>
+    public void PreviewTemplate(JsonNode? preview) => Bridge?.Call("previewTemplate", preview);
 }
 
 /// <summary>
@@ -114,7 +168,12 @@ public sealed partial class ResumeEditorPaperView : UserControl
     void Load(string resumeId, JsonNode? data, JsonNode? style, JsonNode? layoutPlan, int styleRevision)
     {
         _styleRevision = styleRevision;
-        Call("load", new JsonObject { ["resumeId"] = resumeId, ["data"] = data?.DeepClone(), ["style"] = style?.DeepClone(), ["layout_plan"] = layoutPlan?.DeepClone() });
+        // features.lineChat：选区工具栏只管格式，纸面上报光标所在的行（改这一条在原生）
+        Call("load", new JsonObject
+        {
+            ["resumeId"] = resumeId, ["data"] = data?.DeepClone(), ["style"] = style?.DeepClone(), ["layout_plan"] = layoutPlan?.DeepClone(),
+            ["features"] = new JsonObject { ["lineChat"] = true },
+        });
     }
 
     /// <summary>排版面板改动的版式按 revision 下发；页面内编辑产生的版式变化不回传，避免回环。</summary>
@@ -208,10 +267,38 @@ public sealed partial class ResumeEditorPaperView : UserControl
             case "error":
                 OnEvent(new ResumeEditorEvent.Error(body.Get("message").String() ?? "编辑器出错，请重试。"));
                 break;
+            case "line":
+                OnEvent(new ResumeEditorEvent.Line(LineOf(body)));
+                break;
+            case "line-open":
+                if (LineOf(body) is { } open) OnEvent(new ResumeEditorEvent.LineOpen(open));
+                break;
+            case "pages":
+                if (body.Number("count") is { } count && count > 0) OnEvent(new ResumeEditorEvent.Pages((int)count));
+                break;
+            case "mark":
+                if (body.Get("key").String() is { } key) OnEvent(new ResumeEditorEvent.Mark(key));
+                break;
             case "native-key":
                 if (body.Text("key") is "=" or "-" or "0") OnEvent(new ResumeEditorEvent.Key(body.Text("key")));
                 break;
         }
+    }
+
+    static Windows.Foundation.Rect? BoxOf(JsonNode? value)
+    {
+        if (value.Number("x") is not { } x || value.Number("y") is not { } y || value.Number("width") is not { } width || value.Number("height") is not { } height) return null;
+        return new Windows.Foundation.Rect(x, y, Math.Max(0, width), Math.Max(0, height));
+    }
+
+    static PaperLine? LineOf(JsonNode? body)
+    {
+        if (body.Get("unitId").String() is not { } unit) return null;
+        var ids = body.Items("lineIds").Select(x => x.String()).OfType<string>().ToList();
+        if (ids.Count == 0 || BoxOf(body.Get("rect")) is not { } rect || BoxOf(body.Get("paper")) is not { } paper) return null;
+        (int, int)? selection = null;
+        if (body.Get("selection").Number("start") is { } start && body.Get("selection").Number("end") is { } end && end > start) selection = ((int)start, (int)end);
+        return new PaperLine(unit, ids, selection, rect, paper);
     }
 
     /// <summary>`drawoffer-paper://editor/`：编辑器页、模板示例头像、简历图片读取与上传。其余地址一律 404（Mac `PaperSchemeHandler`）。</summary>

@@ -52,8 +52,8 @@ public static class CareerIcon
 }
 
 /// <summary>
-/// 04.C01 求职进度页（Mac `CareerApplicationDetailView.swift`）：页头、左栏站点线与右侧站点卡；
-/// 阶段记录进入 04.C03 阶段详情，AI 复盘报告（04.C03.C）从阶段详情打开。
+/// 投递详情（Windows 稿 07 页，Mac `CareerApplicationDetailView.swift`）：「这一步」+ 右侧内容 + 全程时间线；
+/// 阶段详情、复盘报告、岗位详情、资料与面试记录是这里的下级页面。
 /// </summary>
 public sealed partial class CareerApplicationDetailView : UserControl
 {
@@ -68,7 +68,7 @@ public sealed partial class CareerApplicationDetailView : UserControl
     abstract record Route
     {
         public sealed record Stage(string Id) : Route;
-        public sealed record Report(string Id) : Route;
+        public sealed record Report(string Id, bool FromStage = false) : Route;
         public sealed record Job(string Id) : Route;
         public sealed record Materials(string? Id) : Route;
         public sealed record Record(string Id, bool Paste, string? FromMaterials) : Route;
@@ -79,24 +79,19 @@ public sealed partial class CareerApplicationDetailView : UserControl
     Route? _route;
     JsonNode? _current;
     List<JsonNode> _sessions = [];
-    List<JsonNode> _assets = [];
     string? _error;
     string? _notice;
     bool _loading = true;
     bool _busy;
     string? _jobDescription;
-    bool _showAllHistory;
-    JsonNode? _cancelling;
     DateTimeOffset _now = Beijing.Now;
     string? _viewKey;
     Dictionary<string, JsonNode> _details = [];
     string? _prepBusy;
-    string? _prepFor;
     readonly Dictionary<string, SplitJob> _splits = [];
     /// <summary>Swift `.task(id: refreshed)`：每次刷新或页面重新出现都重读；旧的读取结果作废。</summary>
     int _generation;
     string? _shown;
-    V3Overlay? _prepOverlay;
 
     JsonNode Raw => _current ?? _application.Raw;
     CareerApplication Item => new CareerApplication(Raw).IncludingSessions(_sessions);
@@ -113,7 +108,7 @@ public sealed partial class CareerApplicationDetailView : UserControl
         _openApplication = openApplication;
         KeyDown += (_, e) =>
         {
-            // `.onExitCommand`：Esc 回到当前站
+            // `.onExitCommand`：Esc 回到当前这一站
             if (e.Key == Windows.System.VirtualKey.Escape && _route is null && _viewKey is not null) { e.Handled = true; _viewKey = null; Render(); }
         };
         Render();
@@ -139,11 +134,11 @@ public sealed partial class CareerApplicationDetailView : UserControl
         switch (route)
         {
             case Route.Stage stage:
-                Content = new CareerStageDetailView(stage.Id, () => { _route = null; Refresh(); }, () => Go(new Route.Report(stage.Id)));
+                Content = new CareerStageDetailView(stage.Id, () => { _route = null; Refresh(); }, () => Go(new Route.Report(stage.Id, true)));
                 _shown = null;
                 return;
             case Route.Report report:
-                Content = new CareerReviewReportView(report.Id, () => Go(new Route.Stage(report.Id)));
+                Content = new CareerReviewReportView(report.Id, () => { if (report.FromStage) Go(new Route.Stage(report.Id)); else { _route = null; Refresh(); } });
                 _shown = null;
                 return;
             case Route.Job job:
@@ -240,7 +235,7 @@ public sealed partial class CareerApplicationDetailView : UserControl
     async Task SavePrep(JsonNode session, JsonArray items)
     {
         var id = session.Text("id");
-        _prepBusy = id; Render(); RefreshPrep();
+        _prepBusy = id; Render();
         var lock_ = (_details.TryGetValue(id, out var detail) ? detail.Get("session").Get("lock_version") : null) ?? session.Get("lock_version");
         try
         {
@@ -249,7 +244,7 @@ public sealed partial class CareerApplicationDetailView : UserControl
             Refresh();
         }
         catch (Exception error) { Unauthorized(error); _notice = CareerErrors.Message(error); }
-        finally { _prepBusy = null; Render(); RefreshPrep(); }
+        finally { _prepBusy = null; Render(); }
     }
 
     static void Unauthorized(Exception error)
@@ -288,13 +283,6 @@ public sealed partial class CareerApplicationDetailView : UserControl
             }
             if (generation != _generation) return;
             _details = loaded;
-            var latest = new CareerDetailModel(Raw, all, _now).LatestRecorded;
-            _assets = [];
-            if (latest?.Text("id") is { Length: > 0 } latestId)
-            {
-                try { _assets = (await App.Session.Api.CareerRequestAsync($"/api/interview-sessions/{latestId}", "GET", [], null)).Items("assets"); }
-                catch (Exception error) when (error is not OperationCanceledException) { }
-            }
             if (Raw.Text("job_description_id") is { Length: > 0 } jobId)
             {
                 try { _jobDescription = (await App.Session.Api.CareerRequestAsync($"/api/job-descriptions/{jobId}", "GET", [], null)).Get("job_description").Text("description").NonEmptyOr("暂无岗位描述"); }
@@ -307,6 +295,7 @@ public sealed partial class CareerApplicationDetailView : UserControl
         if (generation != _generation) return;
         _loading = false;
         Render();
-        RefreshPrep();
+        _ = LoadPrices();
+        Poll();
     }
 }

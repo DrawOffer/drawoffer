@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using DrawOffer.App.DesignSystem;
 using DrawOffer.Core.Agent;
 using DrawOffer.Core.Api;
@@ -6,7 +7,7 @@ using DrawOffer.Core.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using static DrawOffer.App.DesignSystem.V3;
@@ -15,15 +16,15 @@ namespace DrawOffer.App.Views.Assistant;
 
 public sealed partial class AssistantChatView
 {
-    // MARK: 快捷命令
+    // MARK: 快捷命令与 @ 引用
 
     /// <summary>输入框里以 / 开头的快捷命令（Web `slashCommands.ts`），只列出当前对话能执行的。</summary>
     List<(string id, string label, string detail, string symbol)> SlashCommands()
     {
         (string, string, string, string)[] all =
         [
-            ("compact", "整理较早对话", "把较早的对话整理成摘要，腾出上下文", "clock.arrow.circlepath"),
-            ("context", "查看上下文用量", "看看离自动整理还有多远、用在了哪里", "gauge.with.dots.needle.33percent"),
+            ("compact", "压缩上下文", "把较早的对话压缩成摘要，腾出上下文", "clock.arrow.circlepath"),
+            ("context", "查看上下文用量", "看看离自动压缩还有多远、用在了哪里", "gauge.with.dots.needle.33percent"),
             ("ref", "引用简历或资料", "从简历和资料库里选几份带进对话", "doc.text"),
             ("upload", "上传文件", "图片、文档和录音", "square.and.arrow.up"),
             ("new", "新对话", "从空白对话重新开始", "bubble.left"),
@@ -46,131 +47,224 @@ public sealed partial class AssistantChatView
     void RunSlash(string id)
     {
         _draft = "";
+        // 弹层在输入框重建、加载后打开（见 Render 末尾）
+        _floating = id switch { "context" => Floating.Usage, "ref" => Floating.Materials, _ => null };
+        Render();
         switch (id)
         {
             case "compact": _ = CompactAsync(); break;
-            case "context": _usageOpen = true; break;
-            case "ref": ShowReferencePicker(); break;
             case "upload": _ = PickFilesAsync(); break;
-            default: NewConversation(); break;
+            case "new": NewConversation(); break;
         }
+    }
+
+    static readonly Regex MentionPattern = new(@"@[^\s@]{0,24}$");
+
+    /// <summary>输入 @ 时（02B·06 ②）：光标前的 `@词` 用来筛选可引用的资料。</summary>
+    string? MentionQuery => _mentionDismissed || _floating is Floating.Usage or Floating.Materials || MentionPattern.Match(_draft) is not { Success: true } match ? null : match.Value[1..];
+
+    void ToggleContext(JsonNode item)
+    {
+        static string Key(JsonNode value) => value.Text("type") + ":" + value.Text("id") + ":" + value.Text("version_id");
+        var index = _contexts.FindIndex(c => Key(c) == Key(item));
+        if (index >= 0) _contexts.RemoveAt(index); else _contexts.Add(item.DeepClone());
         Render();
     }
 
-    // MARK: 输入框
+    void PickMention(JsonNode item)
+    {
+        _draft = MentionPattern.Replace(_draft, "@" + (item.Text("type") == "user_profile" ? "个人画像" : item.Text("label")) + " ");
+        if (!_contexts.Any(c => c.Text("type") == item.Text("type") && c.Text("id") == item.Text("id"))) _contexts.Add(item.DeepClone());
+        _floating = null;
+        Render();
+        _input?.Focus(FocusState.Programmatic);
+    }
+
+    Dictionary<string, string> UsageDetails()
+    {
+        var shown = _messages.Count(m => m.Text("message_type") != "compaction");
+        var unique = new Dictionary<string, JsonNode>();
+        foreach (var reference in _messages.SelectMany(m => m.Items("contexts"))) unique[reference.Text("type") + ":" + reference.Text("id")] = reference;
+        var resumes = unique.Values.Count(r => r.Text("type") is "resume" or "resume_version");
+        var others = unique.Count - resumes;
+        var files = _messages.Sum(m => m.Items("attachments").Count);
+        var result = new Dictionary<string, string>();
+        if (shown > 0) result["conversation"] = $"{shown} 条消息";
+        var materials = new[] { resumes > 0 ? $"{resumes} 份简历" : "", others > 0 ? $"{others} 份资料" : "" }.Where(x => x.Length > 0).ToList();
+        if (materials.Count > 0) result["materials"] = string.Join(" · ", materials);
+        if (files > 0) result["attachments"] = $"{files} 个附件";
+        return result;
+    }
+
+    // MARK: 浮层（贴在输入框上沿）
+
+    void ToggleFloating(Floating kind)
+    {
+        if (_floating == kind) CloseFloating();
+        else ShowFloating(kind);
+    }
+
+    void ShowFloating(Floating kind)
+    {
+        if (_inputBox is not { } anchor || anchor.XamlRoot is null) return;
+        if (_floatingFlyout is { } previous) { _rebuilding = true; previous.Hide(); previous.Content = null; _rebuilding = false; }
+        // 同一种资料面板重建时沿用原来的实例，保留搜索词和分类
+        var reuse = _floating == kind && kind != Floating.Usage ? _floatingPanel : null;
+        _floating = kind;
+        _floatingPanel = null;
+        UIElement content;
+        double padding = 0;
+        switch (kind)
+        {
+            case Floating.Usage:
+                content = AssistantUsage.Panel(_contextUsage, CurrentModelName, UsageDetails(), Sending || _currentId is null, () => { CloseFloating(); _ = CompactAsync(); });
+                padding = 0;
+                content = new Border { Child = content, Padding = new Thickness(19, 17, 19, 15) };
+                break;
+            default:
+                var mention = kind == Floating.Mention;
+                _floatingPanel = reuse ?? new AssistantContextPanel(() => _contextGroups, () => _contexts, ContextTypeLabel, () => mention ? MentionQuery ?? "" : null,
+                    mention ? PickMention : ToggleContext, () => { CloseFloating(); if (mention) _mentionDismissed = true; _ = PickFilesAsync(); });
+                content = _floatingPanel;
+                _floatingPanel.Refresh();
+                _ = LoadContextsAsync().ContinueWith(_ => DispatcherQueue.TryEnqueue(() => _floatingPanel?.Refresh()), TaskScheduler.Default);
+                break;
+        }
+        var flyout = V3Popover.Make(content, kind == Floating.Usage ? FlyoutPlacementMode.TopEdgeAlignedRight : FlyoutPlacementMode.TopEdgeAlignedLeft, padding);
+        flyout.Closed += (_, _) =>
+        {
+            if (_rebuilding || _floatingFlyout != flyout) return;
+            _floatingFlyout = null; _floatingPanel = null; _floating = null;
+        };
+        _floatingFlyout = flyout;
+        // @ 筛选时不抢输入框焦点
+        flyout.ShowAt(anchor, new FlyoutShowOptions { ShowMode = kind == Floating.Mention ? FlyoutShowMode.Transient : FlyoutShowMode.Standard, Placement = flyout.Placement });
+    }
+
+    void CloseFloating()
+    {
+        _floating = null;
+        if (_floatingFlyout is { } flyout) { _floatingFlyout = null; _floatingPanel = null; flyout.Hide(); }
+    }
+
+    // MARK: 输入框（02B·03：57 高、圆角 17.5、#D6D6D0 描边；下方 12 处是「＋ 添加资料」与上下文圆环、模型）
 
     FrameworkElement Composer()
     {
-        var stack = new StackPanel { Spacing = 8, MaxWidth = 900 };
+        var stack = new StackPanel { MaxWidth = 720 };
         var matches = SlashMatches();
         if (matches.Count > 0)
         {
             var menu = new StackPanel { Spacing = 2 };
             foreach (var command in matches)
             {
-                var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, Height = 30, Padding = new Thickness(10, 0, 10, 0) };
-                row.Children.Add(Icon(command.symbol, 13, Sub).Frame(16).Align(v: VerticalAlignment.Center));
-                row.Children.Add(Number("/" + command.id, 12.5, Fnt, Regular).Align(v: VerticalAlignment.Center));
-                row.Children.Add(Sans(command.label, 13).Align(v: VerticalAlignment.Center));
-                row.Children.Add(Sans(command.detail, 11.5, Fnt).Align(v: VerticalAlignment.Center));
+                var row = Columns(10, (new GridLength(16), Icon(command.symbol, 12, Sub).Align(v: VerticalAlignment.Center)),
+                    (Auto, Number("/" + command.id, 12.5, Fnt, Regular).Align(v: VerticalAlignment.Center)),
+                    (Auto, Sans(command.label, 13).Align(v: VerticalAlignment.Center)),
+                    (Star(), Sans(command.detail, 11.5, Fnt).Wrap(1).Align(v: VerticalAlignment.Center)));
+                row.Height = 32;
+                row.Padding = new Thickness(10, 0, 10, 0);
                 var id = command.id;
                 menu.Children.Add(MenuRow(row, () => RunSlash(id), command.label));
             }
-            stack.Children.Add(new Border { Child = menu, Padding = new Thickness(4), Background = Brush(V3.White), CornerRadius = new CornerRadius(10), BorderBrush = Brush(Cl), BorderThickness = new Thickness(1) });
+            stack.Children.Add(new Border
+            {
+                Child = menu, Padding = new Thickness(6), MaxWidth = 560, HorizontalAlignment = HorizontalAlignment.Left, Background = Brush(White), CornerRadius = new CornerRadius(8),
+                BorderBrush = Brush(Cl), BorderThickness = new Thickness(1), Margin = new Thickness(0, 0, 0, 8),
+            }.Elevate(10));
         }
-        if (_attachments.Count > 0) stack.Children.Add(AttachmentStrip());
+        if (_attachments.Count > 0) stack.Children.Add(AttachmentStrip().Pad(0, 0, 0, 8));
         if (_contexts.Count > 0)
         {
             var flow = new VariableSizedFlow(6);
-            foreach (var item in _contexts.ToList())
-            {
-                var remove = Icon("xmark", 8, Txt).Align(v: VerticalAlignment.Center).OnTap(() => { _contexts.Remove(item); Render(); }, $"移除 {item.Text("label")}");
-                flow.Add(new Border { Child = HStack(4, Sans(item.Text("label"), 12).Align(v: VerticalAlignment.Center), remove), Padding = new Thickness(8, 0, 8, 0), Height = 24, Background = Brush(BlueSoft), CornerRadius = new CornerRadius(6) });
-            }
-            stack.Children.Add(flow.Panel);
+            foreach (var item in _contexts.ToList()) flow.Add(ContextChip(item));
+            stack.Children.Add(flow.Panel.Pad(4, 0, 0, 11));
         }
+        stack.Children.Add(InputBox());
 
-        // `.assistant-input`：最小 58 高、#d6d6d0 描边、圆角 18、内边距 12/12/12/18；32 的发送钮在输入框里，生成中换成停止
-        var input = ChatInputField(_ready == false ? "AI 助手暂未开放" : "继续提问或说明调整要求…");
-        var lines = Math.Max(1, _draft.Split('\n').Length);
-        input.Root.Height = Math.Min(132, 32 + (lines - 1) * 22);
-        UIElement action;
-        if (Sending && _runId is not null)
-        {
-            var stop = new Grid { Width = 32, Height = 32 };
-            stop.Children.Add(new Border { CornerRadius = new CornerRadius(16), Background = Brush(Txt) });
-            stop.Children.Add(new Border { Width = 10, Height = 10, CornerRadius = new CornerRadius(2), Background = Brush(V3.White) });
-            stop.OnTap(() => _ = CancelAsync(), "停止生成");
-            action = stop;
-        }
-        else
-        {
-            var send = new Border { Width = 32, Height = 32, CornerRadius = new CornerRadius(16), Background = Brush(CanSend ? Txt : Hex(0xC9C9C3)), Child = Icon("arrow.up", 13, V3.White).Align(HorizontalAlignment.Center, VerticalAlignment.Center) };
-            send.OnTap(() => _ = SendAsync(_draft), "发送", () => CanSend);
-            input.Box.TextChanged += (_, _) => send.Background = Brush(CanSend ? Txt : Hex(0xC9C9C3));
-            action = send;
-        }
-        var row2 = Columns(12, (Star(), input.Root), (GridLength.Auto, ((FrameworkElement)action).Align(v: VerticalAlignment.Bottom)));
-        stack.Children.Add(new Border
-        {
-            Child = row2, Padding = new Thickness(18, 12, 12, 12), MinHeight = 58, Background = Brush(V3.White), CornerRadius = new CornerRadius(18),
-            BorderBrush = Brush(Hex(0xD6D6D0)), BorderThickness = new Thickness(1),
-        });
-
-        // `.assistant-composer-foot`：距输入框 8、22 高；左「＋ 添加资料」12.5px，右侧上下文用量与模型，间距 16
-        var add = HStack(6, Icon("plus", 10, Sub), Sans("添加资料", 12.5, Sub).Align(v: VerticalAlignment.Center));
-        add.OnTap(() => ShowAddMenu(add), "添加资料", () => !Sending);
+        var add = HStack(6, Icon("plus", 10, Sub).Align(v: VerticalAlignment.Center), Sans("添加资料", 12.5, Sub));
+        add.OnTap(() => ToggleFloating(Floating.Materials), "添加资料", () => !Sending);
         var left = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
         left.Children.Add(add);
-        if (_notice is { } notice) left.Children.Add(Sans(notice, 11.5, V3.Orange).Wrap(2).Align(v: VerticalAlignment.Center));
-        var right = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 16 };
-        if (ContextUsageRing.Make(_contextUsage, CurrentModelName, _usageOpen, open => _usageOpen = open, Sending || _currentId is null, () => _ = CompactAsync()) is { } ring) right.Children.Add(ring);
-        right.Children.Add(new ModelPicker(_models, _modelId, id => { if (_models.FirstOrDefault(m => m.Text("id") == id) is { } model) _ = ChooseModelAsync(model); }, disabled: Sending).Align(v: VerticalAlignment.Center));
-        var foot = Columns(10, (Star(), left), (GridLength.Auto, right));
-        foot.Height = 22;
-        foot.Margin = new Thickness(12, 0, 10, 0);
+        if (_notice is { } notice) left.Children.Add(Sans(notice, 11.5, Orange).Wrap(2).Align(v: VerticalAlignment.Center));
+        var right = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 14 };
+        if (AssistantUsage.Ring(_contextUsage, _ => ToggleFloating(Floating.Usage)) is { } ring) right.Children.Add(ring.Align(v: VerticalAlignment.Center));
+        right.Children.Add(new ModelPicker(_models, _modelId, id => { if (_models.FirstOrDefault(m => m.Text("id") == id) is { } model) _ = ChooseModelAsync(model); }, disabled: Sending)
+            .Align(v: VerticalAlignment.Center));
+        var foot = Columns(10, (Star(), left.Align(v: VerticalAlignment.Center)), (GridLength.Auto, right));
+        foot.MinHeight = 16;
+        foot.Margin = new Thickness(12, 12, 12, 0);
         stack.Children.Add(foot);
         return stack;
     }
 
     static Border MenuRow(FrameworkElement content, Action action, string name)
     {
-        // Mac `MenuRowStyle`（`.v3-menu-item:hover`）：悬停 #F4F4F2、6 圆角
-        var row = new Border { Child = content, CornerRadius = new CornerRadius(6), Background = Brush(Clear) };
+        var row = new Border { Child = content, CornerRadius = new CornerRadius(4), Background = Brush(Clear) };
         row.OnHover(on => row.Background = Brush(on ? Field : Clear));
-        row.OnTap(action, name);
-        return row;
+        return row.OnTap(action, name);
     }
 
-    void ShowAddMenu(FrameworkElement anchor)
+    /// <summary>输入框上方的引用标签（02B·03 · Context/Resume）：白底细边圆角 6.5、23 高，图标 + 名称 + 灰色类型 + ×。</summary>
+    FrameworkElement ContextChip(JsonNode item)
     {
-        _ = LoadContextsAsync();
-        var panel = new StackPanel { Width = 260 - 12 };
-        Flyout? flyout = null;
-        var upload = Columns(10, (Px(16), Icon("plus", 13, Txt)), (Star(), Sans("上传文件", 14)), (GridLength.Auto, Sans("图片、文档和录音", 11, Sub)));
-        upload.Padding = new Thickness(10);
-        panel.Children.Add(MenuRow(upload, () => { flyout?.Hide(); _ = PickFilesAsync(); }, "上传文件"));
-        var reference = Columns(10, (Px(16), Icon("folder", 13, Txt)), (Star(), Sans("引用已有资料", 14)));
-        reference.Padding = new Thickness(10);
-        panel.Children.Add(MenuRow(reference, () => { flyout?.Hide(); ShowReferencePicker(); }, "引用已有资料"));
-        flyout = V3Popover.Show(anchor, panel, Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.Top);
+        var type = item.Text("type");
+        var symbol = type is "resume" or "resume_version" ? "doc.text" : type == "dataset" ? "folder" : "doc";
+        var remove = new Grid { Width = 12, Height = 12, Background = Brush(Clear), Children = { Icon("xmark", 7, Fnt).Align(HorizontalAlignment.Center, VerticalAlignment.Center) } }
+            .OnTap(() => { _contexts.Remove(item); Render(); }, $"移除 {item.Text("label")}");
+        return new Border
+        {
+            Child = HStack(6, Icon(symbol, 9, Sub).Align(v: VerticalAlignment.Center),
+                Label(type == "user_profile" ? "个人画像" : item.Text("label"), 12, Txt, Medium).Wrap(1).Align(v: VerticalAlignment.Center),
+                Sans(ContextTypeLabel(type).Replace("版本", ""), 11, Faint).Align(v: VerticalAlignment.Center), remove.Align(v: VerticalAlignment.Center)),
+            Padding = new Thickness(9, 0, 6, 0), Height = 23, MaxWidth = 280, CornerRadius = new CornerRadius(6.5), Background = Brush(White),
+            BorderBrush = Brush(Cl), BorderThickness = new Thickness(1),
+        };
+    }
+
+    Border InputBox()
+    {
+        var input = ChatInputField(_ready == false ? "AI 助手暂未开放" : IsBlank ? "有什么想问的？" : "继续提问或说明调整要求…");
+        UIElement action;
+        if (Sending && _runId is not null)
+        {
+            var stop = new Grid { Width = 32, Height = 32 };
+            stop.Children.Add(new Border { CornerRadius = new CornerRadius(16), Background = Brush(Txt) });
+            stop.Children.Add(new Border { Width = 9, Height = 9, CornerRadius = new CornerRadius(2), Background = Brush(White) });
+            stop.OnTap(() => _ = CancelAsync(), "停止生成");
+            action = stop;
+        }
+        else
+        {
+            // 发送钮是这一页唯一的黑色：有内容时墨黑，否则 #C9C9C3
+            var send = new Border { Width = 32, Height = 32, CornerRadius = new CornerRadius(16), Background = Brush(CanSend ? Txt : Hex(0xC9C9C3)), Child = Icon("arrow.up", 13, White).Align(HorizontalAlignment.Center, VerticalAlignment.Center) };
+            send.OnTap(() => _ = SendAsync(_draft), "发送", () => CanSend);
+            input.TextChanged += (_, _) => send.Background = Brush(CanSend ? Txt : Hex(0xC9C9C3));
+            action = send;
+        }
+        var row = Columns(12, (Star(), input), (GridLength.Auto, ((FrameworkElement)action).Align(v: VerticalAlignment.Bottom)));
+        _inputBox = new Border
+        {
+            Child = row, Padding = new Thickness(18, 12, 12, 12), MinHeight = 57, Background = Brush(White), CornerRadius = new CornerRadius(17.5),
+            BorderBrush = Brush(Hex(0xD6D6D0)), BorderThickness = new Thickness(1),
+        };
+        return _inputBox;
     }
 
     /// <summary>
-    /// 对话输入框（Mac `ChatInputField`）：14px 系统字体，回车发送、Shift + 回车换行、输入法组字时回车照常确认；
-    /// Esc 收起快捷命令；Ctrl + V 粘贴图片或文件时走附件。
+    /// 对话输入框（Mac `ChatInputField`）：14 号字，回车发送、Shift + 回车换行、输入法组字时回车照常确认；
+    /// Esc 依次收起弹层 / @ 列表 / 快捷命令；Ctrl + V 粘贴图片或文件时走附件。
     /// </summary>
-    (Grid Root, TextBox Box) ChatInputField(string placeholder)
+    TextBox ChatInputField(string placeholder)
     {
         var box = new TextBox
         {
             Text = _draft, PlaceholderText = placeholder, FontSize = 14, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap,
-            BorderThickness = new Thickness(0), Background = Brush(Clear), Padding = new Thickness(0, 6, 0, 0), MinHeight = 0,
-            PlaceholderForeground = Brush(Fnt2), IsSpellCheckEnabled = false,
+            BorderThickness = new Thickness(0), Background = Brush(Clear), Padding = new Thickness(0, 6, 0, 0), MinHeight = 32, MaxHeight = 132,
+            PlaceholderForeground = Brush(Faint), IsSpellCheckEnabled = false, FontFamily = SansFamily,
         };
-        foreach (var key in new[] { "TextControlBackgroundPointerOver", "TextControlBackgroundFocused", "TextControlBorderBrushFocused", "TextControlBorderBrushPointerOver" })
-            box.Resources[key] = Brush(Clear);
-        ScrollViewer.SetVerticalScrollBarVisibility(box, ScrollBarVisibility.Hidden);
+        Quiet(box.Resources);
+        ScrollViewer.SetVerticalScrollBarVisibility(box, ScrollBarVisibility.Auto);
         AutomationProperties.SetName(box, "告诉助手你想完成什么");
         _input = box;
         var composing = false;
@@ -179,15 +273,26 @@ public sealed partial class AssistantChatView
         box.TextChanged += (_, _) =>
         {
             var before = SlashMatches().Count;
-            var lineCount = _draft.Split('\n').Length;
+            var mentionBefore = MentionQuery;
             _draft = box.Text;
             if (!_draft.StartsWith('/')) _slashDismissed = false;
-            // 快捷命令列表出现 / 消失或行数变化时重建，其余情况只改发送钮颜色
-            if (SlashMatches().Count != before || _draft.Split('\n').Length != lineCount) Render();
+            if (!_draft.Contains('@')) _mentionDismissed = false;
+            if (_draft.EndsWith('@')) _ = LoadContextsAsync().ContinueWith(_ => DispatcherQueue.TryEnqueue(() => _floatingPanel?.Refresh()), TaskScheduler.Default);
+            var mention = MentionQuery;
+            if (mention is not null && _floating != Floating.Mention) ShowFloating(Floating.Mention);
+            else if (mention is null && _floating == Floating.Mention) CloseFloating();
+            else if (mention != mentionBefore) _floatingPanel?.Refresh();
+            // 快捷命令列表出现 / 消失时重建，其余情况只改发送钮颜色
+            if (SlashMatches().Count != before) Render();
         };
         box.PreviewKeyDown += async (_, e) =>
         {
-            if (e.Key == Windows.System.VirtualKey.Escape && SlashMatches().Count > 0) { e.Handled = true; _slashDismissed = true; Render(); return; }
+            if (e.Key == Windows.System.VirtualKey.Escape)
+            {
+                if (_floating is not null) { e.Handled = true; if (_floating == Floating.Mention) _mentionDismissed = true; CloseFloating(); }
+                else if (SlashMatches().Count > 0) { e.Handled = true; _slashDismissed = true; Render(); }
+                return;
+            }
             var ctrl = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
             if (ctrl && e.Key == Windows.System.VirtualKey.V)
             {
@@ -201,19 +306,20 @@ public sealed partial class AssistantChatView
             if (shift) return;
             e.Handled = true;
             if (SlashMatches().FirstOrDefault() is { id: not null } first) RunSlash(first.id);
+            else if (MentionQuery is { } query && _contextGroups.SelectMany(g => g.Items("items"))
+                         .FirstOrDefault(i => query.Length == 0 || i.Text("label").Contains(query, StringComparison.OrdinalIgnoreCase)) is { } hit) PickMention(hit);
             else if (CanSend) await SendAsync(_draft);
         };
-        var root = new Grid { MinHeight = 32, MaxHeight = 132 };
-        root.Children.Add(box);
-        return (root, box);
+        return box;
     }
 
     // MARK: 附件
 
+    /// <summary>输入框里待发送的附件（02B·06 / 08 F）：图片 56×56 缩略图，其余文件卡；失败时细边变红、下面写「重试」。</summary>
     FrameworkElement AttachmentStrip()
     {
         var stack = new StackPanel { Spacing = 4 };
-        var flow = new VariableSizedFlow(6);
+        var flow = new VariableSizedFlow(8);
         foreach (var shot in _attachments.ToList())
         {
             var cell = new Grid();
@@ -224,7 +330,7 @@ public sealed partial class AssistantChatView
                 using (var stream = new MemoryStream(data)) bitmap.SetSource(stream.AsRandomAccessStream());
                 body = new Border
                 {
-                    Width = 52, Height = 52, CornerRadius = new CornerRadius(8), BorderBrush = Brush(shot.Status == ChatAttachment.States.Failed ? Red : Cl), BorderThickness = new Thickness(1),
+                    Width = 56, Height = 56, CornerRadius = new CornerRadius(8), BorderBrush = Brush(shot.Status == ChatAttachment.States.Failed ? Red : Cl), BorderThickness = new Thickness(1),
                     Background = new ImageBrush { ImageSource = bitmap, Stretch = Stretch.UniformToFill },
                 };
                 body.OnTap(() => OpenPreview(shot.Tab), $"预览 {shot.Label}");
@@ -232,21 +338,18 @@ public sealed partial class AssistantChatView
             }
             else
             {
-                var texts = new StackPanel { Spacing = 1 };
-                texts.Children.Add(Sans(shot.Label, 12).Also(t => t.MaxWidth = 160));
-                if (shot.Status == ChatAttachment.States.Uploading) texts.Children.Add(Sans("正在上传…", 10.5, Fnt));
-                else if (shot.Kind == "audio") texts.Children.Add(Sans("录音", 10.5, Fnt));
-                body = new Border
+                var detail = shot.Status switch
                 {
-                    Child = HStack(6, Icon(shot.Kind == "audio" ? "mic" : "folder", 15, Sub).Align(v: VerticalAlignment.Center), texts.Align(v: VerticalAlignment.Center)),
-                    Padding = new Thickness(10, 0, 10, 0), Height = 52, Background = Brush(Field), CornerRadius = new CornerRadius(8),
-                    BorderBrush = Brush(shot.Status == ChatAttachment.States.Failed ? Red : Clear), BorderThickness = new Thickness(1),
+                    ChatAttachment.States.Uploading => "正在上传…",
+                    ChatAttachment.States.Failed => "上传失败",
+                    _ => string.Join(" · ", new[] { shot.Kind == "audio" ? "录音" : Path.GetExtension(shot.Label).TrimStart('.').ToUpperInvariant(), FileSize(shot.Size) }.Where(x => x.Length > 0)),
                 };
+                body = AttachmentCard(shot.Label, FileSymbol(shot.Label, shot.Kind), detail, shot.Status == ChatAttachment.States.Failed);
             }
             cell.Children.Insert(0, body);
             var remove = new Border
             {
-                Width = 15, Height = 15, CornerRadius = new CornerRadius(7.5), Background = Brush(V3.White), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
+                Width = 15, Height = 15, CornerRadius = new CornerRadius(7.5), Background = Brush(White), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
                 Child = Icon("xmark.circle.fill", 13, Fnt), RenderTransform = new TranslateTransform { X = 5, Y = -5 },
             };
             remove.OnTap(() => RemoveAttachment(shot), $"移除附件 {shot.Label}");
@@ -257,7 +360,7 @@ public sealed partial class AssistantChatView
         foreach (var shot in _attachments.Where(a => a.Error is not null))
         {
             var id = shot.Id;
-            stack.Children.Add(HStack(6, Sans($"{shot.Label}：{shot.Error}", 11.5, Red), Sans("重试", 11.5, Link).OnTap(() => _ = UploadAsync(id), "重试")));
+            stack.Children.Add(HStack(6, Sans($"{shot.Label}：{shot.Error}", 11.5, Red), Sans("重试", 11.5, Red).OnTap(() => _ = UploadAsync(id), "重试")));
         }
         return stack;
     }
@@ -382,19 +485,20 @@ public sealed partial class AssistantChatView
     async Task OpenAsync()
     {
         _currentId = _sessionId;
+        if (_sessionId is null) _ = LoadGreetingAsync();
         try
         {
             var readiness = TryAsync(() => Api.CareerRequestAsync("/api/agent/readiness"));
             var model = TryAsync(() => Api.CareerRequestAsync("/api/agent/model"));
             await Task.WhenAll(readiness, model);
-            _ready = readiness.Result?.Get("ready") is JsonValue flag && flag.GetValueKind() is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False
+            _ready = readiness.Result.Get("ready") is JsonValue flag && flag.GetValueKind() is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False
                 ? flag.Bool() : readiness.Result is null ? null : false;
-            if (readiness.Result?.Get("steering") is JsonValue steering) _steering = steering.Bool();
-            _modelName = model.Result?.Get("model").Text("name").NonEmpty();
+            if (readiness.Result.Get("steering") is JsonValue steering) _steering = steering.Bool();
+            _modelName = model.Result.Get("model").Text("name").NonEmpty();
             if (await TryAsync(() => Api.CareerRequestAsync("/api/agent/models")) is { } list)
             {
                 _models = list.Items("models");
-                _modelId = (_sessionId is null ? _initialModelId : null) ?? list.Text("defaultModelId").NonEmpty() ?? model.Result?.Get("model").Text("id").NonEmpty();
+                _modelId = (_sessionId is null ? _initialModelId : null) ?? list.Text("defaultModelId").NonEmpty() ?? model.Result.Get("model").Text("id").NonEmpty();
             }
             Render();
             if (_sessionId is { } id)
@@ -408,6 +512,13 @@ public sealed partial class AssistantChatView
                 _consumedInitial = true;
                 await SendAsync(initial);
             }
+            else if (_initialDraft is { } draft && !_consumedInitial && _draft.Length == 0)
+            {
+                _consumedInitial = true;
+                _draft = draft;
+                Render();
+            }
+            await LoadContextsAsync();
         }
         catch (Exception error) { _error = AgentErrors.Message(error); Render(); }
     }
@@ -487,11 +598,10 @@ public sealed partial class AssistantChatView
             var files = replyTo is null ? _attachments.ToList() : [];
             if (files.Count > 0) body["attachment_ids"] = new JsonArray(files.Select(f => f.AttachmentId).OfType<string>().Select(x => (JsonNode)x).ToArray());
             if (replyTo is { } reply) body["reply_to_sequence_no"] = reply;
-            if (_revisionProposalId is { } revision) { body["revision_proposal_id"] = revision; _revisionProposalId = null; }
             if (clarificationAnswers is not null) body["clarification_answers"] = clarificationAnswers;
             _draft = ""; _contexts = []; _answers.Clear();
             if (replyTo is null) _attachments = [];
-            var sentFiles = new JsonArray(files.Select(f => (JsonNode)new JsonObject { ["file_name"] = f.Label, ["kind"] = f.Kind }).ToArray());
+            var sentFiles = new JsonArray(files.Select(f => (JsonNode)new JsonObject { ["file_name"] = f.Label, ["kind"] = f.Kind, ["file_size"] = f.Size }).ToArray());
             _messages.Add(new JsonObject { ["role"] = "user", ["content"] = content, ["contexts"] = new JsonArray(attached.Select(c => c.DeepClone()).ToArray()), ["attachments"] = sentFiles });
             _stickToBottom = true;
             await StreamAsync($"/api/agent/sessions/{id}/messages", "POST", body, id);
@@ -512,10 +622,31 @@ public sealed partial class AssistantChatView
         }
     }
 
+    /// <summary>编辑最后一条消息（02B·08 E）：`POST …/messages/{seq}:edit`，这条之后的回复会被新的回复替换。</summary>
+    async Task SubmitEditAsync(int index)
+    {
+        if (_currentId is not { } id || index >= _messages.Count || Sending || _messages[index].Number("sequence_no") is not { } seq) return;
+        var content = _editDraft.Trim();
+        if (content.Length == 0) return;
+        var original = _messages[index];
+        _editingIndex = null; _error = null; _streaming = ""; _status = null; _creditBlock = null;
+        _messages = _messages.Take(index).Append(new JsonObject
+        {
+            ["role"] = "user", ["content"] = content,
+            ["contexts"] = original["contexts"]?.DeepClone() ?? new JsonArray(), ["attachments"] = original["attachments"]?.DeepClone() ?? new JsonArray(),
+        }).ToList();
+        _stickToBottom = true;
+        await StreamAsync($"/api/agent/sessions/{id}/messages/{(int)seq}:edit", "POST",
+            new JsonObject { ["content"] = content, ["idempotency_key"] = Guid.NewGuid().ToString("D") }, id);
+    }
+
     async Task StreamAsync(string path, string method, JsonNode? body, string id)
     {
         if (Api is not HttpApiClient client) return;
         Sending = true;
+        _phaseStarted = DateTimeOffset.Now;
+        _live = new ProcessSnapshot { Started = _phaseStarted };
+        _processExpanded = false;
         _streamCancel = new CancellationTokenSource();
         Render();
         try
@@ -533,11 +664,24 @@ public sealed partial class AssistantChatView
             if (error is ApiException { Status: System.Net.HttpStatusCode.Unauthorized }) App.Session.ReportAuthenticationFailure();
             if (_currentId == id) _error = AgentErrors.Message(error);
         }
-        finally { Sending = false; _runId = null; _status = null; }
+        finally
+        {
+            if (_runId is { } run && _processes.TryGetValue(run, out var snapshot) && snapshot.Ended is null) snapshot.Ended = DateTimeOffset.Now;
+            Sending = false; _runId = null; _status = null;
+        }
         _streaming = "";
         if (_currentId == id) await ReloadAsync(id);
         Shell.WorkspaceShell.Current.ReloadSessions();
         Render();
+    }
+
+    /// <summary>准备过程：同一份改动同时记在当前显示（`_live`）和按 runId 保留的快照里。</summary>
+    void UpdateProcess(Action<ProcessSnapshot> change)
+    {
+        change(_live);
+        if (_runId is not { } run) return;
+        if (!_processes.TryGetValue(run, out var snapshot)) _processes[run] = snapshot = new ProcessSnapshot { Started = _phaseStarted };
+        change(snapshot);
     }
 
     void Handle(AgentEvent agentEvent)
@@ -546,15 +690,32 @@ public sealed partial class AssistantChatView
         if (_runId is null && data.Text("runId").Length > 0) _runId = data.Text("runId");
         switch (agentEvent.Type)
         {
-            case "run.phase" or "assistant.activity.status": _status = data.Text("label").NonEmpty() ?? _status; break;
-            case "tool.started": _status = "正在调用工具…"; break;
+            case "run.phase": _status = data.Text("label").NonEmpty() ?? _status; break;
+            case "assistant.activity.status":
+            {
+                var key = data.Text("callKey");
+                if (key.Length == 0) { _status = data.Text("label").NonEmpty() ?? _status; break; }
+                var activity = new ProcessSnapshot.Activity(key, data.Text("label"), data.Text("status").NonEmpty() ?? "running", data.Text("summary"));
+                UpdateProcess(snapshot => snapshot.Apply(activity));
+                break;
+            }
+            case "assistant.activity.delta":
+            {
+                var delta = data.Text("delta");
+                UpdateProcess(snapshot => snapshot.AppendText(delta));
+                break;
+            }
+            case "assistant.activity.clear": _live = new ProcessSnapshot { Started = _phaseStarted }; _processExpanded = false; break;
+            case "tool.started": if (_live.Activities.Count == 0) _status = "正在调用工具…"; break;
             case "assistant.delta": _streaming += data.Text("delta"); break;
             case "assistant.message.completed":
             {
-                var message = new JsonObject { ["role"] = "assistant", ["content"] = data.Text("content"), ["sequence_no"] = data.Get("sequenceNo")?.DeepClone() };
+                var message = new JsonObject { ["role"] = "assistant", ["content"] = data.Text("content"), ["sequence_no"] = data.Get("sequenceNo")?.DeepClone(), ["run_id"] = _runId ?? "" };
                 if (data.Get("clarification") is { } clarification) message["clarification"] = clarification.DeepClone();
+                if (data.Get("cards") is { } cards) message["cards"] = cards.DeepClone();
                 _messages.Add(message);
                 _streaming = "";
+                if (_runId is { } run && _processes.TryGetValue(run, out var snapshot)) snapshot.Ended = DateTimeOffset.Now;
                 break;
             }
             case "clarification.requested":
@@ -567,10 +728,13 @@ public sealed partial class AssistantChatView
             case "context.usage" or "context.compaction.completed":
             {
                 var window = data.Get("contextWindow") ?? _contextUsage.Get("context_window");
-                _contextUsage = new JsonObject { ["tokens"] = data.Get("tokens")?.DeepClone(), ["context_window"] = window?.DeepClone(), ["breakdown"] = (data.Get("breakdown") ?? _contextUsage.Get("breakdown"))?.DeepClone() };
+                _contextUsage = new JsonObject
+                {
+                    ["tokens"] = data.Get("tokens")?.DeepClone(), ["context_window"] = window?.DeepClone(), ["breakdown"] = (data.Get("breakdown") ?? _contextUsage.Get("breakdown"))?.DeepClone(),
+                };
                 break;
             }
-            case "context.compaction.started": _status = "正在整理较早对话…"; break;
+            case "context.compaction.started": _status = "正在压缩上下文…"; break;
             case "user.message.rejected": _error = AgentErrors.Message(new ApiException(System.Net.HttpStatusCode.Conflict, data.Text("error"))); break;
             case "run.failed":
             {
@@ -609,24 +773,6 @@ public sealed partial class AssistantChatView
         await SendAsync(text, (int?)message.Number("sequence_no"), payload);
     }
 
-    async Task ApplyAllAsync(string key, IReadOnlyList<JsonNode> items)
-    {
-        var pending = items.Where(p => p.Text("status") == "pending").ToList();
-        if (pending.Count <= 1 || _batchProgress is not null || _proposalBusy is not null || Sending) return;
-        _batchProgress = (key, 0, pending.Count);
-        Render();
-        try
-        {
-            for (var index = 0; index < pending.Count; index++)
-            {
-                if (!await DecideAsync(pending[index], true)) break;
-                _batchProgress = (key, index + 1, pending.Count);
-                Render();
-            }
-        }
-        finally { _batchProgress = null; Render(); }
-    }
-
     async Task<bool> DecideAsync(JsonNode proposal, bool confirm)
     {
         var id = proposal.Text("id");
@@ -643,6 +789,12 @@ public sealed partial class AssistantChatView
         catch (Exception error)
         {
             if (error is ApiException { Status: System.Net.HttpStatusCode.Unauthorized }) App.Session.ReportAuthenticationFailure();
+            // 简历刚被改过：这一处标“没能采用”，原位换成「按现在的内容重写」
+            if (error is ApiException { Code: "AGENT_PROPOSAL_CONFLICT" } && _proposals.FirstOrDefault(p => p.Text("id") == id) is JsonObject conflicted)
+            {
+                conflicted["status"] = "conflicted";
+                return false;
+            }
             _error = AgentErrors.Message(error);
             if (_currentId is { } current) await ReloadAsync(current);
             return false;
@@ -680,11 +832,11 @@ public sealed partial class AssistantChatView
         catch (Exception error) { _modelId = previous; _error = AgentErrors.Message(error); Render(); }
     }
 
-    /// <summary>整理较早对话（Web `compactConversation`）：流式执行，结束后刷新会话与用量。</summary>
+    /// <summary>压缩上下文（Web `compactConversation`）：流式执行，结束后刷新会话与用量。</summary>
     async Task CompactAsync()
     {
         if (_currentId is not { } current || Sending) return;
-        _status = "正在整理较早对话…";
+        _status = "正在压缩上下文…";
         _error = null;
         await StreamAsync($"/api/agent/sessions/{current}/compact", "POST", new JsonObject { ["idempotency_key"] = Guid.NewGuid().ToString("D") }, current);
     }
@@ -692,8 +844,8 @@ public sealed partial class AssistantChatView
     void NewConversation()
     {
         _currentId = null; _messages = []; _proposals = []; _streaming = ""; _error = null; _title = "新对话";
-        _attachments = []; _contexts = []; _contextUsage = null;
-        Render();
+        _attachments = []; _contexts = []; _contextUsage = null; _processes.Clear(); _live = new ProcessSnapshot(); _editingIndex = null;
+        Shell.WorkspaceShell.Current.NewChat();
     }
 
     async Task CancelAsync()
@@ -702,23 +854,9 @@ public sealed partial class AssistantChatView
         try { await Api.CareerRequestAsync($"/api/agent/runs/{run}/cancel", "POST"); } catch { }
     }
 
-    // MARK: 弹窗
-
-    void ShowReferencePicker()
+    /// <summary>保存 AI 文档到资料库：Windows ContentDialog 样式的对话框。</summary>
+    void ShowSaveDocument(string content)
     {
-        _ = LoadContextsAsync().ContinueWith(_ => DispatcherQueue.TryEnqueue(() =>
-            V3Overlay.Show(XamlRoot, close => ReferencePicker.Make(_contextGroups, _contexts, ContextTypeLabel, picked =>
-            {
-                foreach (var item in picked) if (!_contexts.Any(c => c.ToJsonString() == item.ToJsonString())) _contexts.Add(item);
-                Render();
-            }, close))), TaskScheduler.Default);
-    }
-
-    void ShowSaveDocument()
-    {
-        if (_savingDocument is not { } content) return;
-        var saved = content;
-        V3Overlay.Show(XamlRoot, close => new SaveDocumentDialog(content, DocumentTitle(content) ?? "AI 文档", () => { _savingDocument = null; close(); },
-            () => { _savedDocuments.Add(saved); Render(); }), dismissed: () => _savingDocument = null);
+        V3Overlay.Show(XamlRoot, close => new SaveDocumentDialog(content, DocumentTitle(content) ?? "AI 文档", close, () => { _savedDocuments.Add(content); Render(); }));
     }
 }

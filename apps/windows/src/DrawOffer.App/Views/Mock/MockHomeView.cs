@@ -1,263 +1,301 @@
 using System.Text.Json.Nodes;
 using DrawOffer.App.DesignSystem;
+using DrawOffer.App.Views.Resumes;
 using DrawOffer.Core.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Shapes;
 using static DrawOffer.App.DesignSystem.V3;
 
 namespace DrawOffer.App.Views.Mock;
 
-/// <summary>Mac MockHomeV2：掌握图、地平线和面试设置。</summary>
-public sealed partial class MockHomeView : UserControl
+/// <summary>
+/// 模拟面试首页（Windows 稿 09 · 01：01.01 没有简历 / 01.02 有简历没面试 / 01.03–01.05 一到多条记录；Mac `MockHomeV2`、Web `v2/MockHome.tsx`）。
+/// 五个状态共用一个骨架：页头写结论、操作放右上，中间固定三行录音时间线，分隔线下是四列摘要。
+/// </summary>
+public sealed class MockHomeView : UserControl
 {
-    readonly Action<string> _open, _report;
-    readonly Action _records, _resumes, _jobs, _library, _schedule;
-    readonly PracticeFocus? _incoming;
+    static readonly string[] CountWord = ["", "一", "两", "三", "四", "五", "六", "七", "八", "九"];
+    static readonly string[] StopLabel = ["", "停在这里", "两次都停在这里", "每次都停在这里"];
+    static readonly double[] RowOpacity = [1, 0.75, 0.5], GhostFade = [0.5, 0.25, 0.12], EmptyFade = [0.6, 0.32, 0.14];
+    const double QuoteW = 263, MetaW = 154;
+
+    readonly Action<string> _open;
+    readonly Action _records, _resumes, _config;
     readonly MockViewLifetime _life;
-    List<JsonNode> _list = [], _applications = [], _sessions = [], _resumesData = [], _datasets = [], _prices = [];
-    JsonNode? _atlas, _outline, _match, _detail, _application;
-    string? _chosen, _selected, _selectedSession, _focus, _targetRole, _remind;
-    string _resume = "", _type = "comprehensive", _difficulty = "intermediate", _mode = "voice", _language = "zh", _error = "";
-    bool _loaded, _speech, _busy, _unknownCreate, _typeTouched, _focusTouched, _resumeTouched, _follow = true, _materials = true;
-    int _count = 8, _generation;
+    JsonNode? _overview;
+    List<JsonNode> _list = [], _resumeList = [];
+    bool _loaded, _failed;
+    string? _waitingId;
     readonly DispatcherTimer _poll = new() { Interval = TimeSpan.FromSeconds(5) };
-    DateTimeOffset _now = Beijing.Now;
-    MockMap.Target Target => MockMap.PickTarget(_applications, _sessions, _now, _chosen);
-    double TargetLevel => MockMap.DiffLevel.GetValueOrDefault(_difficulty, 3);
-    string TargetLabel => $"{MockMap.DiffName[_difficulty]}目标线 · 要答到「{MockMap.Levels[(int)TargetLevel - 1]}」";
-    (List<MockMap.HomePoint> Points, List<MockMap.Sector> Sectors) Home => MockMap.HomePoints(_atlas, _outline, _match, _type);
-    JsonNode? Active => _list.FirstOrDefault(x => x.Text("status") is "preparing" or "in_progress");
-    JsonNode? Evaluating => _list.OrderByDescending(x => x.Text("created_at")).FirstOrDefault() is { } last && last.Text("status") is "evaluating" or "evaluation_failed" ? last : null;
-    JsonNode? Blocking => Active ?? Evaluating;
-    bool Fresh => _loaded && !_list.Any(x => x.Text("status") == "completed") && _atlas.Items("nodes").Count == 0 && Target.Kind == MockMap.TargetKind.General && _chosen != "general";
-    public MockHomeView(PracticeFocus? focus, Action<string> open, Action<string> report, Action records, Action resumes, Action jobs, Action library, Action schedule)
+    readonly Border _host = new();
+    double _width = 900, _height = 900;
+
+    public MockHomeView(Action<string> open, Action records, Action resumes, Action config)
     {
-        (_incoming, _open, _report, _records, _resumes, _jobs, _library, _schedule) = (focus, open, report, records, resumes, jobs, library, schedule);
-        _life = new(this, () => Content = null);
-        Loaded += async (_, _) => await Load(); Unloaded += (_, _) => _poll.Stop();
-        _poll.Tick += async (_, _) => { _poll.Stop(); await Load(); };
+        (_open, _records, _resumes, _config) = (open, records, resumes, config);
+        _life = new MockViewLifetime(this, () => { _overview = null; _list = []; Render(); });
+        var scroll = new ScrollViewer { Content = _host, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+        scroll.SizeChanged += (_, e) =>
+        {
+            if (Math.Abs(e.NewSize.Width - _width) < 1 && Math.Abs(e.NewSize.Height - _height) < 1) return;
+            (_width, _height) = (e.NewSize.Width, e.NewSize.Height);
+            Render();
+        };
+        Content = scroll;
+        Background = Brush(V3.White);
+        _poll.Tick += async (_, _) => await LoadAsync();
+        Unloaded += (_, _) => _poll.Stop();
+        Loaded += async (_, _) => await LoadAsync();
         Render();
     }
-    Task<JsonNode> Request(string path, string method = "GET", JsonNode? body = null, Dictionary<string,string>? query = null) => _life.Request(path, method, body, query);
-    async Task<JsonNode?> Optional(string path, Dictionary<string,string>? query = null)
+
+    JsonNode? Active => _list.FirstOrDefault(x => x.Text("status") is "in_progress" or "preparing");
+    JsonNode? Recent => _list.OrderByDescending(x => x.Text("created_at"), StringComparer.Ordinal).FirstOrDefault();
+    JsonNode? Evaluating => Recent is { } recent && recent.Text("status") is "evaluating" or "evaluation_failed" ? recent : null;
+    JsonNode? Blocking => Active ?? Evaluating;
+
+    string StartLabel(string idle) => Active is not null ? "继续这一场" : Evaluating is not null ? "看上一场" : idle;
+
+    void Start()
     {
-        try { return await Request(path, query: query); } catch (OperationCanceledException) { throw; } catch { return null; }
+        if (Blocking is { } blocking) _open(blocking.Text("id")); else _config();
     }
-    async Task Load()
-    {
-        var generation = ++_generation;
-        try
-        {
-            var list = Request("/api/mock-interviews", query: new() { ["limit"] = "100" });
-            var apps = Optional("/api/job-applications", new() { ["scope"] = "active", ["limit"] = "200" });
-            var sessions = Optional("/api/interview-sessions", new() { ["status"] = "scheduled", ["start_at"] = DateTimeOffset.UtcNow.AddHours(-6).ToString("O"), ["limit"] = "500" });
-            var resumes = Optional("/api/resumes"); var atlas = Optional("/api/memory/atlas"); var datasets = Optional("/api/datasets");
-            var speech = Optional("/api/mock-interviews/speech-capability"); var profile = Optional("/api/account/user-profile"); var prices = Optional("/api/billing/feature-prices");
-            await Task.WhenAll(new Task[] { list, apps, sessions, resumes, atlas, datasets, speech, profile, prices });
-            if (!_life.Alive || generation != _generation) return;
-            _list = list.Result.Items("items"); _applications = apps.Result.Items("items"); _sessions = sessions.Result.Items("items");
-            _resumesData = resumes.Result.Items("resumes"); _atlas = atlas.Result; _datasets = datasets.Result.Items("datasets"); _prices = prices.Result.Items("items");
-            _speech = speech.Result.Get("stt").Bool() && speech.Result.Get("tts").Bool(); if (!_loaded && !_speech) _mode = "text";
-            _targetRole = profile.Result.Get("profile").Text("target_role").NonEmpty() ?? profile.Result.Text("target_role").NonEmpty();
-            _loaded = true; _now = Beijing.Now; ApplyDefaults();
-            await LoadTarget(generation);
-            if (_unknownCreate) _unknownCreate = false;
-            if (_remind is { } id && _list.Any(x => x.Text("id") == id && x.Text("status") == "completed")) { _error = "评估报告好了，这场报告已经生成。"; _remind = null; }
-        }
-        catch (OperationCanceledException) { return; }
-        catch (Exception e) { if (_life.Alive) _error = MockReportData.Error(e); }
-        if (!_life.Alive || generation != _generation) return;
-        Render(); if (Evaluating?.Text("status") == "evaluating") _poll.Start();
-    }
-    async Task LoadTarget(int generation)
-    {
-        var target = Target; var app = target.Application?.Display("id"); var job = target.Kind == MockMap.TargetKind.General ? "" : target.Application.Display("job_description_id");
-        var application = string.IsNullOrEmpty(app) ? Task.FromResult<JsonNode?>(null) : Optional($"/api/job-applications/{app}");
-        var outline = Optional("/api/memory/outline", job.Length > 0 ? new() { ["job_id"] = job } : null);
-        var match = job.Length > 0 && _resume.Length > 0 ? Optional("/api/memory/match-evidence", new() { ["job_id"] = job, ["resume_id"] = _resume }) : Task.FromResult<JsonNode?>(null);
-        var id = _selectedSession ?? Blocking?.Text("id");
-        var detail = id is null ? Task.FromResult<JsonNode?>(null) : Optional($"/api/mock-interviews/{id}");
-        await Task.WhenAll(application, outline, match, detail);
-        if (!_life.Alive || generation != _generation) return;
-        _application = application.Result.Get("application"); _outline = outline.Result; _match = match.Result; _detail = detail.Result.Get("mock_interview"); ApplyDefaults();
-    }
-    void ApplyDefaults()
-    {
-        var linked = Target.Application.Display("resume_id");
-        if (!_resumeTouched && linked.Length > 0 && _resumesData.Any(x => x.Display("id") == linked)) _resume = linked;
-        else if (!_resumesData.Any(x => x.Display("id") == _resume)) _resume = _resumesData.OrderByDescending(x => x.Text("updated_at")).FirstOrDefault().Display("id");
-        if (!_typeTouched) _type = (Target.Session.Text("stage_label").NonEmpty() ?? Target.Application.Text("current_stage_label")).Trim().StartsWith("HR", StringComparison.OrdinalIgnoreCase) ? "hr" : "comprehensive";
-        if (_focusTouched) return;
-        _focus = _incoming is { } incoming ? Home.Points.FirstOrDefault(x => x.Focus is { } f && (f.Ref == incoming.Ref || x.Point.Name == incoming.Label || f.Label == incoming.Label))?.Point.Id
-            : Fresh ? null : MockMap.SuggestFocus(Home.Points, TargetLevel)?.Point.Id;
-    }
-    async Task ChangeTarget(string id)
-    {
-        _chosen = id; _selected = _selectedSession = null; _focusTouched = _resumeTouched = false; ApplyDefaults(); var generation = ++_generation;
-        try { await LoadTarget(generation); if (_life.Alive && generation == _generation) Render(); } catch (OperationCanceledException) { }
-    }
+
     void Render()
     {
-        var canvas = new Canvas { Width = 1151, Height = 828, Background = Brush(White) };
-        if (!_loaded && _error.Length > 0)
+        var gutter = V3Page.Gutter(_width);
+        var width = Math.Max(0, _width - gutter * 2);
+        // 行高跟着内容高度走：900 高是设计稿的 114，高屏把多出来的高度分给时间线
+        var runH = Math.Min(200, Math.Max(120, (_height - 528) / 2));
+        var page = new StackPanel { Width = width, HorizontalAlignment = HorizontalAlignment.Left };
+        _host.Padding = new Thickness(gutter, 52, gutter, 60);
+        _host.Child = page;
+
+        if (_overview is { } overview && _loaded)
         {
-            MockCanvas.Put(canvas, VStack(12, Serif("模拟面试没有加载出来", 18), Sans(_error, 13, Sub).Wrap(), new V3Button("重新加载", () => _ = Load())), 430, 310);
-            Content = MockCanvas.Stage(canvas); return;
-        }
-        var (points, sectors) = Home;
-        var mapPoints = points.Select(p => p.Point).ToList();
-        var slots = _detail is null ? null : MockLayout.SlotsOf(_detail, mapPoints);
-        var map = new MockMasteryMap(1151, 828, MockLayout.Home.At, slots?.Points ?? mapPoints, slots?.Sectors ?? sectors, TargetLevel, TargetLabel, id => { _selected = _selected == id ? null : id; _selectedSession = null; Render(); })
-        { Selected = _selected, Focus = slots is null ? _focus : null, PathSteps = slots?.Path, Center = Target.Kind == MockMap.TargetKind.General ? "只按简历" : Fresh ? "先练一场" : MockMap.CompanyName(Target) };
-        var subs = MockMap.PointSubs(points, TargetLevel, _focus);
-        map.LabelLayout = slots is null ? MockLayout.HomeMap(MockMap.Place(MockLayout.Home.At, mapPoints), sectors, TargetLevel, TargetLabel, subs.ToDictionary(x => x.Key, x => x.Value.Text), new[] { _selected, _focus }.OfType<string>().ToList(), true) : MockLayout.HomeSession(slots, TargetLevel, TargetLabel);
-        map.Bounds = slots?.Bounds; map.LabelOnly = slots?.Path.Select(x => x.Id).ToList();
-        map.Subs = slots is null ? subs : new Dictionary<string, (string, MockMap.SubTone)>();
-        map.Dim = _type == "project_deep_dive" ? sectors.Where(x => x.Name != MockMap.ProjectSector).Select(x => x.Name).ToList() : _type == "hr" ? sectors.Where(x => x.Name != MockMap.ExpressSector).Select(x => x.Name).ToList() : [];
-        if (Blocking is null) { var x = MockMap.SlotXs(_count)[0]; map.DropTarget = (x, MockMap.ArcY(1151, MockMap.HomeHorizonTop)(x)); map.DropFocus = id => { if (points.FirstOrDefault(p => p.Point.Id == id)?.Focus is null) return; _focusTouched = true; _focus = id; Render(); }; }
-        canvas.Children.Add(map);
-        MockCanvas.Put(canvas, Panel(points), 56, 28);
-        var top = HStack(18);
-        if (_loaded && Active is null) top.Children.Add(new V3Button(Fresh ? "选岗位 ⌄" : "换一场 ⌄", ShowJobs, V3Button.Kind.Text, small: true));
-        if (!Fresh) top.Children.Add(new V3Button("全部练习记录 ›", _records, V3Button.Kind.Text, small: true));
-        top.Children.Add(new V3Button("图例 ⓘ", ShowLegend, V3Button.Kind.Text, small: true)); top.Measure(new Windows.Foundation.Size(double.PositiveInfinity, 40));
-        MockCanvas.Put(canvas, top, 1126 - top.DesiredSize.Width, 24);
-        DrawHorizon(canvas);
-        FrameworkElement composer;
-        if (Active is { } active) composer = HStack(14, Serif($"上次没答完 · {active.Text("company_name").NonEmpty() ?? "通用练习"} {MockMap.TypeName(active)}", 16, Sub), new V3Button("继续 →", () => _open(active.Text("id")), V3Button.Kind.Dark, 40), new V3Button("放弃", () => Abandon(active.Text("id")), V3Button.Kind.Text));
-        else composer = HStack(12, new V3Button("面试设置", ShowSettings, height: 40), new V3Button(_busy ? "正在准备…" : Fresh ? "开始第一场 →" : "开始练习 →", () => _ = Start(), V3Button.Kind.Dark, 40) { Enabled = _loaded && !_busy && Blocking is null && !_unknownCreate });
-        composer.Measure(new Windows.Foundation.Size(double.PositiveInfinity, 50)); MockCanvas.Put(canvas, composer, (1151 - composer.DesiredSize.Width) / 2, 760);
-        var note = !_loaded ? "正在加载模拟面试…" : Active is not null ? "同一时间只能进行一场 · 放弃后这场不生成报告" : Evaluating is not null ? "上一场评估完成或放弃后才能开始新的一场" : "";
-        MockCanvas.Text(canvas, note, 575.5, 806, 10.5, Fnt, true);
-        if (_error.Length > 0) MockCanvas.Put(canvas, VStack(4, Sans(_error, 12, Orange).Wrap(), new V3Button(_unknownCreate ? "刷新确认创建结果" : "关闭提示", () => { _error = ""; if (_unknownCreate) _ = Load(); else Render(); }, V3Button.Kind.Text, small: true)).Frame(width: 330), 797, 700);
-        if (_settingsOpen && Blocking is null)
-        {
-            var settings = SettingsPanel(); settings.Measure(new Windows.Foundation.Size(360, double.PositiveInfinity));
-            MockCanvas.Put(canvas, settings, (1151 - 360) / 2d, 744 - settings.DesiredSize.Height);
-        }
-        Content = MockCanvas.Stage(canvas);
-    }
-    FrameworkElement Panel(List<MockMap.HomePoint> points)
-    {
-        var body = VStack(8); body.Width = 295;
-        void Text(string text, double size = 13) => body.Children.Add(Sans(text, size, Sub).Wrap().LineHeight(size + 8));
-        if (_selected is { } id && points.FirstOrDefault(x => x.Point.Id == id) is { } point)
-        {
-            Text(point.Source == "hook" ? "简历说法" : point.Source == "job" ? "岗位要求" : "知识点", 11); body.Children.Add(Serif(point.Point.Name, 28).Wrap());
-            Text($"{point.Point.Sector} · 被问概率 {(point.Point.Ask >= 3 ? "高" : point.Point.Ask == 2 ? "中" : "低")}");
-            Text(point.Point.Level == 0 ? "还没被问过" : $"只答到「{MockMap.LevelName(point.Point.Level)}」");
-            foreach (var follow in point.FollowUps.Take(2)) Text($"接下来可能被追问「{follow}」");
-            if (point.Focus is not null) body.Children.Add(new V3Button(_focus == id ? "已设为先问 ✓" : "设为先问", () => { _focusTouched = true; _focus = _focus == id ? null : id; Render(); }));
-            var last = point.Node.Items("asks").LastOrDefault(x => x.Text("kind") == "mock");
-            if (last is not null) body.Children.Add(new V3Button($"看 {MockMap.MmddDot(last.Text("date"))} 那道题 ›", () => _report(last.Text("source_id")), V3Button.Kind.Text));
-        }
-        else if (_detail is not null && _selectedSession is not null)
-        {
-            Text("一场练习", 11); body.Children.Add(Serif($"{MockMap.MmddDot(_detail.Text("created_at"))} {MockMap.TypeName(_detail)}", 27).Wrap());
-            Text(MockReportData.Settings(_detail)); Text(_detail.Text("status") == "completed" ? $"{_detail.Number("total_score"):0} 分" : "还没有分数", 16);
-            Text(_detail.Get("report").Text("headline")); body.Children.Add(new V3Button("看评估报告 ›", () => _report(_detail.Text("id"))));
-            body.Children.Add(new V3Button("用同样设置再练", () => _ = Repeat(_detail.Text("id")), V3Button.Kind.Text));
-        }
-        else if (Evaluating is { } evaluating)
-        {
-            Text("刚练完", 11); body.Children.Add(Serif(MockMap.TypeName(evaluating), 30));
-            if (evaluating.Text("status") == "evaluation_failed") { Text("评估报告没能生成", 15); Text("作答记录都还在，重新评估不另扣积分"); body.Children.Add(new V3Button("重新评估", () => _ = Retry(evaluating.Text("id")), V3Button.Kind.Dark)); body.Children.Add(new V3Button("放弃这场", () => Abandon(evaluating.Text("id")), V3Button.Kind.Text)); }
-            else { Text("报告生成中，约 1 分钟", 15); Text("可以先离开，好了会提醒你"); body.Children.Add(new V3Button(_remind is null ? "好了提醒我" : "好了会提醒你 ✓", () => { _remind = evaluating.Text("id"); Render(); })); }
-        }
-        else
-        {
-            Text(Fresh ? "还没练过" : Target.Kind == MockMap.TargetKind.General ? "通用练习" : Target.Session is null ? "在投岗位" : "下一场", 11);
-            body.Children.Add(Serif(Fresh ? "先练一场" : Target.Kind == MockMap.TargetKind.General ? "不挑岗位" : MockMap.CompanyName(Target), 32).Wrap());
-            Text(Target.Kind == MockMap.TargetKind.General ? "只按简历出题" : Target.Application.Text("job_title_snapshot"), 14);
-            foreach (var stage in MockMap.StageChain(_application ?? Target.Application, Target.Session, _now)) Text((stage.Check ? "✓ " : "") + stage.Label, 12);
-            if (Active is not null) Text($"这场还没答完，继续后从第 {Math.Max(1, _detail.Integer("answered_main_questions"))} 题开始");
-            else if (Fresh) { Text("面试官按你的简历出题。练完以后，每个知识点会落到它答到的那一圈。"); Text("外圈虚线 = 简历里写了、还没被问过", 12); }
-            else { var missing = points.Count(p => p.Point.Level > 0 && p.Point.Level < TargetLevel); Text($"{MockMap.DiffName[_difficulty]}要答到「{MockMap.LevelName(TargetLevel)}」，还有 {missing} 个点没到"); Text("圈越往里答得越深，点越大越可能被问", 12); }
-        }
-        return body;
-    }
-    void DrawHorizon(Canvas canvas)
-    {
-        var horizon = MockMap.HorizonOf(_list, Target, _difficulty, _now); var arc = MockMap.ArcY(1151, MockMap.HomeHorizonTop);
-        var ground = new Microsoft.UI.Xaml.Shapes.Polygon { Fill = Brush(Hex(0xEFEDE7)), IsHitTestVisible = false };
-        for (var i = 0; i <= 240; i++) { var x = 1151d * i / 240; ground.Points.Add(new(x, arc(x))); }
-        ground.Points.Add(new(1151, 828)); ground.Points.Add(new(0, 828)); canvas.Children.Add(ground);
-        foreach (var offset in new[] { 0, 7, 18, 32 })
-            for (var i = 0; i < 240; i++) { var x = 1151d * i / 240; var next = 1151d * (i + 1) / 240; MockCanvas.Line(canvas, x, arc(x) + offset, next, arc(next) + offset, offset == 0 ? Txt : Alpha(Hex(0xCFCABD), offset < 18 ? 1 : offset == 18 ? .75 : .57), offset == 0 ? 1.3 : offset == 7 ? 1 : .8); }
-        for (var x = 16; x < 1141; x += 13) MockCanvas.Line(canvas, x, arc(x), x, arc(x) - ((x - 16) / 13 % 5 == 0 ? 6 : 3), Hex(0xA9A59A), .7);
-        Border? hoverCard = null;
-        void ShowCard(MockMap.HorizonSession session, double y)
-        {
-            if (hoverCard is not null) canvas.Children.Remove(hoverCard);
-            var body = VStack(6, Sans(session.Title, 11.5, Txt, Bold));
-            if (session.Score is { } score) body.Children.Add(HStack(6, Number(score.ToString(), 24), Sans("分" + (session.Delta is { } delta ? $" · 比上一场同岗位 {(delta >= 0 ? "+" : "")}{delta}" : ""), 11, Sub)));
-            body.Children.Add(Sans(session.Detail, 11, Sub));
-            if (session.Score is not null) body.Children.Add(new V3Button("查看这场报告 ›", () => _report(session.Id), V3Button.Kind.Text, small: true));
-            hoverCard = Card(body, 10, new Thickness(14, 12, 14, 12), White, Hex(0xE6E3DC));
-            hoverCard.Measure(new Windows.Foundation.Size(300, double.PositiveInfinity));
-            MockCanvas.Put(canvas, hoverCard, Math.Clamp(session.X + 24, 8, 1143 - hoverCard.DesiredSize.Width), Math.Max(8, y - 23 - hoverCard.DesiredSize.Height));
-            hoverCard.PointerExited += (_, _) => { if (_selectedSession != session.Id && hoverCard is not null) canvas.Children.Remove(hoverCard); };
-        }
-        foreach (var session in horizon.Sessions)
-        {
-            var y = session.Score is { } score ? MockMap.HomeScoreY(arc, session.X, score) : arc(session.X) - 22;
-            var latest = horizon.Sessions.LastOrDefault(s => s.Score is not null)?.Id == session.Id;
-            MockCanvas.Line(canvas, session.X, y, session.X, arc(session.X), Alpha(session.Mine ? Txt : Fnt, .7), 1, session.Score is null);
-            MockCanvas.Circle(canvas, session.X, y, session.Score is null ? 9 : 13, session.Mine ? Txt : Fnt, latest ? Txt : White, session.Score is null);
-            MockCanvas.Text(canvas, session.Score?.ToString() ?? "—", session.X, y - 8.5, 11.5, latest ? White : Txt, true);
-            MockCanvas.Text(canvas, session.Date, session.X, arc(session.X) + 9, 9.5, session.Mine ? Sub : Fnt, true);
-            var b = new Button { Width = 30, Height = 30, Background = Brush(Clear), BorderThickness = new Thickness(0) }.Tip($"{session.Title} · {session.Score?.ToString() ?? "放弃"} · {session.Detail}");
-            b.Click += async (_, _) => { _selectedSession = session.Id; _selected = null; try { await LoadTarget(++_generation); if (_life.Alive) Render(); } catch (OperationCanceledException) { } };
-            b.PointerEntered += (_, _) => ShowCard(session, y);
-            MockCanvas.Put(canvas, b, session.X - 15, y - 15);
-        }
-        MockCanvas.Line(canvas, horizon.Today, arc(horizon.Today), horizon.Today, arc(horizon.Today) - 16, Txt);
-        MockCanvas.Text(canvas, Evaluating is null ? $"今天 {MockMap.MmddDot(_now)}" : Evaluating.Text("status") == "evaluation_failed" ? "今天 · 评估没完成" : "今天 · 报告生成中", horizon.Today, arc(horizon.Today) - 34, 10.5, Txt, true);
-        if (Blocking is not null)
-        {
-            var color = Active is not null ? Blue : Orange; MockCanvas.Circle(canvas, horizon.Today, arc(horizon.Today), 16, Clear, Alpha(color, .12)); MockCanvas.Circle(canvas, horizon.Today, arc(horizon.Today), 7, color, color);
-        }
-        else
-        {
-            var xs = MockMap.SlotXs(_count); foreach (var x in xs) MockCanvas.Circle(canvas, x, arc(x), 8, x == xs[0] ? Txt : Hex(0xA9A59A), White, Fresh);
-            if (_focus is { } focus && MockMap.Place(MockLayout.Home.At, Home.Points.Select(x => x.Point)).FirstOrDefault(x => x.Point.Id == focus) is { } placed)
+            var finished = overview.Get("counts").Integer("mock") + overview.Get("counts").Integer("real");
+            var reviewing = overview.Items("records").Any(x => x.Text("status") == "reviewing");
+            if (_resumeList.Count == 0)
             {
-                MockCanvas.Circle(canvas, xs[0], arc(xs[0]), 8.5, Orange, White); MockCanvas.Circle(canvas, xs[0], arc(xs[0]), 3.4, Orange, Orange);
-                var figure = new Microsoft.UI.Xaml.Media.PathFigure { StartPoint = new(placed.X, placed.Y) };
-                figure.Segments.Add(new Microsoft.UI.Xaml.Media.BezierSegment { Point1 = new(placed.X, placed.Y + 140), Point2 = new(xs[0], arc(xs[0]) - 160), Point3 = new(xs[0], arc(xs[0]) - 10) });
-                var geometry = new Microsoft.UI.Xaml.Media.PathGeometry(); geometry.Figures.Add(figure);
-                canvas.Children.Add(new Microsoft.UI.Xaml.Shapes.Path { Data = geometry, Stroke = Brush(Alpha(Orange, .65)), StrokeThickness = 1, StrokeDashArray = new Microsoft.UI.Xaml.Media.DoubleCollection { 4, 4 }, IsHitTestVisible = false });
+                page.Children.Add(Head(overview, "先放一份简历，面试官按它出题。", "面试里的问题，都从你写的经历来。\n没有现成的，现在写一份也可以。", "支持 PDF、Word、Markdown", width,
+                    MP.Ghost("写第一份简历", _resumes, 40), MP.Dark("导入简历", ImportResume, 40)));
+                page.Children.Add(GhostRuns(runH));
+                page.Children.Add(MockTally.Section("有了简历，练完这里会记下", EmptyTallies, width).Top(0));
             }
-            var middle = (xs[0] + xs[^1]) / 2; MockCanvas.Text(canvas, $"这一场 · {_count} 题 · 约 {_count * 5} 分钟", middle, arc(middle) + 14, 10.5, Sub, true);
+            else if (finished == 0)
+            {
+                page.Children.Add(Head(overview, "先有一场面试，才知道该练什么。", "练一场，或者导入面过的一场。\n之后每一场，都从你卡住的地方接着问。",
+                    reviewing ? "导入的面试正在生成复盘，好了会出现在这里。" : "录音或文字稿都可以导入。", width,
+                    MP.Ghost("导入面试记录", Import, 40), MP.Dark(StartLabel("开始第一场模拟面试"), Start, 40)));
+                page.Children.Add(GhostRuns(runH));
+                page.Children.Add(MockTally.Section("练完第一场，这里会记下", EmptyTallies, width));
+            }
+            else
+            {
+                var stuck = overview.Get("stuck") is JsonObject s ? s : null;
+                page.Children.Add(Head(overview, stuck is null ? "这几场没有卡住的地方。" : StuckTitle(stuck),
+                    stuck is not null ? "这场从这里接着问，答过去就不用再练了。" : "下一场换个方向，继续往深处问。", null, width,
+                    MP.Ghost("导入面试记录", Import, 40), MP.Dark(StartLabel("开始这一场"), Start, 40)));
+                page.Children.Add(StuckRuns(stuck, runH));
+                page.Children.Add(MockTally.Section($"这 {finished} 场记下的", Tallies(overview), width, _records));
+            }
         }
-        foreach (var day in horizon.Days) { MockCanvas.Line(canvas, day.X, arc(day.X), day.X, arc(day.X) - 12, Alpha(Txt, .6)); MockCanvas.Text(canvas, day.Label, day.X, arc(day.X) + 12, 10, Fnt, true); }
-        MockCanvas.Text(canvas, horizon.Past.Title, 40, 760, 14, Txt);
-        if (horizon.Past.Sub is not null) MockCanvas.Text(canvas, horizon.Past.Sub, 40, 784, 10.5, Fnt);
-        if (horizon.Interview is { } interview)
+        else if (_failed)
         {
-            var panel = VStack(4, Serif(interview.Title, 14), new V3Button((interview.Sub is null ? "" : interview.Sub + " · ") + "面试日程 ›", _schedule, V3Button.Kind.Text, small: true));
-            panel.HorizontalAlignment = HorizontalAlignment.Right; panel.Width = 300;
-            MockCanvas.Put(canvas, panel, 811, 760);
+            page.Children.Add(Head(null, "模拟面试", null, null, width));
+            page.Children.Add(VStack(12, Label("模拟面试没有加载出来", 28, MP.Ink, Semibold), Sans("请检查网络后重试。", 13, MP.Fnt),
+                MP.Ghost("重新加载", () => _ = LoadAsync()).Also(b => b.HorizontalAlignment = HorizontalAlignment.Left)).Top(12));
         }
+        else page.Children.Add(new V3Loading("正在加载模拟面试…") { HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 160, 0, 0) });
     }
-    async Task Start()
+
+    /// <summary>`.mi3-home-head`：左边眉题、标题、说明，右边操作（下面一行小字）；窄于 640 时操作换到下面。</summary>
+    static FrameworkElement Head(JsonNode? overview, string title, string? desc, string? note, double width, params UIElement[] actions)
     {
-        if (_busy || Blocking is not null || _unknownCreate) return;
-        if (_resume.Length == 0) { _error = "还没有简历，先导入或新建一份简历。"; Render(); return; }
-        _busy = true; Render();
-        var target = Target;
-        var body = new JsonObject { ["resume_id"] = _resume, ["interview_type"] = _type, ["difficulty"] = _difficulty, ["question_count"] = _count, ["follow_up_enabled"] = _follow, ["language"] = _language, ["answer_mode"] = _mode };
-        if (target.Kind != MockMap.TargetKind.General) body["job_application_id"] = target.Application.Display("id"); else if (_targetRole is not null) body["target_role"] = _targetRole;
-        if (_materials) body["material_ids"] = new JsonArray(LibraryDocs.Take(10).Select(x => JsonValue.Create(x.Display("id"))).Cast<JsonNode?>().ToArray());
-        if (Home.Points.FirstOrDefault(x => x.Point.Id == _focus)?.Focus is { } focus) { var json = focus.Json; json["origin"] = _incoming?.Ref == focus.Ref ? "outline" : "settings"; body["practice_focus"] = json; }
-        body["display"] = new JsonObject { ["resume_title"] = _resumesData.FirstOrDefault(x => x.Display("id") == _resume).Text("title"), ["company_name"] = target.Application.Text("company_name_snapshot"), ["job_title"] = target.Application.Text("job_title_snapshot"), ["stage_label"] = target.Session.Text("stage_label").NonEmpty() ?? target.Application.Text("current_stage_label") };
-        try { var result = await Request("/api/mock-interviews", "POST", body); var id = result.Get("mock_interview").Text("id"); if (id.Length == 0) throw new InvalidOperationException(); _open(id); }
-        catch (OperationCanceledException) { }
-        catch (Exception e) { if (_life.Alive) { _unknownCreate = true; _error = MockReportData.Error(e) + "请刷新确认是否已创建，再开始新的一场。"; } }
-        finally { _busy = false; if (_life.Alive) Render(); }
+        var counts = overview is null ? "" : CountLine(overview);
+        var copy = VStack(0,
+            Sans(string.Join(" · ", new[] { "MOCK INTERVIEWS", counts }.Where(x => x.Length > 0)), 12, MP.Fnt, Medium).Frame(height: 18),
+            Label(title, 28, MP.Ink, Semibold).LineHeight(36).Wrap().Top(8));
+        if (desc is not null) copy.Children.Add(Sans(desc, 14, MP.Sub).LineHeight(22).Wrap().Top(6));
+        var narrow = width < 640;
+        var side = VStack(9, HStack(10, actions).Also(r => r.HorizontalAlignment = narrow ? HorizontalAlignment.Left : HorizontalAlignment.Right));
+        if (note is not null) side.Children.Add(Sans(note, 13, MP.Fnt).Frame(height: 20).Also(t => t.HorizontalAlignment = narrow ? HorizontalAlignment.Left : HorizontalAlignment.Right));
+        FrameworkElement head = narrow
+            ? VStack(16, copy, side)
+            : Columns(24, (Star(), copy), (Auto, side.Top(30)));
+        head.MinHeight = 112;
+        return head;
     }
-    List<JsonNode> LibraryDocs => _datasets.Where(x => (x.Text("asset_kind").NonEmpty() ?? "document") == "document" && x.Text("upload_status") == "succeeded" && x.Text("parse_status") == "succeeded").ToList();
-    async Task Repeat(string id) { if (_busy) return; _busy = true; try { var result = await Request($"/api/mock-interviews/{id}/repeat", "POST"); _open(result.Get("mock_interview").Text("id")); } catch (OperationCanceledException) { } catch (Exception e) { if (_life.Alive) { _unknownCreate = true; _error = MockReportData.Error(e); } } finally { _busy = false; if (_life.Alive) Render(); } }
-    async Task Retry(string id) { if (_busy) return; _busy = true; try { await Request($"/api/mock-interviews/{id}/retry", "POST"); await Load(); } catch (OperationCanceledException) { } catch (Exception e) { if (_life.Alive) _error = MockReportData.Error(e); } finally { _busy = false; if (_life.Alive) Render(); } }
-    void Abandon(string id) => V3Overlay.Show(XamlRoot, close => V3Dialog.Make(VStack(12, V3DialogHead.Make("放弃这场练习？", "放弃后这场不生成报告。")), [new V3Button("取消", close), new V3Button("确认放弃", async () => { close(); if (_busy) return; _busy = true; try { await Request($"/api/mock-interviews/{id}/abandon", "POST"); await Load(); } catch (OperationCanceledException) { } catch (Exception e) { if (_life.Alive) _error = MockReportData.Error(e); } finally { _busy = false; if (_life.Alive) Render(); } }, V3Button.Kind.Danger)], close));
+
+    // 时间线
+
+    static FrameworkElement GhostRuns(double runH)
+    {
+        var stack = new StackPanel { Margin = new Thickness(0, 40, 0, 0) };
+        for (var i = 0; i < 3; i++) stack.Children.Add(GhostRow(EmptyFade[i], i, i == 2 ? 126 : runH));
+        return stack;
+    }
+
+    static FrameworkElement GhostRow(double opacity, int shift, double height)
+    {
+        var meta = VStack(8,
+            new Border { Width = 42, Height = 6, CornerRadius = new CornerRadius(3), Background = Brush(MP.Cl), HorizontalAlignment = HorizontalAlignment.Left },
+            new Border { Width = 66, Height = 5, CornerRadius = new CornerRadius(2.5), Background = Brush(MP.Line), HorizontalAlignment = HorizontalAlignment.Left }).Top(11);
+        var wave = MockWave.Ghost(shift);
+        wave.Margin = new Thickness(0, -11, 25, 0);
+        wave.VerticalAlignment = VerticalAlignment.Top;
+        var row = Columns(0, (Px(MetaW), meta), (Star(), wave), (Px(QuoteW), new Border()));
+        row.Height = height;
+        row.Opacity = opacity;
+        return row;
+    }
+
+    static FrameworkElement StuckRuns(JsonNode? stuck, double runH)
+    {
+        var records = stuck.Items("records").TakeLast(3).Reverse().ToList();
+        var rows = records.Count;
+        var stack = new StackPanel { Margin = new Thickness(0, 28, 0, 0) };
+        for (var i = 0; i < rows; i++)
+        {
+            var record = records[i];
+            var meta = VStack(0, Label(Mmdd(record.Text("date")), 14, MP.Ink, Medium).Frame(height: 22),
+                Sans(record.Text("title").NonEmpty() ?? (record.Text("kind") == "real" ? "真实面试" : "模拟练习"), 13, MP.Fnt).Also(t => { t.TextTrimming = TextTrimming.CharacterEllipsis; t.MaxWidth = 146; }).Frame(height: 20));
+            var wave = MockWave.Row($"{record.Text("date")}:{i}", RowOpacity[i]);
+            wave.Margin = new Thickness(0, -9, 15, 0);
+            wave.VerticalAlignment = VerticalAlignment.Top;
+            FrameworkElement quote = record.Text("quote").NonEmpty() is { } q
+                ? Sans($"“{q}……”", 13, i == 0 ? MP.Ink : MP.Fnt).LineHeight(20).Wrap().Top(11)
+                : new Border();
+            var row = Columns(0, (Px(MetaW), meta), (Star(), wave), (Px(QuoteW), quote));
+            row.Height = rows == 3 && i == 2 ? 126 : runH;
+            stack.Children.Add(row);
+        }
+        for (var i = 0; i < 3 - rows; i++) stack.Children.Add(GhostRow(GhostFade[i], i, rows + i == 2 ? 126 : runH));
+        var layer = new Grid { Margin = new Thickness(0, 12, 0, 0) };
+        layer.Children.Add(stack);
+        if (rows > 0)
+        {
+            // 「停在这里」那条竖线：落在声纹右端与原话之间
+            layer.Children.Add(new Rectangle
+            {
+                Width = 1, Height = runH * (rows - 1) + 63, Fill = Brush(MP.Cl), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 24, QuoteW + 7.5, 0),
+            });
+            var label = Label(StopLabel[rows], 12.5, MP.Sub, Medium);
+            label.HorizontalAlignment = HorizontalAlignment.Right;
+            label.VerticalAlignment = VerticalAlignment.Top;
+            label.TextAlignment = TextAlignment.Center;
+            label.RenderTransform = new Microsoft.UI.Xaml.Media.TranslateTransform();
+            label.Margin = new Thickness(0, 0, QuoteW + 8, 0);
+            label.SizeChanged += (_, e) => ((Microsoft.UI.Xaml.Media.TranslateTransform)label.RenderTransform).X = e.NewSize.Width / 2;
+            layer.Children.Add(label);
+        }
+        return layer;
+    }
+
+    // 摘要
+
+    static readonly MockTally[] EmptyTallies =
+    [
+        new("–", null, "不用再练", "答好的地方，之后就不再问。"),
+        new("–", null, "还要补", "卡住的地方，下一场接着问。"),
+        new("–", null, "回答习惯", "看你是先说结论，还是被追问才讲做法。"),
+        new("–", null, "分数变化", "每一场的分数都记在这里。"),
+    ];
+
+    static List<MockTally> Tallies(JsonNode overview)
+    {
+        var counts = overview.Get("counts");
+        var t = overview.Get("tallies");
+        var first = counts.Integer("mock") + counts.Integer("real") <= 1;
+        var cleared = t.Get("cleared");
+        var open = t.Get("open");
+        var late = t.Get("late");
+        static string Examples(JsonNode? value) => string.Join("、", value.Items("examples").Select(x => x is JsonValue v && v.TryGetValue<string>(out var s) ? s : "").Where(x => x.Length > 0));
+        var items = new List<MockTally>
+        {
+            cleared.Integer("count") > 0
+                ? new($"{cleared.Integer("count")}", "处", first ? "答好了" : "不用再练", Examples(cleared), Dot: MP.Blue)
+                : new("0", "处", first ? "答好了" : "不用再练", "答好的地方，之后就不再问。"),
+            open.Integer("count") > 0
+                ? new($"{open.Integer("count")}", "处", "还要补", Examples(open), Dot: MP.Orange)
+                : new("0", "处", "还要补", "这几场没有留下要补的地方。"),
+        };
+        var lateCount = late.Integer("count");
+        if (first || late.Integer("total") == 0) items.Add(new("1", "场后", "看出回答习惯", "再练一场，就能看出来。"));
+        else items.Add(new($"{lateCount}", "场", "被追问才讲做法", lateCount == 0 ? "每场都先说了结论，保持这个习惯。" : "这场试试先说结论。"));
+        if (t.Get("score") is JsonObject score)
+        {
+            int latest = score.Integer("latest"), start = score.Integer("first"), count = score.Integer("count");
+            var diff = latest - start;
+            items.Add(count <= 1
+                ? new($"{latest}", "分", "第一场", "下一场开始，看得到进步。")
+                : new($"{latest}", "分", diff >= 0 ? $"+{diff}" : $"{diff}", $"从 {start} 分{(count > 2 ? "练" : "")}到 {latest} 分，一共 {count} 场。", Tone: diff >= 0 ? MP.Blue : MP.Orange));
+        }
+        return items;
+    }
+
+    static string StuckTitle(JsonNode stuck)
+    {
+        var topic = stuck.Text("topic");
+        var times = stuck.Get("times") is null ? 1 : stuck.Integer("times");
+        if (times >= 2) return $"{topic}，你{(times < CountWord.Length ? CountWord[times] : $"{times}")}次都停在同一处。";
+        if (stuck.Text("detail").NonEmpty() is not { } detail) return $"{topic}，你上次停在了这里。";
+        var spaced = char.IsAscii(detail[0]) && char.IsLetterOrDigit(detail[0]);
+        return $"{topic}，你停在了{(spaced ? " " : "")}{detail}这一步。";
+    }
+
+    static string CountLine(JsonNode overview)
+    {
+        int real = overview.Get("counts").Integer("real"), mock = overview.Get("counts").Integer("mock");
+        return string.Join(" · ", new[] { real > 0 ? $"面了 {real} 场" : null, mock > 0 ? $"练了 {mock} 场" : null }.OfType<string>());
+    }
+
+    static string Mmdd(string value) => CareerApplication.Date(value) is { } date ? date.ToBeijing().ToString("MM-dd") : "";
+
+    // 命令
+
+    void Import() => MockImportDialog.Show(XamlRoot, () =>
+    {
+        MP.Notice("已开始生成复盘", "好了会出现在这里，也会记进长期记忆");
+        _ = LoadAsync();
+    });
+
+    void ImportResume() => ResumeImportSheet.Show(XamlRoot, title =>
+    {
+        MP.Notice("已开始导入", $"「{title}」解析完成后这里会更新");
+        _ = LoadAsync();
+    });
+
+    async Task LoadAsync()
+    {
+        if (App.Session.User is null) return;
+        try
+        {
+            var overview = _life.Request("/api/mock-interviews/overview");
+            var list = _life.Request("/api/mock-interviews", query: new() { ["limit"] = "100" });
+            var resumes = _life.Request("/api/resumes");
+            await Task.WhenAll(overview, list, resumes);
+            _overview = overview.Result;
+            _list = list.Result.Items("items");
+            _resumeList = resumes.Result.Items("resumes");
+            _loaded = true;
+            _failed = false;
+        }
+        catch (OperationCanceledException) { return; }
+        catch (Exception) { if (!_loaded) _failed = true; }
+        // 评估中：5 秒刷新一次，好了提示一下
+        if (Evaluating is { } evaluating && evaluating.Text("status") == "evaluating") { _waitingId = evaluating.Text("id"); _poll.Start(); }
+        else
+        {
+            _poll.Stop();
+            if (_waitingId is { } id && _list.Any(x => x.Text("id") == id && x.Text("status") == "completed"))
+            {
+                _waitingId = null;
+                MP.Notice("评估报告好了", "这场的分数和卡住的地方已经更新");
+            }
+        }
+        Render();
+    }
 }

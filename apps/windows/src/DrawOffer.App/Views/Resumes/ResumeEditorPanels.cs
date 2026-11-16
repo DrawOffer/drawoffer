@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Text.Json.Nodes;
 using DrawOffer.App.DesignSystem;
 using DrawOffer.Core.Api;
@@ -7,46 +8,66 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
-using Windows.ApplicationModel.DataTransfer;
-using Windows.Foundation;
+using Windows.System;
 using Windows.UI;
 using static DrawOffer.App.DesignSystem.V3;
-using S = DrawOffer.App.Views.Resumes.EditorJson;
 
 namespace DrawOffer.App.Views.Resumes;
 
-// 编辑器的面板（Mac `ResumeEditorPanels.swift`），对应 Web 的 `WorkbenchTemplatePanel`、`WorkbenchTypePanel` 与 `WorkbenchSectionOrderControl`。
+// 编辑器的两个面板：左边整列的模板栏（Figma 07.1）与纸面上沿的排版卡片（Figma 06.2）。
 
-// MARK: - 切换模板
+// MARK: - 模板栏
 
-/// <summary>切换模板（Mac `TemplateSwitchSheet`）：两列缩略图，点击即应用到当前简历；带风格 / 场景筛选与加载、失败、空、无结果状态。</summary>
+/// <summary>
+/// Figma 07.1 模板栏：贴编辑器左边一整列（356 宽、白底、右侧细线）。标题「换模板」14/500 + 一句说明，
+/// 下面一行「场景 全部 / 风格 全部」下拉和总数；两列 132 宽缩略图（名称 12，当前那套墨黑框 +「当前」），先显示 20 套、滚到底再加 20 套。
+/// 07.2 悬停预览：鼠标在一套上停 150ms 交给编辑器在纸面临时换成这套；移出整列恢复。点一下才换上。
+/// </summary>
 public sealed class TemplateSwitchSheet : UserControl
 {
+    public const double Width356 = 356;
+
     readonly Func<ResumeTemplate, Task<string?>> _apply;
     readonly Action _close;
+    readonly Action<ResumeTemplate?> _preview;
     string _currentKey = "";
     bool _disabled;
 
     List<ResumeTemplate> _templates = [];
     bool _loading = true, _failed, _scrolled;
-    string? _applying, _error;
-    readonly List<string> _styles = [], _uses = [];
+    string? _applying, _error, _hovered;
+    string? _style, _use;
+    int _shown = 20;
+    readonly Grid _grid = new();
+    ScrollViewer? _scroll;
 
     List<ResumeTemplate> Filtered => _templates.Where(t =>
-        (_styles.Count == 0 || _styles.Intersect(t.StyleCategories).Any()) && (_uses.Count == 0 || _uses.Intersect(t.UseCases).Any())).ToList();
+        (_style is null || t.StyleCategories.Contains(_style)) && (_use is null || t.UseCases.Contains(_use))).ToList();
 
     public static string Key(ResumeTemplate template) => template.Style["template_key"]?.GetValue<string>() ?? template.Key;
 
-    public TemplateSwitchSheet(Func<ResumeTemplate, Task<string?>> apply, Action close)
+    public TemplateSwitchSheet(Func<ResumeTemplate, Task<string?>> apply, Action close, Action<ResumeTemplate?> preview)
     {
         _apply = apply;
         _close = close;
+        _preview = preview;
+        Width = Width356;
+        Content = new Border
+        {
+            Child = _grid, Background = Brush(V3.White), BorderBrush = Brush(Alpha(Hex(0x000000), 0.08)), BorderThickness = new Thickness(0, 0, 1, 0),
+        };
+        AutomationProperties.SetName(this, "换模板");
+        // 移出整列才恢复原纸面；在两张卡之间移动不闪回
+        PointerExited += (_, _) => { _hovered = null; _preview(null); };
         Loaded += async (_, _) => { if (_loading && _templates.Count == 0) await Load(); };
+        Render();
     }
 
     public void Update(string currentKey, bool disabled)
     {
+        if (_currentKey == currentKey && _disabled == disabled) return;
         _currentKey = currentKey;
         _disabled = disabled;
         Render();
@@ -54,61 +75,99 @@ public sealed class TemplateSwitchSheet : UserControl
 
     void Render()
     {
-        var grid = new Grid { VerticalAlignment = VerticalAlignment.Stretch };
-        for (var i = 0; i < 4; i++) grid.RowDefinitions.Add(new RowDefinition { Height = i == 3 ? Star() : GridLength.Auto });
-        grid.Children.Add(WorkbenchPanelHeader.Make("简历模板", "点击模板即可应用到当前简历", "关闭简历模板面板", _close));
+        _grid.Children.Clear();
+        _grid.RowDefinitions.Clear();
+        for (var i = 0; i < 4; i++) _grid.RowDefinitions.Add(new RowDefinition { Height = i == 3 ? Star() : GridLength.Auto });
+        var close = HeadIconStyle.Make("xmark", 11, 24, 6, "收起模板栏", _close);
+        close.VerticalAlignment = VerticalAlignment.Top;
+        close.Margin = new Thickness(0, -3, 0, 0);
+        var head = Spread(VStack(9, Sans("换模板", 14, Txt, Medium), Sans("鼠标停在哪套，右边就先看哪套；点一下才换上", 12, Hex(0x8F8F8A)).Wrap()), close, 8, VerticalAlignment.Top);
+        head.Padding = new Thickness(36, 28, 30, 0);
+        _grid.Children.Add(head);
         var ready = !_loading && !_failed && _templates.Count > 0;
         if (ready)
         {
-            // `.workbench-template-filters`：56 高、左右 24；数量 11.5px fnt，筛选钮 28 高
-            var filter = new TemplateFilter(_styles, _uses, Render, height: 28);
-            var row = Spread(Sans($"{Filtered.Count} 套模板", 11.5, Fnt), filter, 8);
-            row.Padding = new Thickness(24, 0, 24, 0);
-            row.Height = 56;
+            var filters = HStack(18, FilterMenu("场景", TemplateFilter.UseOptions, () => _use, v => _use = v), FilterMenu("风格", TemplateFilter.StyleOptions, () => _style, v => _style = v));
+            var row = Spread(filters, Sans($"{Filtered.Count} 套", 11.5, Hex(0x96968F)), 8);
+            row.Padding = new Thickness(36, 20, 36, 0);
+            row.Height = 50;
             Grid.SetRow(row, 1);
-            grid.Children.Add(row);
+            _grid.Children.Add(row);
         }
-        if (_error is { } error) { var text = Sans(error, 12, Red).Wrap().Pad(24, 0, 24, 8); Grid.SetRow(text, 2); grid.Children.Add(text); }
+        if (_error is { } error) { var text = Sans(error, 12, Red).Wrap().Pad(36, 8, 36, 0); Grid.SetRow(text, 2); _grid.Children.Add(text); }
         FrameworkElement body;
         if (_loading) body = VStack(8, new ProgressRing { IsActive = true, Width = 20, Height = 20 }, Sans("正在加载简历模板…", 12, Sub)).Align(HorizontalAlignment.Center, VerticalAlignment.Center);
         else if (_failed)
             body = State("模板暂时无法加载", "请检查网络后重试，当前简历不会受到影响。", new V3Button("重新加载", () => _ = Load(), V3Button.Kind.Ghost, height: 30, icon: "arrow.clockwise"));
         else if (_templates.Count == 0) body = State("当前没有可用模板", "模板启用后会显示在这里。", null);
         else if (Filtered.Count == 0)
-            body = State("没有符合条件的模板", "试试减少一个筛选条件。", new V3Button("清除筛选", () => { _styles.Clear(); _uses.Clear(); Render(); }, V3Button.Kind.Ghost, height: 30));
-        else
-        {
-            // `.workbench-template-grid`：两列，行距 20、列距 12；body 内边距 1/24/24
-            var cards = new Grid { Width = 332, ColumnSpacing = 12, RowSpacing = 20, Margin = new Thickness(0, 1, 0, 24), HorizontalAlignment = HorizontalAlignment.Center };
-            cards.ColumnDefinitions.Add(new ColumnDefinition { Width = Star() });
-            cards.ColumnDefinitions.Add(new ColumnDefinition { Width = Star() });
-            var list = Filtered;
-            FrameworkElement? current = null;
-            for (var i = 0; i < list.Count; i++)
-            {
-                if (i % 2 == 0) cards.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                var card = Card(list[i]);
-                Grid.SetRow(card, i / 2);
-                Grid.SetColumn(card, i % 2);
-                cards.Children.Add(card);
-                if (Key(list[i]) == _currentKey) current = card;
-            }
-            var scroll = new ScrollViewer { Content = cards, VerticalScrollBarVisibility = ScrollBarVisibility.Hidden };
-            // Web 打开时把当前模板滚到可视区中间
-            if (current is not null && !_scrolled)
-            {
-                scroll.Loaded += (_, _) => scroll.DispatcherQueue.TryEnqueue(() =>
-                {
-                    var top = current.TransformToVisual(cards).TransformPoint(new Point(0, 0)).Y;
-                    scroll.ChangeView(null, Math.Max(0, top + current.ActualHeight / 2 - scroll.ViewportHeight / 2), null, true);
-                    _scrolled = true;
-                });
-            }
-            body = scroll;
-        }
+            body = State("没有符合条件的模板", "试试减少一个筛选条件。", new V3Button("清除筛选", () => { _style = null; _use = null; _shown = 20; Render(); }, V3Button.Kind.Ghost, height: 30));
+        else body = Grid2();
         Grid.SetRow(body, 3);
-        grid.Children.Add(body);
-        Content = grid;
+        _grid.Children.Add(body);
+    }
+
+    /// <summary>两列缩略图（列距 18、行距 18）；底部一行“已显示几套”，滚到底自动再加 20 套。</summary>
+    FrameworkElement Grid2()
+    {
+        var list = Filtered;
+        // 打开时把当前模板滚到可视区中间：先把它所在的那一页显示出来
+        var currentIndex = list.FindIndex(x => Key(x) == _currentKey);
+        if (!_scrolled && currentIndex >= 0) _shown = Math.Max(_shown, currentIndex + 1);
+        var visible = list.Take(_shown).ToList();
+        var cards = new Grid { ColumnSpacing = 18, RowSpacing = 18, Margin = new Thickness(36, 14, 36, 16), HorizontalAlignment = HorizontalAlignment.Left };
+        cards.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(132) });
+        cards.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(132) });
+        FrameworkElement? current = null;
+        for (var i = 0; i < visible.Count; i++)
+        {
+            if (i % 2 == 0) cards.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var card = Card(visible[i]);
+            Grid.SetRow(card, i / 2);
+            Grid.SetColumn(card, i % 2);
+            cards.Children.Add(card);
+            if (i == currentIndex) current = card;
+        }
+        var footer = Sans(visible.Count < list.Count ? $"已显示 {visible.Count} / {list.Count} 套 · 滚到底自动加载下 20 套" : $"共 {list.Count} 套", 12, Hex(0x8F8F8A));
+        footer.HorizontalAlignment = HorizontalAlignment.Center;
+        footer.Margin = new Thickness(0, 0, 0, 24);
+        var scroll = new ScrollViewer { Content = VStack(0, cards, footer), VerticalScrollBarVisibility = ScrollBarVisibility.Hidden };
+        var offset = _scroll?.VerticalOffset;
+        _scroll = scroll;
+        scroll.ViewChanged += (_, _) =>
+        {
+            if (_shown >= Filtered.Count || scroll.VerticalOffset < scroll.ScrollableHeight - 40) return;
+            _shown += 20;
+            Render();
+        };
+        scroll.Loaded += (_, _) => scroll.DispatcherQueue.TryEnqueue(() =>
+        {
+            if (!_scrolled && current is not null)
+            {
+                var top = current.TransformToVisual(cards).TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
+                scroll.ChangeView(null, Math.Max(0, top + current.ActualHeight / 2 - scroll.ViewportHeight / 2), null, true);
+            }
+            else if (offset is { } y) scroll.ChangeView(null, y, null, true);
+            _scrolled = true;
+        });
+        return scroll;
+    }
+
+    /// <summary>07.1 筛选：「场景 全部」「风格 全部」两个无边框下拉，单选；灰字标签 + 墨黑当前值。</summary>
+    FrameworkElement FilterMenu(string title, string[] options, Func<string?> get, Action<string?> set)
+    {
+        var chevron = Icon("chevron.down", 8, Fnt);
+        chevron.FontWeight = Semibold;
+        var label = HStack(4, Sans(title, 11.5, Hex(0x96968F)), Sans(get() ?? "全部", 11.5, Txt, Medium), chevron.Align(v: VerticalAlignment.Center));
+        var host = new BorderControl { Child = label, Background = Brush(Clear), VerticalAlignment = VerticalAlignment.Center };
+        void Pick(string? value) { set(value); _shown = 20; _scrolled = true; Render(); }
+        host.OnTap(() =>
+        {
+            var rows = new List<UIElement> { new V3MenuRow("全部", () => Pick(null), isChecked: get() is null), V3MenuRow.Separator() };
+            rows.AddRange(options.Select(option => (UIElement)new V3MenuRow(option, () => Pick(option), isChecked: get() == option)));
+            V3Popover.Menu(host, 140, [.. rows]);
+        }, title);
+        return host;
     }
 
     /// <summary>`.workbench-template-state`：最少 190 高、居中；标题 13/500 txt，说明 12px fnt，间距 8。</summary>
@@ -123,31 +182,35 @@ public sealed class TemplateSwitchSheet : UserControl
         return stack;
     }
 
-    /// <summary>
-    /// `.workbench-template-card`：纸面 210:297、圆角 6、#d3d3ce 描边（悬停 #b9b9b3，选中蓝色 2 层）；名称 12px（选中 500）、间距 10；
-    /// 选中右上 18 黑底白勾；应用中纸面上盖 70% 白与转圈。
-    /// </summary>
+    /// <summary>07.1 模板卡：132 宽 A4 缩略图（当前那套 1.5 墨黑框，悬停 #B9B9B2），下方名称 12（当前 500）与灰字「当前」；应用中盖 70% 白与转圈。</summary>
     FrameworkElement Card(ResumeTemplate template)
     {
         var current = Key(template) == _currentKey;
-        var paper = new Grid();
+        var paper = new Grid { Width = 132 };
         paper.Children.Add(TemplateThumbnail.Make(template, false));
-        paper.Children.Add(new Border { CornerRadius = new CornerRadius(6), BorderBrush = Brush(current ? Blue : Clear), BorderThickness = new Thickness(2), IsHitTestVisible = false });
-        if (current)
-        {
-            var check = new Border
-            {
-                Width = 18, Height = 18, CornerRadius = new CornerRadius(9), Background = Brush(Txt), Margin = new Thickness(8),
-                HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
-                Child = Icon("checkmark", 9, V3.White).Also(i => { i.FontWeight = Bold; i.HorizontalAlignment = HorizontalAlignment.Center; i.VerticalAlignment = VerticalAlignment.Center; }),
-            };
-            AutomationProperties.SetAccessibilityView(check, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
-            paper.Children.Add(check);
-        }
+        var frame = new Border { CornerRadius = new CornerRadius(6), BorderBrush = Brush(current ? Txt : Clear), BorderThickness = new Thickness(current ? 1.5 : 1), IsHitTestVisible = false };
+        paper.Children.Add(frame);
         if (_applying == template.Id)
             paper.Children.Add(new Border { CornerRadius = new CornerRadius(6), Background = Brush(Alpha(V3.White, 0.7)), Child = new ProgressRing { IsActive = true, Width = 16, Height = 16 } });
-        var card = VStack(10, paper, Sans(template.Name, 12, Txt, current ? Medium : Regular).Frame(height: 22));
+        var name = Sans(template.Name, 12, current ? Txt : Sub, current ? Medium : Regular);
+        var caption = HStack(6, name, current ? Sans("当前", 10.5, Hex(0x96968F)) : null);
+        caption.Height = 16;
+        var card = VStack(8, paper, caption);
+        card.Width = 132;
         card.Background = Brush(Clear);
+        card.OnHover(inside =>
+        {
+            if (!current) frame.BorderBrush = Brush(inside ? Hex(0xB9B9B2) : Clear);
+            if (!inside) { if (_hovered == template.Id) _hovered = null; return; }
+            _hovered = template.Id;
+            _ = Later();
+            async Task Later()
+            {
+                await Task.Delay(150);
+                if (_hovered != template.Id || _applying is not null || _disabled) return;
+                _preview(current ? null : template);
+            }
+        });
         var label = current ? $"{template.Name}（当前模板）" : $"应用模板：{template.Name}";
         card.OnTap(() => _ = Choose(template), label, () => !_disabled && _applying is null);
         if (current) AutomationProperties.SetItemStatus(card, "已选中");
@@ -179,711 +242,342 @@ public sealed class TemplateSwitchSheet : UserControl
     }
 }
 
-// MARK: - 版式设置
+// MARK: - 排版卡片
 
 /// <summary>
-/// Web `WorkbenchTypePanel` + `WorkbenchPageBar`（Mac `TypeSettingsPanel`）：页面排列（上下 / 左右 / 智能一页）、页边距（两个整行步进器）、
-/// 排版（字体下拉、正文字号、正文行距）。步进器控件 116 宽，28×28 描边按钮，数字 12/500。
+/// Figma 06.2 排版卡片：点纸面上沿「字体 · 字号 · 行距 · 共 N 页」从规格行下面弹出，320 宽白卡、圆角 8、#E4E4E0 细边。
+/// 四组：页面（共 N 页、智能一页开关）、模块顺序（拖动排序，个人信息固定在最前，右键改名 / 删除，恢复默认顺序）、
+/// 文字（字体下拉按黑体 / 宋体 / 楷体分组，每个字体名用它自己的字形；字号、行距滑块）、页边距（上下、左右滑块，毫米）。
+/// 改动立刻上纸、可 Ctrl+Z 撤销。
 /// </summary>
-public sealed class TypeSettingsPanel : UserControl
+public sealed class TypeSettingsCard : UserControl
 {
-    readonly Action<ResumeTypeSettings> _changed;
-    readonly Action<string> _arrangementChanged;
-    ResumeTypeSettings _settings = new(ResumeTypeSettings.SerifStack, 10, 1.5, 16, 14, false);
-    string _arrangement = "vertical";
-    bool _disabled;
+    public const double CardWidth = 320;
 
-    public TypeSettingsPanel(Action<ResumeTypeSettings> changed, Action<string> arrangement)
+    readonly Action<ResumeTypeSettings> _changed;
+    readonly Action<List<string>> _reorder;
+    readonly Action<string, string> _rename;
+    readonly Action<string> _remove;
+    readonly Func<string, string> _label;
+
+    ResumeTypeSettings _settings = new(ResumeTypeSettings.SerifStack, 10, 1.5, 16, 14, false);
+    List<JsonNode?> _sections = [];
+    Dictionary<string, string> _columns = [];
+    int _pages = 1;
+    bool _disabled;
+    string _orderKey = "";
+
+    readonly TextBlock _pageCount = Sans("", 12, Fnt);
+    readonly V3Switch _smart = new(false, "智能一页");
+    readonly TextBlock _fontName = Sans("", 13, Txt);
+    readonly V3Slider _size, _line, _vertical, _horizontal;
+    readonly StackPanel _order = new() { Spacing = 0 };
+    readonly StackPanel _body;
+
+    /// <param name="label">模块的显示名（标题为空时用类型名）。</param>
+    public TypeSettingsCard(Action<ResumeTypeSettings> changed, Action<List<string>> reorder, Action<string, string> rename, Action<string> remove, Func<string, string> label)
     {
         _changed = changed;
-        _arrangementChanged = arrangement;
+        _reorder = reorder;
+        _rename = rename;
+        _remove = remove;
+        _label = label;
+        _size = new V3Slider("字号", ResumeTypeSettings.FontSizeRange, v => $"{Format(v)} pt", v => Set(s => s.FontSize = v));
+        _line = new V3Slider("行距", ResumeTypeSettings.LineHeightRange, v => v.ToString("0.00", CultureInfo.InvariantCulture), v => Set(s => s.LineHeight = v));
+        _vertical = new V3Slider("上下", ResumeTypeSettings.VerticalMarginRange, v => $"{Format(v)} mm", v => Set(s => s.VerticalPageMargin = v));
+        _horizontal = new V3Slider("左右", ResumeTypeSettings.HorizontalMarginRange, v => $"{Format(v)} mm", v => Set(s => s.PageMargin = v));
+        _smart.Toggled += on => Set(s => s.SmartOnePage = on);
+
+        var restore = Sans("恢复默认顺序", 12, Link);
+        var restoreTap = new BorderControl { Child = restore, Background = Brush(Clear) };
+        restoreTap.OnTap(() => _reorder(ResumeSectionOrder.RestoreDefault(_sections).Select(x => x.Text("node_id")).ToList()), "恢复默认顺序", () => !_disabled && _sections.Count > 1);
+
+        var font = new Border
+        {
+            Child = Columns(8, (Star(), _fontName), (GridLength.Auto, Icon("chevron.down", 9, Sub).Align(v: VerticalAlignment.Center))),
+            Width = 160, Height = 30, Padding = new Thickness(10, 0, 10, 0), CornerRadius = new CornerRadius(4),
+            Background = Brush(V3.White), BorderBrush = Brush(Cl), BorderThickness = new Thickness(1),
+        };
+        _fontName.VerticalAlignment = VerticalAlignment.Center;
+        font.OnTap(() => FontMenu(font), "字体", () => !_disabled);
+
+        _body = VStack(0,
+            Title("页面", _pageCount),
+            Columns(12, (Star(), VStack(2, Sans("智能一页", 13, Txt), Sans("内容略多于一页时，自动收紧字号和间距放进一页", 11.5, Fnt).Wrap())), (GridLength.Auto, _smart.Align(v: VerticalAlignment.Center))).Top(12),
+            Rule(),
+            Title("模块顺序", restoreTap),
+            _order.Top(8),
+            Rule(),
+            Title("文字", null),
+            Spread(Sans("字体", 12.5, Sub), font, 12).Top(12),
+            _size.Top(16),
+            _line.Top(14),
+            Rule(),
+            Title("页边距", null),
+            _vertical.Top(12),
+            _horizontal.Top(14));
+        _body.Padding = new Thickness(21, 19, 21, 21);
+        var card = new Border
+        {
+            Child = new ScrollViewer { Content = _body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollMode = ScrollMode.Disabled },
+            Width = CardWidth, CornerRadius = new CornerRadius(8), Background = Brush(V3.White), BorderBrush = Brush(Cl), BorderThickness = new Thickness(1),
+        }.Elevate(16);
+        Content = card;
+        AutomationProperties.SetName(this, "排版");
     }
 
-    public void Update(ResumeTypeSettings settings, string arrangement, bool disabled)
-    {
-        _settings = settings with { };
-        _arrangement = arrangement;
-        _disabled = disabled;
-        Render();
-    }
+    static string Format(double value) => (Math.Round(value * 100) / 100).ToString("0.##", CultureInfo.InvariantCulture);
+
+    static Grid Title(string text, UIElement? trailing) => Spread(Sans(text, 13, Txt, Medium), trailing ?? new Border(), 8);
+
+    static Border Rule() => new() { Height = 1, Background = Brush(Line), Margin = new Thickness(0, 18, 0, 18) };
 
     void Set(Action<ResumeTypeSettings> change)
     {
+        if (_disabled) return;
         var next = _settings with { };
         change(next);
+        _settings = next;
         _changed(next);
     }
 
-    void Render()
+    /// <summary>编辑器推来最新的版式、模块与页数；拖动滑块时不重建，只同步数值。</summary>
+    public void Update(ResumeTypeSettings settings, List<JsonNode?> sections, Dictionary<string, string> columns, int pages, bool disabled)
     {
-        var s = _settings;
-        var options = Columns(8,
-            (Star(), Option("上下排列", "rectangle.split.1x2", !s.SmartOnePage && _arrangement == "vertical", () =>
-            {
-                if (s.SmartOnePage) Set(x => x.SmartOnePage = false);
-                _arrangementChanged("vertical");
-            })),
-            (Star(), Option("左右排列", "rectangle.split.2x1", !s.SmartOnePage && _arrangement == "horizontal", () =>
-            {
-                if (s.SmartOnePage) Set(x => x.SmartOnePage = false);
-                _arrangementChanged("horizontal");
-            })),
-            (Star(), Option("智能一页", "sparkles", s.SmartOnePage, () => Set(x => x.SmartOnePage = !x.SmartOnePage), toggle: true)));
-        var margins = VStack(16,
-            Stepper("上下边距", "mm", s.VerticalPageMargin, ResumeTypeSettings.VerticalMarginRange, v => Set(x => x.VerticalPageMargin = v)),
-            Stepper("左右边距", "mm", s.PageMargin, ResumeTypeSettings.HorizontalMarginRange, v => Set(x => x.PageMargin = v)));
-        var typeHead = VStack(5,
-            HStack(8, Icon("textformat", 13, Blue), Sans("排版", 13, Txt, Medium)).Frame(height: 22),
-            Sans("统一调整简历正文的字体、字号和行距。", 11, Fnt).Frame(height: 22));
-        typeHead.Margin = new Thickness(0, 0, 0, 13);
-        var fontRow = Spread(Sans("字体", 11, Sub, Medium), FontMenu(), 16).Frame(height: 40).Pad(0, 15, 0, 20);
-        var root = VStack(0,
-            Section("页面排列", "选择多页简历在编辑区中的浏览方式。"),
-            options,
-            Sans("排列只影响编辑时的浏览方向。", 11, Fnt).Frame(height: 22).Top(10),
-            Divider21(),
-            Section("页边距", "分别调整上下和左右留白，单位为毫米。"),
-            margins,
-            Divider21(),
-            typeHead,
-            fontRow,
-            VStack(16,
-                Stepper("正文字号", "pt", s.FontSize, ResumeTypeSettings.FontSizeRange, v => Set(x => x.FontSize = v)),
-                Stepper("正文行距", "", s.LineHeight, ResumeTypeSettings.LineHeightRange, v => Set(x => x.LineHeight = v))));
-        root.Padding = new Thickness(24, 23, 24, 24);
-        root.IsHitTestVisible = !_disabled;
-        root.Opacity = _disabled ? 0.6 : 1;
-        Content = root;
-    }
-
-    string FontLabel => ResumeTypeSettings.Fonts.FirstOrDefault(x => x.Value == _settings.FontFamily).Label ?? ResumeTypeSettings.Fonts[0].Label;
-
-    FrameworkElement FontMenu()
-    {
-        var chevron = Icon("chevron.down", 9, Sub);
-        chevron.FontWeight = Medium;
-        chevron.HorizontalAlignment = HorizontalAlignment.Right;
-        chevron.VerticalAlignment = VerticalAlignment.Center;
-        chevron.Margin = new Thickness(0, 0, 8, 0);
-        var label = Sans(FontLabel, 13, Txt).Align(HorizontalAlignment.Center, VerticalAlignment.Center);
-        var box = new Grid { Width = 116, Height = 40, CornerRadius = new CornerRadius(8), Background = Brush(V3.White), BorderBrush = Brush(Cl), BorderThickness = new Thickness(1) };
-        box.Children.Add(label);
-        box.Children.Add(chevron);
-        box.OnTap(() =>
-        {
-            var menu = new MenuFlyout();
-            foreach (var font in ResumeTypeSettings.Fonts)
-            {
-                var item = new MenuFlyoutItem { Text = font.Label };
-                var value = font.Value;
-                item.Click += (_, _) => Set(x => x.FontFamily = value);
-                menu.Items.Add(item);
-            }
-            menu.ShowAt(box);
-        }, "字体");
-        return box;
-    }
-
-    static Border Divider21() => new() { Height = 1, Background = Brush(Line), Margin = new Thickness(0, 21, 0, 23) };
-
-    static StackPanel Section(string title, string detail)
-    {
-        var stack = VStack(5, Sans(title, 13, Txt, Medium).Frame(height: 22), Sans(detail, 11, Fnt).Frame(height: 22));
-        stack.Margin = new Thickness(0, 0, 0, 13);
-        return stack;
-    }
-
-    /// <summary>`.wb3-arrangement-options button`：描边 #ececea、圆角 8、内边距 12/4、12/500；图标 46×44 小框；选中蓝边蓝底蓝字。</summary>
-    static FrameworkElement Option(string label, string symbol, bool on, Action action, bool toggle = false)
-    {
-        var ink = on ? Blue : Sub;
-        var glyph = new Border
-        {
-            Width = 46, Height = 44, CornerRadius = new CornerRadius(6), BorderBrush = Brush(on ? Alpha(Blue, 0.4) : Line), BorderThickness = new Thickness(1),
-            Child = Icon(symbol, 18, ink).Align(HorizontalAlignment.Center, VerticalAlignment.Center), HorizontalAlignment = HorizontalAlignment.Center,
-        };
-        var card = new Border
-        {
-            Child = VStack(10, glyph, Sans(label, 12, ink, Medium).Frame(height: 19).Align(HorizontalAlignment.Center)),
-            Padding = new Thickness(4, 12, 4, 12), Height = 99, CornerRadius = new CornerRadius(8),
-            Background = Brush(on ? BlueSoft : V3.White), BorderBrush = Brush(on ? Blue : Line), BorderThickness = new Thickness(1),
-        };
-        card.OnTap(action, label);
-        if (on) AutomationProperties.SetItemStatus(card, toggle ? "已开启" : "已选中");
-        return card;
-    }
-
-    static FrameworkElement Stepper(string label, string unit, double value, (double Min, double Max, double Step) range, Action<double> set)
-    {
-        var rounded = Math.Round(value * 100, MidpointRounding.AwayFromZero) / 100;
-        var number = Number($"{rounded.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}{(unit.Length == 0 ? "" : " " + unit)}", 12, Txt, Medium);
-        number.HorizontalAlignment = HorizontalAlignment.Center;
-        number.MinWidth = 48;
-        number.TextAlignment = TextAlignment.Center;
-        AutomationProperties.SetName(number, $"{label}当前值");
-        var control = Columns(6,
-            (Auto, StepButton("minus", $"减小{label}", value <= range.Min, () => set(ResumeTypeSettings.Step(value, -1, range.Min, range.Max, range.Step)))),
-            (Star(), number.Align(HorizontalAlignment.Center, VerticalAlignment.Center)),
-            (Auto, StepButton("plus", $"增大{label}", value >= range.Max, () => set(ResumeTypeSettings.Step(value, 1, range.Min, range.Max, range.Step)))));
-        control.Width = 116;
-        return Spread(Sans(label, 12, Sub), control, 8).Frame(height: 28);
-    }
-
-    static Border StepButton(string symbol, string label, bool off, Action action)
-    {
-        var icon = Icon(symbol, 11, Sub);
-        icon.FontWeight = Medium;
-        var button = new Border
-        {
-            Width = 28, Height = 28, CornerRadius = new CornerRadius(7), Background = Brush(V3.White), BorderBrush = Brush(Line), BorderThickness = new Thickness(1),
-            Child = icon.Align(HorizontalAlignment.Center, VerticalAlignment.Center), Opacity = off ? 0.4 : 1,
-        };
-        button.OnTap(action, label, () => !off);
-        return button;
-    }
-}
-
-// MARK: - 板块顺序
-
-/// <summary>调整板块顺序（Mac `SectionOrderSheet`）：拖动排序，个人信息固定在最前；双栏模板中各栏分别排序。</summary>
-public sealed class SectionOrderSheet : UserControl
-{
-    readonly IReadOnlyList<JsonNode?> _sections;
-    /// <summary>node_id → "sidebar" / "main"；单栏模板为空。</summary>
-    readonly Dictionary<string, string> _columns;
-    readonly Action<List<JsonNode?>> _apply;
-    readonly Action _close;
-    List<JsonNode?> _order;
-    readonly Dictionary<string, ObservableCollection<object>> _lists = [];
-
-    public SectionOrderSheet(IReadOnlyList<JsonNode?> sections, Dictionary<string, string> columns, Action<List<JsonNode?>> apply, Action close)
-    {
+        _settings = settings;
+        _pages = pages;
+        _disabled = disabled;
+        _pageCount.Text = $"共 {_pages} 页";
+        _smart.IsOn = settings.SmartOnePage;
+        _smart.Enabled = !disabled;
+        _fontName.Text = FontLabel(settings.FontFamily);
+        _fontName.FontFamily = new FontFamily(PreviewFont(settings.FontFamily));
+        _size.Set(settings.FontSize, !disabled);
+        _line.Set(settings.LineHeight, !disabled);
+        _vertical.Set(settings.VerticalPageMargin, !disabled);
+        _horizontal.Set(settings.PageMargin, !disabled);
+        var key = string.Join("|", sections.Select(x => $"{x.Text("node_id")}:{_label(x.Text("node_id"))}:{ResumeOutline.IsEmpty(x)}")) + "#" + string.Join(",", columns.Select(x => x.Key + x.Value)) + disabled;
         _sections = sections;
         _columns = columns;
-        _apply = apply;
-        _close = close;
-        _order = sections.ToList();
-        Render();
+        if (key != _orderKey) { _orderKey = key; RenderOrder(); }
+    }
+
+    static string FontLabel(string family) => ResumeTypeSettings.Fonts.FirstOrDefault(x => x.Value == family).Label ?? ResumeTypeSettings.Fonts[0].Label;
+
+    /// <summary>字体名用它自己的字形显示（Windows 上取能装到的那一个）。</summary>
+    static string PreviewFont(string family) => FontLabel(family) switch
+    {
+        "霞鹜文楷" => "LXGW WenKai,KaiTi",
+        "系统黑体" => "Microsoft YaHei UI,Microsoft YaHei",
+        _ => "Source Han Serif SC,SimSun",
+    };
+
+    /// <summary>06.2b 字体下拉：按 黑体 / 宋体 / 楷体 分组，每项用它自己的字形，当前项打勾。</summary>
+    void FontMenu(FrameworkElement anchor)
+    {
+        var rows = new List<UIElement>();
+        foreach (var (group, label) in new[] { ("黑体", "系统黑体"), ("宋体", "思源宋体"), ("楷体", "霞鹜文楷") })
+        {
+            if (ResumeTypeSettings.Fonts.FirstOrDefault(x => x.Label == label) is not { Value: { } value }) continue;
+            if (rows.Count > 0) rows.Add(V3MenuRow.Separator());
+            rows.Add(Sans(group, 11, Fnt).Pad(10, 6, 10, 2));
+            var row = new V3MenuRow(label, () => Set(s => s.FontFamily = value), isChecked: _settings.FontFamily == value);
+            foreach (var text in FindText(row)) text.FontFamily = new FontFamily(PreviewFont(value));
+            rows.Add(row);
+        }
+        V3Popover.Menu(anchor, 180, [.. rows]);
+    }
+
+    static IEnumerable<TextBlock> FindText(DependencyObject node)
+    {
+        if (node is TextBlock text) yield return text;
+        if (node is Border { Child: { } child }) foreach (var found in FindText(child)) yield return found;
+        if (node is UserControl { Content: { } content }) foreach (var found in FindText(content)) yield return found;
+        if (node is Panel panel) foreach (var item in panel.Children) foreach (var found in FindText(item)) yield return found;
+    }
+
+    /// <summary>模块顺序：个人信息固定在最前；单栏一个列表，双栏模板每栏一个列表、只在本栏内拖动。行 34 高，六点手柄 #BEBEB8，空模块灰字。</summary>
+    void RenderOrder()
+    {
+        _order.Children.Clear();
+        _order.Children.Add(OrderRow("个人信息", empty: false, locked: true));
+        if (_columns.Count == 0) _order.Children.Add(Reorderable(_sections));
+        else
+            foreach (var side in new[] { "sidebar", "main" })
+            {
+                var group = _sections.Where(x => Side(x) == side).ToList();
+                if (group.Count == 0) continue;
+                _order.Children.Add(Sans(side == "sidebar" ? "侧栏" : "主栏", 11, Fnt).Pad(0, 8, 0, 2));
+                _order.Children.Add(Reorderable(group));
+            }
     }
 
     string Side(JsonNode? section) => _columns.TryGetValue(section.Text("node_id"), out var side) ? side : "main";
 
-    void Render()
+    ListView Reorderable(List<JsonNode?> group)
     {
-        var head = VStack(2,
-            Sans("调整板块顺序", 16, Txt, Medium),
-            Sans(_columns.Count == 0 ? "拖动排序，个人信息固定在最前" : "拖动排序；双栏模板中各栏分别排序，个人信息固定在最前", 12, Sub).Wrap());
-        head.Padding = new Thickness(20);
-        var list = new StackPanel { Spacing = 4 };
-        list.Children.Add(HStack(8, Icon("lock", 12, Fnt), Sans("个人信息", 13, Fnt)).Pad(12, 6, 12, 6));
-        _lists.Clear();
-        if (_columns.Count == 0) list.Children.Add(Reorderable("", _order));
-        else
-            foreach (var side in new[] { "sidebar", "main" })
-            {
-                var group = _order.Where(x => Side(x) == side).ToList();
-                if (group.Count == 0) continue;
-                list.Children.Add(Sans(side == "sidebar" ? "侧栏" : "主栏", 11, Fnt, Medium).Pad(12, 8, 12, 2));
-                list.Children.Add(Reorderable(side, group));
-            }
-        var scroll = new ScrollViewer { Content = list, MinHeight = 300 };
-        var restore = Sans("恢复默认顺序", 13, Link);
-        restore.OnTap(() => { _order = ResumeSectionOrder.RestoreDefault(Collect()); Render(); }, "恢复默认顺序");
-        var foot = Spread(restore, HStack(10, new V3Button("取消", _close, V3Button.Kind.Ghost), new V3Button("应用", () => { _apply(Collect()); _close(); }, V3Button.Kind.Dark)), 10);
-        foot.Padding = new Thickness(20);
-        var grid = new Grid { Width = 440, Height = 520 };
-        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        grid.RowDefinitions.Add(new RowDefinition { Height = Star() });
-        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        grid.Children.Add(head);
-        Grid.SetRow(scroll, 1);
-        grid.Children.Add(scroll);
-        Grid.SetRow(foot, 2);
-        grid.Children.Add(foot);
-        // `.keyboardShortcut(.defaultAction)`：Enter 应用
-        grid.KeyDown += (_, e) => { if (e.Key == Windows.System.VirtualKey.Enter) { e.Handled = true; _apply(Collect()); _close(); } };
-        Content = V3Dialog.Frame(grid, 440);
-    }
-
-    /// <summary>`ForEach(...).onMove`：ListView 自带拖动重排；只在同一栏内移动。</summary>
-    ListView Reorderable(string side, List<JsonNode?> group)
-    {
-        var items = new ObservableCollection<object>(group.Select(Row));
-        _lists[side] = items;
-        return new ListView { ItemsSource = items, CanDragItems = true, CanReorderItems = true, AllowDrop = true, SelectionMode = ListViewSelectionMode.None };
-    }
-
-    /// <summary>把各栏的新顺序写回它们原来占据的位置。</summary>
-    List<JsonNode?> Collect()
-    {
-        if (_columns.Count == 0) return _lists.TryGetValue("", out var only) ? only.Select(x => (JsonNode?)((FrameworkElement)x).Tag).ToList() : _order;
-        var result = _order.ToList();
-        foreach (var (side, items) in _lists)
+        var items = new ObservableCollection<object>(group.Select(x => (object)SectionRow(x)));
+        var list = new ListView
         {
-            var positions = Enumerable.Range(0, result.Count).Where(i => Side(result[i]) == side).ToList();
+            ItemsSource = items, CanDragItems = !_disabled, CanReorderItems = !_disabled, AllowDrop = !_disabled, SelectionMode = ListViewSelectionMode.None,
+            Padding = new Thickness(0), ItemContainerStyle = ItemStyle(),
+        };
+        ScrollViewer.SetVerticalScrollMode(list, ScrollMode.Disabled);
+        list.DragItemsCompleted += (_, _) =>
+        {
+            // 把这一栏的新顺序写回它们原来占据的位置，交给纸面（可 Ctrl+Z 撤销）
             var next = items.Select(x => (JsonNode?)((FrameworkElement)x).Tag).ToList();
+            var result = _sections.ToList();
+            var positions = Enumerable.Range(0, result.Count).Where(i => group.Contains(result[i])).ToList();
             for (var i = 0; i < positions.Count && i < next.Count; i++) result[positions[i]] = next[i];
-        }
-        return result;
+            _reorder(result.Select(x => x.Text("node_id")).ToList());
+        };
+        return list;
     }
 
-    static FrameworkElement Row(JsonNode? section)
+    static Style ItemStyle()
     {
-        var kind = ResumeDocument.SectionKinds.FirstOrDefault(x => x.Key == section.Text("semantic_kind")).Label ?? "模块";
-        var title = ResumeDocument.Value(section.Get("title"));
-        var row = Columns(8, (Auto, Icon("line.3.horizontal", 12, Fnt)), (Star(), Sans(title.Length == 0 ? kind : title, 13, Txt)),
-            (Auto, title.Length > 0 && title != kind ? Sans(kind, 11, Fnt) : new Border()));
+        var style = new Style(typeof(ListViewItem));
+        style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(0)));
+        style.Setters.Add(new Setter(FrameworkElement.MinHeightProperty, 0d));
+        style.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty, HorizontalAlignment.Stretch));
+        return style;
+    }
+
+    FrameworkElement SectionRow(JsonNode? section)
+    {
+        var id = section.Text("node_id");
+        var row = OrderRow(_label(id), ResumeOutline.IsEmpty(section), locked: false);
         row.Tag = section;
-        row.Padding = new Thickness(0, 6, 0, 6);
+        // 右键：改名 / 删除整个模块（立即改在纸上，可 Ctrl+Z 撤销）
+        var menu = new MenuFlyout();
+        var rename = new MenuFlyoutItem { Text = "重命名", IsEnabled = !_disabled };
+        rename.Click += (_, _) => Rename(row, id);
+        var remove = new MenuFlyoutItem { Text = "删除模块", IsEnabled = !_disabled, Foreground = Brush(Red) };
+        remove.Click += (_, _) => _remove(id);
+        menu.Items.Add(rename);
+        menu.Items.Add(remove);
+        row.ContextFlyout = menu;
         return row;
+    }
+
+    static Grid OrderRow(string title, bool empty, bool locked)
+    {
+        var handle = Icon(locked ? "lock" : "line.3.horizontal", 11, Hex(0xBEBEB8)).Align(v: VerticalAlignment.Center);
+        var name = Sans(title, 13, empty || locked ? Fnt : Txt).Align(v: VerticalAlignment.Center);
+        UIElement trailing = empty ? Sans("空", 11, Fnt2).Align(v: VerticalAlignment.Center) : new Border();
+        var row = Columns(10, (GridLength.Auto, handle), (Star(), name), (GridLength.Auto, trailing));
+        row.Height = 34;
+        row.Padding = new Thickness(8, 0, 8, 0);
+        row.CornerRadius = new CornerRadius(4);
+        row.Background = Brush(Clear);
+        if (!locked) row.OnHover(h => row.Background = Brush(h ? Stage : Clear));
+        AutomationProperties.SetName(row, locked ? $"{title}（固定在最前）" : title);
+        return row;
+    }
+
+    void Rename(Grid row, string id)
+    {
+        var box = Input("模块名称", _label(id), 30);
+        box.Height = 28;
+        V3Popover.Show(row, VStack(8, box, new V3Button("改名", () => { var text = box.Text.Trim(); if (text.Length > 0) _rename(id, text); }, V3Button.Kind.Ghost, height: 28)), padding: 10);
+        box.Focus(FocusState.Programmatic);
     }
 }
 
-// MARK: - 大纲
+// MARK: - 滑块
 
 /// <summary>
-/// 大纲 V2（Mac `OutlinePanel`，Web `WorkbenchOutlinePanel` + `WorkbenchSectionOrderControl`）：头部、「N 个模块 / 恢复默认顺序」、
-/// 按栏分组的两行模块行（拖动手柄、标题、摘要、空标签、悬停 ⋯ 菜单），虚线「添加模块」与底部 / 提示。
-/// 个人信息固定在第一行，不能拖动。原生端没有分页信息，不显示 Web 的页面缩略图条。
+/// Figma 06.2 滑块：标题 12.5 灰字 + 右侧数值 12.5 墨黑；轨道 4 高 #DCDCD8，已选段墨黑；
+/// 拇指 20 白圆、#E4E4E0 细边、中间 12 墨黑点。拖动或方向键按步长取值。
 /// </summary>
-public sealed class OutlinePanel : UserControl
+public sealed class V3Slider : UserControl
 {
-    readonly Func<JsonNode?, string> _label;
-    readonly Action<string> _jump;
-    readonly Action<int, int> _move;
-    readonly Action<List<JsonNode?>> _reorder;
-    readonly Action<int, string> _rename;
-    readonly Action<int> _remove;
-    readonly Action<(string key, string label)> _add;
-    readonly Action _close;
+    readonly (double Min, double Max, double Step) _range;
+    readonly Func<double, string> _format;
+    readonly Action<double> _changed;
+    readonly TextBlock _value = Sans("", 12.5, Txt);
+    readonly Grid _track = new() { Height = 20 };
+    readonly Border _fill = new() { Height = 4, CornerRadius = new CornerRadius(2), Background = Brush(Txt), HorizontalAlignment = HorizontalAlignment.Left };
+    readonly Border _thumb;
+    double _current;
+    bool _enabled = true, _dragging;
 
-    List<JsonNode?> _sections = [];
-    JsonNode? _identity;
-    Dictionary<string, string> _columns = [];
-    bool _disabled;
-    string? _renaming;
-    string _renameText = "";
-    bool _adding;
-    string? _dragging;
-    readonly ScrollViewer _scroll = new() { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-
-    public OutlinePanel(Func<JsonNode?, string> label, Action<string> jump, Action<int, int> move, Action<List<JsonNode?>> reorder,
-        Action<int, string> rename, Action<int> remove, Action<(string key, string label)> add, Action close)
+    public V3Slider(string label, (double Min, double Max, double Step) range, Func<double, string> format, Action<double> changed)
     {
-        _label = label; _jump = jump; _move = move; _reorder = reorder; _rename = rename; _remove = remove; _add = add; _close = close;
-    }
-
-    public void Update(List<JsonNode?> sections, JsonNode? identity, Dictionary<string, string> columns, bool disabled)
-    {
-        _sections = sections; _identity = identity; _columns = columns; _disabled = disabled;
-        Render();
-    }
-
-    void Render()
-    {
-        var offset = _scroll.VerticalOffset;
-        var restore = Sans("恢复默认顺序", 11.5, _disabled ? Fnt2 : Sub, Medium);
-        restore.OnTap(() => _reorder(ResumeSectionOrder.RestoreDefault(_sections)), "恢复默认顺序", () => !_disabled);
-        var count = Spread(Sans($"{_sections.Count + 1} 个模块", 11.5, Fnt), restore, 8).Frame(height: 14);
-        count.Margin = new Thickness(8, 14, 8, 6);
-        var groups = VStack(12);
-        foreach (var group in Groups())
+        _range = range;
+        _format = format;
+        _changed = changed;
+        _thumb = new Border
         {
-            var rows = VStack(2);
-            if (group.first) rows.Children.Add(IdentityRow());
-            foreach (var index in group.indices) rows.Children.Add(SectionRow(index));
-            groups.Children.Add(VStack(4,
-                group.title.Length == 0 ? null : HStack(6, ColumnGlyph.Make(group.title == "侧栏"), Sans(group.title, 11.5, Sub, Medium)).Pad(8, 4, 8, 2),
-                rows));
-        }
-        var content = VStack(0, count, groups, AddButton().Top(10));
-        content.Padding = new Thickness(16, 16, 16, 20);
-        _scroll.Content = content;
-
-        var slash = new Border
-        {
-            Child = Number("/", 11, Txt, Semibold), Padding = new Thickness(5, 1, 5, 1), CornerRadius = new CornerRadius(4),
-            Background = Brush(V3.White), BorderBrush = Brush(Cl), BorderThickness = new Thickness(1),
+            Width = 20, Height = 20, CornerRadius = new CornerRadius(10), Background = Brush(V3.White), BorderBrush = Brush(Cl), BorderThickness = new Thickness(1),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Child = new Border { Width = 12, Height = 12, CornerRadius = new CornerRadius(6), Background = Brush(Txt), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center },
         };
-        var hint = HStack(6, Sans("也可在正文空行输入", 11, Fnt), slash, Sans("选「标题 2」新建模块", 11, Fnt));
-        var footer = new Border { Child = hint, Padding = new Thickness(24, 14, 24, 14), BorderBrush = Brush(Line), BorderThickness = new Thickness(0, 1, 0, 0) };
-
-        var grid = new Grid();
-        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        grid.RowDefinitions.Add(new RowDefinition { Height = Star() });
-        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        grid.Children.Add(WorkbenchPanelHeader.Make("大纲", "拖动调整顺序，点击定位到正文", "关闭大纲", _close));
-        ResumeEditorView.Detach(_scroll);
-        Grid.SetRow(_scroll, 1);
-        grid.Children.Add(_scroll);
-        Grid.SetRow(footer, 2);
-        grid.Children.Add(footer);
-        Content = grid;
-        _scroll.DispatcherQueue.TryEnqueue(() => _scroll.ChangeView(null, offset, null, true));
-    }
-
-    List<(string title, List<int> indices, bool first)> Groups()
-    {
-        var all = Enumerable.Range(0, _sections.Count).ToList();
-        if (_columns.Count == 0) return [("", all, true)];
-        var side = all.Where(i => _columns.GetValueOrDefault(_sections[i].NodeKey()) == "sidebar").ToList();
-        var main = all.Where(i => _columns.GetValueOrDefault(_sections[i].NodeKey()) != "sidebar").ToList();
-        return new List<(string, List<int>, bool)> { ("侧栏", side, true), ("主栏", main, false) }.Where(x => x.Item2.Count > 0 || x.Item3).ToList();
-    }
-
-    /// <summary>个人信息：锁图标、「固定」，摘要是已填的联系方式。</summary>
-    FrameworkElement IdentityRow() => OutlineRow.Make("个人信息", ResumeOutline.IdentitySummary(_identity), empty: false,
-        fixedRow: true, current: false, dragging: false, disabled: _disabled, renaming: null, handle: null, menu: null, open: () => _jump("identity"));
-
-    FrameworkElement SectionRow(int index)
-    {
-        var section = _sections[index];
-        var title = _label(section);
-        var key = section.NodeKey();
-        var empty = ResumeOutline.IsEmpty(section);
-        var handle = Icon("line.3.horizontal", 11, Fnt2).Frame(20, 34);
-        var handleHost = new Border { Child = handle.Align(HorizontalAlignment.Center, VerticalAlignment.Center), Width = 20, Height = 34, Background = Brush(Clear) };
-        AutomationProperties.SetName(handleHost, $"调整「{title}」顺序，可用上下方向键移动");
-        handleHost.IsTabStop = false;
-        // `.accessibilityAction(named: "上移/下移")`：键盘焦点在行上时用上下方向键移动
-        var menuButton = new Border { Width = 22, Height = 22, Background = Brush(Clear), Child = Icon("ellipsis", 12, Sub).Align(HorizontalAlignment.Center, VerticalAlignment.Center) };
-        menuButton.OnTap(() =>
+        _track.Children.Add(new Border { Height = 4, CornerRadius = new CornerRadius(2), Background = Brush(Sk2), Margin = new Thickness(10, 0, 10, 0) });
+        _track.Children.Add(_fill);
+        _track.Children.Add(_thumb);
+        _track.Background = Brush(Clear);
+        _track.SizeChanged += (_, _) => Layout();
+        _track.PointerPressed += (_, e) =>
         {
-            var menu = new MenuFlyout();
-            var rename = new MenuFlyoutItem { Text = "重命名", Icon = new FontIcon { Glyph = Icons.Glyph("pencil"), FontFamily = IconFamily } };
-            rename.Click += (_, _) => { _renameText = title; _renaming = key; Render(); };
-            var jump = new MenuFlyoutItem { Text = "定位到正文", Icon = new FontIcon { Glyph = Icons.Glyph("scope"), FontFamily = IconFamily } };
-            jump.Click += (_, _) => _jump(key);
-            var remove = new MenuFlyoutItem { Text = "删除模块", Foreground = Brush(Red), Icon = new FontIcon { Glyph = Icons.Glyph("trash"), FontFamily = IconFamily, Foreground = Brush(Red) } };
-            remove.Click += (_, _) => _remove(index);
-            menu.Items.Add(rename);
-            menu.Items.Add(jump);
-            menu.Items.Add(new MenuFlyoutSeparator());
-            menu.Items.Add(remove);
-            menu.Items.Add(new MenuFlyoutItem { Text = "连同内容一起删除，可 Ctrl+Z 撤销", IsEnabled = false });
-            menu.ShowAt(menuButton);
-        }, $"「{title}」更多操作");
-        var row = OutlineRow.Make(title, ResumeOutline.Summary(section), empty, fixedRow: false, current: false,
-            dragging: _dragging == key, disabled: _disabled, renaming: _renaming == key ? _renameText : null, handle: handleHost, menu: menuButton,
-            open: () => _jump(key), commitRename: value =>
-            {
-                _renaming = null;
-                if (value is { } text && text.Trim().Length > 0) _rename(index, text.Trim());
-                Render();
-            });
-        row.KeyDown += (_, e) =>
-        {
-            if (_disabled) return;
-            if (e.Key == Windows.System.VirtualKey.Up && index > 0) { e.Handled = true; _move(index, index - 1); }
-            if (e.Key == Windows.System.VirtualKey.Down && index < _sections.Count - 1) { e.Handled = true; _move(index, index + 1); }
+            if (!_enabled) return;
+            _dragging = _track.CapturePointer(e.Pointer);
+            Pick(e.GetCurrentPoint(_track).Position.X);
+            e.Handled = true;
         };
-        // `.onDrag` / `.onDrop`：拖动手柄到另一行即与它交换位置
-        if (!_disabled)
+        _track.PointerMoved += (_, e) => { if (_dragging) Pick(e.GetCurrentPoint(_track).Position.X); };
+        _track.PointerReleased += (_, e) => { _dragging = false; _track.ReleasePointerCapture(e.Pointer); };
+        _track.PointerCaptureLost += (_, _) => _dragging = false;
+        IsTabStop = true;
+        UseSystemFocusVisuals = true;
+        KeyDown += (_, e) =>
         {
-            handleHost.CanDrag = true;
-            handleHost.DragStarting += (_, e) => { _dragging = key; e.Data.SetText(key); row.Opacity = 0.35; };
-            handleHost.DropCompleted += (_, _) => { _dragging = null; row.Opacity = 1; };
-            row.AllowDrop = true;
-            row.DragOver += (_, e) => { e.AcceptedOperation = DataPackageOperation.Move; };
-            row.Drop += (_, _) =>
-            {
-                var from = _sections.FindIndex(x => x.NodeKey() == _dragging);
-                _dragging = null;
-                if (from < 0 || from == index) return;
-                _move(from, index);
-            };
-        }
-        return row;
-    }
-
-    /// <summary>`.wb3-outline-add`：37 高虚线框、圆角 10、12.5/500；弹层 332 宽，「还可以添加」与未出现的常用模块、自定义模块与说明。</summary>
-    FrameworkElement AddButton()
-    {
-        var enabled = !_disabled && _sections.Count < 100;
-        var ink = !enabled ? Fnt2 : _adding ? Txt : Sub;
-        var plus = Icon("plus", 11, ink);
-        plus.FontWeight = Medium;
-        var label = HStack(6, plus, Sans("添加模块", 12.5, ink, Medium));
-        label.HorizontalAlignment = HorizontalAlignment.Center;
-        var dash = new Microsoft.UI.Xaml.Shapes.Rectangle
-        {
-            RadiusX = 10, RadiusY = 10, Stroke = Brush(_adding ? Fnt : Fnt2), StrokeThickness = 1, StrokeDashArray = new DoubleCollection { 3, 2 },
-            Fill = Brush(_adding ? Hex(0xFAFAF9) : Clear),
+            if (!_enabled) return;
+            var direction = e.Key switch { VirtualKey.Left or VirtualKey.Down => -1, VirtualKey.Right or VirtualKey.Up => 1, _ => 0 };
+            if (direction == 0) return;
+            e.Handled = true;
+            Commit(ResumeTypeSettings.Step(_current, direction, _range.Min, _range.Max, _range.Step));
         };
-        var button = new Grid { Height = 37, Background = Brush(Clear) };
-        button.Children.Add(dash);
-        button.Children.Add(label.Align(HorizontalAlignment.Center, VerticalAlignment.Center));
-        button.OnTap(() =>
-        {
-            _adding = true;
-            Render();
-            Flyout? flyout = null;
-            var present = _sections.Select(x => x.Text("semantic_kind")).ToHashSet();
-            var options = ResumeOutline.ModuleOptions.Where(x => !present.Contains(x.Kind)).ToList();
-            var list = new StackPanel { Width = 332, Padding = new Thickness(6) };
-            if (options.Count > 0)
-            {
-                list.Children.Add(Sans("还可以添加", 11, Fnt).Pad(10, 8, 10, 6));
-                foreach (var option in options)
-                {
-                    var choice = option;
-                    list.Children.Add(MenuRow(VStack(1, Sans(option.Title, 12.5, Txt, Medium).Frame(height: 17), Sans(option.Hint, 11, Fnt).Frame(height: 14)),
-                        new Thickness(10, 8, 10, 8), option.Title, () => { flyout?.Hide(); _add((choice.Kind, choice.Title)); }));
-                }
-                list.Children.Add(new Border { Height = 1, Background = Brush(Line), Margin = new Thickness(0, 2, 0, 2) });
-            }
-            list.Children.Add(MenuRow(HStack(8, Icon("plus", 11, Sub), Sans("自定义模块", 12.5, Sub, Medium)), new Thickness(10, 9, 10, 9), "自定义模块",
-                () => { flyout?.Hide(); _add(("custom", "新模块")); }));
-            list.Children.Add(Sans("新模块插入到光标所在模块之后，可再拖动调整", 10.5, Fnt).LineHeight(15).Wrap().Pad(10, 6, 10, 6));
-            flyout = V3Popover.Show(button, list, FlyoutPlacementMode.Top, 0);
-            flyout.Closed += (_, _) => { _adding = false; Render(); };
-        }, "添加模块", () => enabled);
-        return button;
+        Content = VStack(6, Spread(Sans(label, 12.5, Sub), _value, 8), _track);
+        AutomationProperties.SetName(this, label);
     }
 
-    /// <summary>Mac `MenuRowStyle`（`.v3-menu-item:hover`）：悬停 #F4F4F2、6 圆角。</summary>
-    static Border MenuRow(UIElement content, Thickness padding, string name, Action action)
+    /// <summary>外部同步数值（拖动中不打断）。</summary>
+    public void Set(double value, bool enabled)
     {
-        var row = new Border { Child = content, Padding = padding, CornerRadius = new CornerRadius(6), Background = Brush(Clear) };
-        row.OnHover(h => row.Background = Brush(h ? Field : Clear));
-        row.OnTap(action, name);
-        return row;
-    }
-}
-
-/// <summary>一行模块（Mac `OutlineRow`）：最小 52 高、圆角 10、内边距 9/10/9/8、间距 8；标题 13 行高 16，摘要 11 行高 13；悬停 #fafaf9，⋯ 只在悬停时出现并替换标签。</summary>
-static class OutlineRow
-{
-    public static Grid Make(string title, string summary, bool empty, bool fixedRow, bool current, bool dragging, bool disabled, string? renaming,
-        FrameworkElement? handle, FrameworkElement? menu, Action open, Action<string?>? commitRename = null)
-    {
-        var row = new Grid { MinHeight = 52, Padding = new Thickness(8, 9, 10, 9), CornerRadius = new CornerRadius(10), ColumnSpacing = 8, Opacity = dragging ? 0.35 : 1 };
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = Star() });
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var lead = fixedRow ? Icon("lock", 11, Fnt2).Frame(20, 34) : handle ?? new Border { Width = 20 };
-        row.Children.Add(lead);
-
-        FrameworkElement titleView;
-        TextBox? field = null;
-        if (renaming is not null)
-        {
-            field = new TextBox
-            {
-                Text = renaming, FontFamily = SansFamily, FontSize = 13, Height = 22, MinHeight = 0, Padding = new Thickness(6, 1, 6, 0), CornerRadius = new CornerRadius(6),
-                BorderBrush = Brush(Blue), BorderThickness = new Thickness(1), Background = Brush(V3.White), Margin = new Thickness(-6, -3, 0, -3),
-            };
-            field.Resources["TextControlBorderBrushFocused"] = Brush(Blue);
-            field.Resources["TextControlBorderThemeThicknessFocused"] = new Thickness(1);
-            var box = field;
-            box.KeyDown += (_, e) =>
-            {
-                if (e.Key == Windows.System.VirtualKey.Enter) { e.Handled = true; commitRename?.Invoke(box.Text); }
-                if (e.Key == Windows.System.VirtualKey.Escape) { e.Handled = true; commitRename?.Invoke(null); }
-            };
-            box.Loaded += (_, _) => { box.Focus(FocusState.Programmatic); box.SelectAll(); };
-            titleView = box;
-        }
-        else titleView = Sans(title, 13, empty ? Fnt : Txt, current ? Medium : Regular).Frame(height: 16);
-        var texts = VStack(2, titleView, Sans(summary, 11, Fnt).Frame(height: 13));
-        texts.VerticalAlignment = VerticalAlignment.Center;
-        Grid.SetColumn(texts, 1);
-        row.Children.Add(texts);
-
-        var trailing = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
-        Grid.SetColumn(trailing, 2);
-        row.Children.Add(trailing);
-
-        var hover = false;
-        void Paint()
-        {
-            trailing.Children.Clear();
-            if (!(hover && !fixedRow) && empty && !fixedRow) trailing.Children.Add(Tag("空", Fnt, Field));
-            if (fixedRow) trailing.Children.Add(Sans("固定", 11, Fnt2));
-            if (hover && !fixedRow && !disabled && menu is not null) { ResumeEditorView.Detach(menu); menu.Margin = new Thickness(0, 0, -3, 0); trailing.Children.Add(menu); }
-            row.Background = Brush(current ? Field : hover ? Hex(0xFAFAF9) : Clear);
-            if (lead is FontIcon lockIcon) lockIcon.Foreground = Brush(Fnt2);
-            else if (lead is Border { Child: FontIcon grip }) grip.Foreground = Brush(hover && !fixedRow && !disabled ? Fnt : Fnt2);
-        }
-        row.OnHover(h => { hover = h; Paint(); });
-        row.Tapped += (_, e) => { if (renaming is null && !IsInside(e.OriginalSource, menu)) open(); };
-        ToolTipService.SetToolTip(row, $"跳到「{title}」");
-        AutomationProperties.SetName(row, title);
-        row.IsTabStop = false;
-        Paint();
-        return row;
+        _enabled = enabled;
+        Opacity = enabled ? 1 : 0.5;
+        if (_dragging) return;
+        _current = value;
+        Layout();
     }
 
-    static bool IsInside(object source, FrameworkElement? target)
+    void Pick(double x)
     {
-        for (var node = source as DependencyObject; node is not null; node = VisualTreeHelper.GetParent(node))
-            if (ReferenceEquals(node, target)) return true;
-        return false;
+        var usable = Math.Max(1, _track.ActualWidth - 20);
+        var ratio = Math.Clamp((x - 10) / usable, 0, 1);
+        var raw = _range.Min + ratio * (_range.Max - _range.Min);
+        var snapped = Math.Round(Math.Round(raw / _range.Step) * _range.Step * 100) / 100;
+        Commit(Math.Clamp(snapped, _range.Min, _range.Max));
     }
 
-    static Border Tag(string text, Color fg, Color bg) => new()
+    void Commit(double value)
     {
-        Child = Sans(text, 10.5, fg, Medium), Padding = new Thickness(6, 2, 6, 2), CornerRadius = new CornerRadius(4), Background = Brush(bg),
-    };
-}
-
-/// <summary>`.workbench-section-order-column`（Mac `ColumnGlyph`）：12×10 小框，左或右 4 宽实心表示侧栏 / 主栏。</summary>
-static class ColumnGlyph
-{
-    public static FrameworkElement Make(bool left)
-    {
-        var frame = new Grid { Width = 12, Height = 10, CornerRadius = new CornerRadius(2) };
-        frame.Children.Add(new Border { Width = 4, Height = 10, Background = Brush(Fnt), HorizontalAlignment = left ? HorizontalAlignment.Left : HorizontalAlignment.Right });
-        frame.Children.Add(new Border { CornerRadius = new CornerRadius(2), BorderBrush = Brush(Fnt), BorderThickness = new Thickness(1.5) });
-        AutomationProperties.SetAccessibilityView(frame, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
-        return frame;
-    }
-}
-
-// MARK: - 聚焦这段
-
-/// <summary>
-/// 聚焦这段（Mac `SectionFocusSheet`，Web `sectionFocus/FocusSheet.tsx` 的主要流程）：可写一句想怎么改，AI 按写作标准逐条给出建议；
-/// 每条建议可选一个改写采用（写回对应行，留在编辑器里由自动保存提交）或跳过，结果记在服务端的分析记录里。
-/// </summary>
-public sealed class SectionFocusSheet : UserControl
-{
-    readonly string _resumeId;
-    readonly SectionFocus.Unit _unit;
-    readonly Func<string, string, bool> _adopt;
-    readonly Action _close;
-    string _intent;
-    bool _loading;
-    string? _error;
-    JsonNode? _result;
-    readonly Dictionary<string, string> _handled = [];
-    readonly TextBox _intentBox;
-
-    List<JsonNode?> Notes => S.Arr(_result.Get("notes"));
-    List<JsonNode?> Items => S.Arr(_result.Get("review").Get("items"));
-
-    public SectionFocusSheet(string resumeId, SectionFocus.Unit unit, string intent, Func<string, string, bool> adopt, Action close)
-    {
-        _resumeId = resumeId; _unit = unit; _adopt = adopt; _close = close;
-        _intent = intent.Length > 300 ? intent[..300] : intent;
-        _intentBox = new TextBox { Text = _intent, PlaceholderText = "可选：想怎么改？比如“突出数据结果”“更简洁”", MaxLength = 300, FontFamily = SansFamily, FontSize = 13 };
-        _intentBox.TextChanged += (_, _) => _intent = _intentBox.Text;
-        Render();
+        if (Math.Abs(value - _current) < 1e-9) return;
+        _current = value;
+        Layout();
+        _changed(value);
     }
 
-    void Render()
+    void Layout()
     {
-        var close = new V3Button("关闭", _close, V3Button.Kind.Ghost, height: 28, small: true);
-        var head = Spread(VStack(2, Serif("聚焦这段", 20), Sans(_unit.Heading.Length == 0 ? $"{_unit.Lines.Count} 行内容" : _unit.Heading, 12, Fnt)), close, 8, VerticalAlignment.Top);
-        var body = VStack(12, head);
-        if (_result is null)
-        {
-            body.Children.Add(Sans("AI 会按写作标准逐行检查这段内容，给出可直接采用的改写；不会自动改你的简历。", 12.5, Sub).Wrap());
-            ResumeEditorView.Detach(_intentBox);
-            body.Children.Add(_intentBox);
-            var lines = VStack(4, _unit.Lines.Select(x => (UIElement)Sans("· " + x.Text, 12, Sub).Wrap(2)).ToArray());
-            body.Children.Add(new Border { Child = lines, Padding = new Thickness(10), CornerRadius = new CornerRadius(8), Background = Brush(Stage) });
-            var analyze = new V3Button(_loading ? "正在分析…" : "开始分析", () => _ = Analyze(), V3Button.Kind.Dark) { Enabled = !_loading };
-            body.Children.Add(Spread(_error is { } e1 ? Sans(e1, 12, Red).Wrap() : new Border(), analyze, 8));
-        }
-        else
-        {
-            if (_result.Get("too_thin").Bool()) body.Children.Add(Sans("这段内容太少，先补几句做了什么、结果如何，再来分析会更准。", 12.5, Orange).Wrap());
-            if (Notes.Count == 0) body.Children.Add(Sans("这段写得不错，没有需要修改的地方。", 13, Sub));
-            var cards = VStack(10, Notes.Select(NoteCard).ToArray());
-            body.Children.Add(new ScrollViewer { Content = cards, MaxHeight = 460 });
-            var buttons = HStack(10, new V3Button("重新分析", () => { _result = null; _handled.Clear(); Render(); }, V3Button.Kind.Ghost), new V3Button("完成", _close, V3Button.Kind.Dark));
-            body.Children.Add(Spread(_error is { } e2 ? Sans(e2, 12, Red).Wrap() : new Border(), buttons, 8));
-        }
-        body.Padding = new Thickness(22);
-        body.Width = 600;
-        Content = V3Dialog.Frame(new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }, 600);
-    }
-
-    UIElement NoteCard(JsonNode? note)
-    {
-        var id = note.Text("id");
-        var variants = S.Arr(note.Get("variants"));
-        _handled.TryGetValue(id, out var state);
-        var card = VStack(8, Spread(Sans(note.Text("title"), 13, Txt, Semibold),
-            state is null ? new Border() : Sans(state == "done" ? "已采用" : "已跳过", 11.5, state == "done" ? Green : Fnt), 8));
-        if (note.Text("quote").Length > 0)
-        {
-            var quote = Sans("原文：" + note.Text("quote"), 12, Fnt).Wrap();
-            if (state == "done") quote.TextDecorations = Windows.UI.Text.TextDecorations.Strikethrough;
-            card.Children.Add(quote);
-        }
-        if (note.Text("detail").Length > 0) card.Children.Add(Sans(note.Text("detail"), 12, Sub).Wrap());
-        if (note.Get("demo") is JsonObject demo)
-        {
-            card.Children.Add(Sans("补全示范：" + demo.Text("text"), 12, Blue).Wrap());
-            card.Children.Add(Sans("〔〕里是只有你知道的数据，请在编辑器里补上。", 11, Fnt).Wrap());
-        }
-        if (state is null)
-        {
-            foreach (var variant in variants)
-            {
-                var texts = VStack(2);
-                if (variant.Text("label").Length > 0) texts.Children.Add(Sans(variant.Text("label"), 11, Fnt));
-                var text = Sans(variant.Text("text"), 12.5, Txt).Wrap();
-                text.IsTextSelectionEnabled = true;
-                texts.Children.Add(text);
-                var risky = S.Arr(variant.Get("risky_terms")).Select(x => x.String()).OfType<string>().ToList();
-                if (risky.Count > 0) texts.Children.Add(Sans($"「{string.Join("、", risky)}」原句没有，请确认属实", 11, Orange).Wrap());
-                var chosen = variant;
-                var adopt = new V3Button("采用", () => _ = Decide(note, chosen), V3Button.Kind.Ghost) { Enabled = note.Text("line_id").Length > 0 };
-                adopt.VerticalAlignment = VerticalAlignment.Top;
-                card.Children.Add(new Border { Child = Columns(8, (Star(), texts), (Auto, adopt)), Padding = new Thickness(8), CornerRadius = new CornerRadius(7), Background = Brush(Field) });
-            }
-            var skip = Sans("跳过", 12, Link);
-            skip.OnTap(() => _ = Decide(note, null), "跳过");
-            skip.HorizontalAlignment = HorizontalAlignment.Right;
-            card.Children.Add(skip);
-        }
-        return new Border { Child = card, Padding = new Thickness(12), CornerRadius = new CornerRadius(10), Background = Brush(V3.White), BorderBrush = Brush(Cl), BorderThickness = new Thickness(1) };
-    }
-
-    async Task Analyze()
-    {
-        _loading = true; _error = null;
-        Render();
-        var body = new JsonObject { ["section"] = _unit.Payload, ["reference"] = new JsonObject { ["kind"] = "general" } };
-        var text = _intent.Trim();
-        if (text.Length > 0) body["intent"] = text;
-        try { _result = await App.Session.Api.CareerRequestAsync($"/api/resumes/{_resumeId}/section-review:analyze", "POST", body: body); }
-        catch (Exception error)
-        {
-            if (error is ApiException { Status: System.Net.HttpStatusCode.Unauthorized }) App.Session.ReportAuthenticationFailure();
-            _error = SectionFocus.ErrorMessage(error);
-        }
-        finally { _loading = false; Render(); }
-    }
-
-    /// <summary>采用：写回这一行并把服务端的建议项标为 done（附改写前后）；跳过：标为 skipped。</summary>
-    async Task Decide(JsonNode? note, JsonNode? variant)
-    {
-        var noteId = note.Text("id");
-        var lineId = note.Text("line_id");
-        if (variant is not null)
-        {
-            var before = _unit.Lines.FirstOrDefault(x => x.Id == lineId)?.Text ?? note.Text("quote");
-            if (!_adopt(lineId, variant.Text("text"))) { _error = "这一行已经不在简历里，没能采用。"; Render(); return; }
-            _handled[noteId] = "done";
-            Render();
-            await Patch(noteId, new JsonObject { ["status"] = "done", ["edit"] = new JsonObject { ["line_id"] = lineId, ["before"] = before, ["after"] = variant.Text("text") } });
-        }
-        else
-        {
-            _handled[noteId] = "skipped";
-            Render();
-            await Patch(noteId, new JsonObject { ["status"] = "skipped" });
-        }
-    }
-
-    async Task Patch(string noteId, JsonObject body)
-    {
-        if (_result.Get("review").Get("id").String() is not { } reviewId || Items.FirstOrDefault(x => x.Text("note_id") == noteId) is not { } item) return;
-        try { await App.Session.Api.CareerRequestAsync($"/api/resumes/{_resumeId}/section-reviews/{reviewId}/items/{item.Text("id")}", "PATCH", body: body); }
-        catch (Exception error) { _error = SectionFocus.ErrorMessage(error); Render(); }
+        _value.Text = _format(_current);
+        AutomationProperties.SetItemStatus(this, _value.Text);
+        var usable = Math.Max(0, _track.ActualWidth - 20);
+        var ratio = _range.Max > _range.Min ? Math.Clamp((_current - _range.Min) / (_range.Max - _range.Min), 0, 1) : 0;
+        _thumb.Margin = new Thickness(ratio * usable, 0, 0, 0);
+        _fill.Margin = new Thickness(10, 0, 0, 0);
+        _fill.Width = ratio * usable;
     }
 }

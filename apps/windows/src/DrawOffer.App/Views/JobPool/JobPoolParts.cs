@@ -13,7 +13,7 @@ using static DrawOffer.App.DesignSystem.V3;
 
 namespace DrawOffer.App.Views.JobPool;
 
-/// <summary>Mac `JobPoolView.swift` 的共用部件：数字分组、Logo、面包屑、统计、胶囊筛选、下拉、标签、骨架、提示条与空状态。</summary>
+/// <summary>岗位广场共用部件（Windows 稿 06）：数字分组、Logo、面包屑、统计、筛选胶囊、下拉、标签、骨架、提示条与空状态。</summary>
 static class PoolUI
 {
     /// <summary>`grouped`：zh_CN 千分位。</summary>
@@ -30,22 +30,24 @@ static class PoolUI
 
     public static void Launch(Uri uri) => _ = Windows.System.Launcher.LaunchUriAsync(uri);
 
-    /// <summary>`Link`：文字 + `arrow.up.right.square`。</summary>
-    public static FrameworkElement Link(string title, Uri uri, double size, Color color, FontWeight weight, double icon = 10, double spacing = 3) =>
-        HStack(spacing, Sans(title, size, color, weight), Icon("arrow.up.right.square", icon, color)).OnTap(() => Launch(uri), title);
+    /// <summary>外链文字，末尾带「↗」（Windows 稿 06）。</summary>
+    public static TextBlock Link(string title, Uri uri, double size, Color color, FontWeight? weight = null) =>
+        TextLink(title + " ↗", () => Launch(uri), size, color, weight ?? Regular);
 
-    /// <summary>`PoolCompanyLogo`：公开的公司图标，缺图或加载失败时回退首字。</summary>
-    public static Border Logo(string name, string url, double size = 24)
+    /// <summary>
+    /// 公司图标：公开 Logo，缺图或加载失败时回退首字。目录紧凑卡片（filled）为 #F4F4F2 底、无描边；其余白底细描边。
+    /// </summary>
+    public static Border Logo(string name, string url, double size = 24, bool filled = false)
     {
-        var radius = size switch { 20 => 5, 24 => 6, 32 => 7, 40 => 9, 48 => 10, 64 => 12, _ => 6 };
-        var font = size switch { 20 => 10, 24 => 12, 32 => 14, 40 => 16, 48 => 19, 64 => 24, _ => 12 };
+        var radius = size switch { 20 => 5, 24 => 6, 32 => 8, 40 => 9, 48 => 10, 56 => 12, 64 => 12, _ => 6 };
+        var font = size switch { 20 => 10, 24 => 12, 32 => 14, 40 => 16, 48 => 19, 56 => 22, 64 => 24, _ => 12 };
         var trimmed = name.Trim(' ', '\t');
         var initial = trimmed.Length == 0 ? "企" : System.Globalization.StringInfo.GetNextTextElement(trimmed);
         var fallback = Sans(initial, font, Hex(0x454842), Medium).Align(HorizontalAlignment.Center, VerticalAlignment.Center);
         var logo = new Border
         {
-            Width = size, Height = size, CornerRadius = new CornerRadius(radius), Background = Brush(V3.White),
-            BorderBrush = Brush(V3.Line), BorderThickness = new Thickness(1), Child = fallback,
+            Width = size, Height = size, CornerRadius = new CornerRadius(radius), Background = Brush(filled ? Field : V3.White),
+            BorderBrush = Brush(filled ? Clear : Cl), BorderThickness = new Thickness(filled ? 0 : 1), Child = fallback,
         };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetAccessibilityView(logo, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
         if (url.StartsWith("/api/company-logos/") && (App.Session.Api as HttpApiClient)?.Coordinator.Origin is { } origin)
@@ -56,75 +58,67 @@ static class PoolUI
         return logo;
     }
 
-    /// <summary>`BackCrumb`：「← 岗位广场 / 公司 / 当前页」，16px、`V3.fnt`、高 20、下距 12。</summary>
+    /// <summary>面包屑「岗位广场 / 公司 / 当前页」：12 号，前几级灰色可点、斜杠更浅、当前页墨黑；高 18。</summary>
     public static FrameworkElement Crumbs(Action back, IEnumerable<(string Title, Action Action)>? trail = null, string? current = null)
     {
-        var row = HStack(12, HStack(6, Icon("arrow.left", 13, Fnt), Sans("岗位广场", 16, Fnt)).OnTap(back, "返回岗位广场"));
+        var row = HStack(6, TextLink("岗位广场", back, 12, Fnt, Regular).Tip("返回岗位广场"));
         foreach (var item in trail ?? [])
         {
-            row.Children.Add(Sans("/", 16, Fnt));
-            row.Children.Add(Sans(item.Title, 16, Fnt).OnTap(item.Action, item.Title));
+            row.Children.Add(Sans("/", 12, Fnt2));
+            row.Children.Add(TextLink(item.Title, item.Action, 12, Fnt, Regular));
         }
         if (current is { Length: > 0 })
         {
-            row.Children.Add(Sans("/", 16, Fnt));
-            row.Children.Add(Sans(current, 16, Fnt));
+            row.Children.Add(Sans("/", 12, Fnt2));
+            row.Children.Add(Sans(current, 12, Txt).Also(t => t.TextTrimming = TextTrimming.CharacterEllipsis));
         }
-        row.Height = 20;
-        row.Margin = new Thickness(0, 0, 0, 12);
+        row.Height = 18;
         return row;
     }
 
-    /// <summary>`.pool-figure`：在招总数，下面一行今日新增。</summary>
+    /// <summary>页头右侧：在招总数（24 号数字 + 「个在招岗位」），下一行蓝点「今日新增 N」· 补充说明。</summary>
     public static FrameworkElement Stats(int count, int today, string? extra = null)
     {
-        var top = HStack(6, Number(Grouped(count), 28, Txt), Sans("个在招岗位", 12.5, Fnt).Align(v: VerticalAlignment.Bottom).Pad(0, 0, 0, 4));
-        top.Height = 31;
+        var top = HStack(8, Number(Grouped(count), 24, Txt), Sans("个在招岗位", 12, Fnt).Align(v: VerticalAlignment.Bottom).Pad(0, 0, 0, 3));
         top.HorizontalAlignment = HorizontalAlignment.Right;
         var tint = today > 0 ? Blue : Fnt;
-        var bottom = HStack(0, HStack(5, new Ellipse { Width = 6, Height = 6, Fill = Brush(today > 0 ? Blue : Fnt2) }, Sans($"今日新增 {Grouped(today)}", 12, tint)),
-            extra is null ? null : Sans(" · " + extra, 12, Fnt));
-        bottom.Height = 23;
+        var bottom = HStack(6, new Ellipse { Width = 6, Height = 6, Fill = Brush(today > 0 ? Blue : Fnt2), VerticalAlignment = VerticalAlignment.Center },
+            Sans($"今日新增 {Grouped(today)}", 12, tint));
+        if (extra is not null) { bottom.Children.Add(Sans("·", 12, Fnt2)); bottom.Children.Add(Sans(extra, 12, Fnt)); }
+        bottom.Height = 18;
         bottom.HorizontalAlignment = HorizontalAlignment.Right;
-        return VStack(4, top, bottom).Align(HorizontalAlignment.Right, VerticalAlignment.Bottom);
+        return VStack(4, top, bottom).Align(HorizontalAlignment.Right, VerticalAlignment.Top);
     }
 
-    /// <summary>`.pool-chips`：胶囊筛选。</summary>
+    /// <summary>筛选胶囊：一排 Windows 稿 FilterChip（28 高，选中白底细边、未选灰底），数量并进文字，间距 4。</summary>
     public static FrameworkElement Chips(IEnumerable<(string Value, string Label, int? Count)> items, string selection, string label, Action<string> change)
     {
-        var flow = new VariableSizedFlow(8);
+        var flow = new VariableSizedFlow(4);
         foreach (var item in items)
         {
-            var active = item.Value == selection;
-            var row = HStack(6, Sans(item.Label, 13, active ? Blue : Sub, active ? Medium : Regular));
-            if (item.Count is { } count) row.Children.Add(Number($"{count}", 11.5, active ? Alpha(Blue, 0.7) : Fnt, Regular));
             var value = item.Value;
-            var chip = new Border
-            {
-                Child = row.Align(v: VerticalAlignment.Center), Height = 30, Padding = new Thickness(12, 0, 12, 0), CornerRadius = Capsule(30),
-                Background = Brush(active ? BlueSoft : V3.White), BorderBrush = Brush(active ? Alpha(Blue, 0.35) : Cl), BorderThickness = new Thickness(1),
-            }.OnTap(() => change(value), item.Label);
-            flow.Add(chip);
+            flow.Add(new V3FilterChip(item.Count is { } count ? $"{item.Label} {Grouped(count)}" : item.Label, value == selection, () => change(value)));
         }
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(flow.Panel, label);
         return flow.Panel;
     }
 
-    /// <summary>`Select size="sm"`：32 高白底描边下拉（最小 64、最大 160）。</summary>
-    public static FrameworkElement Select(string label, string value, IReadOnlyList<(string Value, string Label)> options, Action<string> change, string? placeholder = null)
+    /// <summary>Windows 稿 ComboBox：32 高白底 #DCDCD8 细边、圆角 4，13 号字，右侧下箭头；点开为 V3 菜单（选中项打勾）。</summary>
+    public static FrameworkElement Select(string label, string value, IReadOnlyList<(string Value, string Label)> options, Action<string> change, string? placeholder = null, double width = 120)
     {
         var current = options.FirstOrDefault(o => o.Value == value).Label;
-        var text = Sans(current ?? placeholder ?? "", 14, current is null ? Fnt2 : Txt);
-        var row = Columns(10, (Star(), text.Align(v: VerticalAlignment.Center)), (Px(12), Icon("chevron.down", 10, Fnt).Align(HorizontalAlignment.Center, VerticalAlignment.Center)));
+        var text = Sans(current ?? placeholder ?? label, 13, current is null ? Sub : Txt).Also(t => t.TextTrimming = TextTrimming.CharacterEllipsis);
+        var row = Columns(8, (Star(), text.Align(v: VerticalAlignment.Center)), (Auto, Icon("chevron.down", 10, Sub).Align(v: VerticalAlignment.Center)));
         var box = new Border
         {
-            Child = row, Height = 32, MinWidth = 64, MaxWidth = 160, Padding = new Thickness(12, 0, 12, 0), CornerRadius = new CornerRadius(8),
-            Background = Brush(V3.White), BorderBrush = Brush(Cl), BorderThickness = new Thickness(1), HorizontalAlignment = HorizontalAlignment.Left,
+            Child = row, Height = 32, Width = width, Padding = new Thickness(11, 0, 11, 0), CornerRadius = new CornerRadius(4),
+            Background = Brush(V3.White), BorderBrush = Brush(Sk2), BorderThickness = new Thickness(1),
         };
+        box.OnHover(h => box.Background = Brush(h ? Hex(0xFAFAF8) : V3.White));
         box.OnTap(() =>
         {
             Flyout? flyout = null;
-            var menu = new StackPanel { MinWidth = 140 };
+            var menu = new StackPanel { MinWidth = Math.Max(140, width) };
             foreach (var option in options)
             {
                 var picked = option.Value;
@@ -135,10 +129,17 @@ static class PoolUI
         return box;
     }
 
-    /// <summary>`.pool-new`：今日新增 / 本轮未发现 小标签。</summary>
+    /// <summary>灰底小标签（Tag · Neutral）：22 高、12 号 #55554F、圆角 4。</summary>
+    public static Border MetaTag(string text, double height = 22) => new()
+    {
+        Child = Sans(text, 12, Sub).Align(v: VerticalAlignment.Center), Height = height, Padding = new Thickness(8, 0, 8, 0),
+        CornerRadius = new CornerRadius(4), Background = Brush(Field), VerticalAlignment = VerticalAlignment.Center,
+    };
+
+    /// <summary>今日新增 / 本轮未发现 小标签：22 高、12 号、圆角 4（Windows 稿 Tag · Accent）。</summary>
     public static Border Badge(string text, bool warn = false) => new()
     {
-        Child = Sans(text, 11.5, warn ? Hex(0x8A4D12) : Blue, Medium).Align(v: VerticalAlignment.Center), Height = 20, Padding = new Thickness(7, 0, 7, 0),
+        Child = Sans(text, 12, warn ? Hex(0x8A4D12) : Blue, Medium).Align(v: VerticalAlignment.Center), Height = 22, Padding = new Thickness(8, 0, 8, 0),
         CornerRadius = new CornerRadius(4), Background = Brush(warn ? OrangeSoft : BlueSoft), VerticalAlignment = VerticalAlignment.Center,
     };
 

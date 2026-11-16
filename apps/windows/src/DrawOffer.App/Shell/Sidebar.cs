@@ -12,72 +12,96 @@ using static DrawOffer.App.DesignSystem.V3;
 namespace DrawOffer.App.Shell;
 
 /// <summary>
-/// 工作区侧栏，对应 Mac `Shell/Sidebar.swift`（Web `v3/Shell.tsx` 的 `V3Sidebar`）：品牌与公告铃、8 项导航、
-/// 置顶与最近对话分组、对话行 ⋯ 菜单（置顶、重命名、删除）和底部个人菜单。宽 216、左右内边距 14。
+/// 工作区侧栏（Windows 稿 00 页 Sidebar · NavigationView Pane 6:908）：宽 248、#F1F1EF 底，贴窗口左边到顶。
+/// 顶行 48（标题栏拖动区）：左 20 起 logo + 品牌字（Brand / Lockup 142×22，点回首页），右侧通知铃铛；
+/// 8 个一级入口（224×36、圆角 4、16 号图标、13px，选中 #E6E6E2 底 + 左侧 3×16 墨黑指示条）；
+/// 「最近对话 ⌄」可折叠，右侧「新对话」；对话行纯文字 224×32；底部账户行（头像 24、名字 · 档位、上下箭头），点开个人菜单。
 /// </summary>
 public sealed class Sidebar : Grid
 {
+    public const double PaneWidth = 248;
+
     readonly WorkspaceShell _shell;
-    readonly StackPanel _list = new();
+    readonly StackPanel _list = new() { Padding = new Thickness(12, 4, 12, 12) };
     readonly Border _user = new();
     readonly HashSet<string> _collapsed = [];
+    bool _showAll;
     string? _renaming;
+    string? _tier;
+    string _tierAccount = "";
 
     public Sidebar(WorkspaceShell shell)
     {
         _shell = shell;
-        Width = 216;
-        Padding = new Thickness(14, 0, 14, 0);
-        RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        Width = PaneWidth;
+        Background = Brush(Win);
+        RowDefinitions.Add(new RowDefinition { Height = new GridLength(48) });
         RowDefinitions.Add(new RowDefinition { Height = Star() });
         RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-        var brand = new Image { Source = new BitmapImage(new Uri("ms-appx:///Assets/Branding/wordmark.png")), Width = 146, Height = 30, Stretch = Stretch.Uniform }.Tip("DrawOffer 首页");
-        brand.PointerReleased += (_, _) => _shell.Select(WorkspaceSection.Home);
-        var header = Spread(brand, new AnnouncementBell(shell));
-        header.Margin = new Thickness(8, 24, 0, 22);
+        var lockup = new Image { Source = new BitmapImage(new Uri("ms-appx:///Assets/Branding/lockup.png")), Width = 142, Height = 22, Stretch = Stretch.Uniform, HorizontalAlignment = HorizontalAlignment.Left }
+            .OnTap(() => _shell.Select(WorkspaceSection.Home), "DrawOffer 首页");
+        var header = Spread(lockup, new AnnouncementBell(shell), 8);
+        header.Padding = new Thickness(20, 0, 10, 0);
         Children.Add(header);
 
-        var scroll = new ScrollViewer { Content = _list, VerticalScrollBarVisibility = ScrollBarVisibility.Hidden };
+        var scroll = Scroll(_list);
         SetRow(scroll, 1);
         Children.Add(scroll);
-        _user.Margin = new Thickness(0, 8, 0, 20);
-        SetRow(_user, 2);
-        Children.Add(_user);
+        var footer = new Border { Child = _user, BorderBrush = Brush(Alpha(Microsoft.UI.Colors.Black, 0.06)), BorderThickness = new Thickness(0, 1, 0, 0) };
+        SetRow(footer, 2);
+        Children.Add(footer);
 
-        shell.Sessions.Changed += Render;
-        App.Session.PropertyChanged += (_, _) => Render();
+        shell.Sessions.Changed += () => DispatcherQueue.TryEnqueue(Render);
+        App.Session.PropertyChanged += (_, _) => DispatcherQueue.TryEnqueue(Render);
         Render();
     }
+
+    /// <summary>侧栏顶行的空白处作为窗口拖动区（品牌与铃铛之间）。</summary>
+    public FrameworkElement DragRegion => (FrameworkElement)Children[0];
 
     User? SignedInUser => App.Session.Phase == SessionViewModel.SessionPhase.SignedIn ? App.Session.User : null;
 
     public void Render()
     {
         _list.Children.Clear();
-        var nav = new StackPanel { Spacing = 4 };
+        var nav = new StackPanel { Spacing = 2 };
         foreach (var section in WorkspaceSections.Sidebar) nav.Children.Add(NavRow(section));
         _list.Children.Add(nav);
         if (SignedInUser is not null) { Group("pin"); Group("recent"); }
         else { _list.Children.Add(GroupHeader("recent", "最近对话")); _list.Children.Add(Muted("登录后读取对话")); }
         _user.Child = UserEntry();
+        if ((SignedInUser?.Id ?? "") != _tierAccount) _ = LoadTierAsync();
     }
 
-    /// <summary>导航行：34 高、圆角 8、14px；当前项 #E6E6E2 底、500 字重、#1D1D1B，其余 #55554F。</summary>
+    async Task LoadTierAsync()
+    {
+        var account = _tierAccount = SignedInUser?.Id ?? "";
+        _tier = null;
+        if (account.Length == 0) return;
+        try
+        {
+            var summary = BillingSummary.From(await App.Session.Api.CareerRequestAsync("/api/billing/summary"));
+            if (account != _tierAccount) return;
+            _tier = summary.TierLabel;
+            _user.Child = UserEntry();
+        }
+        catch { }
+    }
+
+    /// <summary>NavigationViewItem：224×36、圆角 4、左 12；图标 16 #55554F、文字 13；选中 #E6E6E2 底 500 字 + 左侧 3×16 墨黑指示条，悬停 4% 黑。</summary>
     UIElement NavRow(WorkspaceSection section)
     {
-        var active = _shell.Selection == section && (section != WorkspaceSection.Home || _shell.ActiveChatId is null);
-        var color = active ? Txt : Sub;
-        var label = HStack(10, new FontIcon { Glyph = section.Glyph(), FontSize = 14, FontFamily = IconFamily, Foreground = Brush(color) },
-            Label(section.Title(), 14, color, active ? Medium : Regular));
-        var row = new Border { Child = label, Height = 34, Padding = new Thickness(10, 0, 10, 0), CornerRadius = new CornerRadius(8), Background = Brush(active ? Hl : Clear) };
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(row, section.Title());
-        if (!active)
-        {
-            row.PointerEntered += (_, _) => row.Background = Brush(Field);
-            row.PointerExited += (_, _) => row.Background = Brush(Clear);
-        }
-        row.PointerReleased += (_, _) => _shell.Select(section);
+        var active = _shell.Selection == section && (section != WorkspaceSection.Assistant);
+        var label = HStack(12,
+            new FontIcon { Glyph = section.Glyph(), FontSize = 15, FontFamily = IconFamily, Foreground = Brush(Sub), Width = 16 },
+            Label(section.Title(), 13, Txt, active ? Medium : Regular));
+        var indicator = new Border { Width = 3, Height = 16, CornerRadius = new CornerRadius(1.5), Background = Brush(Txt), HorizontalAlignment = HorizontalAlignment.Left, Visibility = active ? Visibility.Visible : Visibility.Collapsed };
+        var row = new Grid { Height = 36, CornerRadius = new CornerRadius(4), Background = Brush(active ? Hl : Clear) };
+        row.Children.Add(label.Pad(12, 0, 8, 0));
+        row.Children.Add(indicator);
+        if (!active) row.OnHover(h => row.Background = Brush(h ? Alpha(Microsoft.UI.Colors.Black, 0.04) : Clear));
+        row.OnTap(() => _shell.Select(section), section.Title());
         return row;
     }
 
@@ -88,66 +112,52 @@ public sealed class Sidebar : Grid
         if (key != "recent" && items.Count == 0) return;
         _list.Children.Add(GroupHeader(key, label));
         if (_collapsed.Contains(key)) return;
-        var rows = new StackPanel { MinHeight = 40 }; // Web `.v3-side-sessions { min-height: 40px }`
+        var rows = new StackPanel { Spacing = 2 };
         switch (_shell.Sessions.Status)
         {
             case AgentSessions.LoadStatus.Loading or AgentSessions.LoadStatus.Idle: rows.Children.Add(Muted("正在读取对话…")); break;
             case AgentSessions.LoadStatus.Error: rows.Children.Add(Muted("对话列表暂时无法读取")); break;
             default:
                 if (items.Count == 0) rows.Children.Add(Muted(key == "pin" ? "还没有置顶对话" : "还没有对话"));
-                foreach (var item in key == "pin" ? items : items.Take(30)) rows.Children.Add(SessionRow(item));
+                var limit = key == "pin" || _showAll ? 30 : 5;
+                foreach (var item in items.Take(limit)) rows.Children.Add(SessionRow(item));
+                if (key == "recent" && items.Count > 5)
+                    rows.Children.Add(Label(_showAll ? "收起" : "查看全部", 13, Fnt).Pad(12, 0, 0, 0).Frame(height: 32)
+                        .Also(x => x.Padding = new Thickness(0, 6, 0, 0)).OnTap(() => { _showAll = !_showAll; Render(); }));
                 break;
         }
         _list.Children.Add(rows);
     }
 
-    /// <summary>
-    /// Web `.v3-side-section`：外边距 22/12/8，12px #6C6C65；置顶标题在左、18×18 折叠钮在右；
-    /// 最近对话的折叠钮带文字（13px），新建对话只在悬停这一行时出现。
-    /// </summary>
+    /// <summary>NavigationViewItemHeader：上 20、28 高、左 12；12px #6C6C65 标题 + 折叠箭头；「最近对话」右侧常显「✎ 新对话」。</summary>
     UIElement GroupHeader(string key, string label)
     {
         var collapsed = _collapsed.Contains(key);
         void Toggle() { if (!_collapsed.Remove(key)) _collapsed.Add(key); Render(); }
-        FontIcon Chevron() => Icon(collapsed ? "chevron.right" : "chevron.down", 9, Fnt);
-        Grid row;
-        if (key == "pin")
+        var toggle = HStack(4, Label(label, 12, Fnt), Icon(collapsed ? "chevron.right" : "chevron.down", 9, Fnt)).OnTap(Toggle, collapsed ? $"展开{label}" : $"收起{label}");
+        toggle.Background = Brush(Clear);
+        UIElement right = new Border();
+        if (key == "recent")
         {
-            var toggle = SideIcon(Chevron(), Toggle).Tip(collapsed ? $"展开{label}" : $"收起{label}");
-            row = Spread(Label(label, 12, Fnt), toggle, 0);
+            var create = HStack(4, Icon("square.and.pencil", 12, Fnt), Label("新对话", 12, Fnt));
+            var button = new Border { Child = create, Padding = new Thickness(6, 0, 6, 0), Height = 22, CornerRadius = new CornerRadius(4), Background = Brush(Clear) }
+                .Tip("新建对话 (Ctrl+N)");
+            button.OnHover(h => button.Background = Brush(h ? Alpha(Microsoft.UI.Colors.Black, 0.05) : Clear));
+            button.OnTap(() => { if (SignedInUser is null) _ = _shell.RequestLoginAsync(reason: "登录后开始对话。"); else _shell.NewChat(); }, "新建对话");
+            right = button;
         }
-        else
-        {
-            var toggle = HStack(5, Label(label, 13, Fnt), Chevron()).Frame(height: 18).Tip(collapsed ? $"展开{label}" : $"收起{label}");
-            toggle.Background = Brush(Clear);
-            toggle.PointerReleased += (_, _) => Toggle();
-            var create = SideIcon(Icon("square.and.pencil", 12, Fnt), _shell.NewChat).Tip("新建对话");
-            create.Opacity = 0; // 与 Web 一样悬停才显示；保留在可视树里，键盘与读屏仍能找到它
-            row = Spread(toggle, create, 0);
-            row.Background = Brush(Clear);
-            row.PointerEntered += (_, _) => create.Opacity = 1;
-            row.PointerExited += (_, _) => create.Opacity = 0;
-        }
-        row.MinHeight = 18;
-        row.Margin = new Thickness(12, 22, 12, 8);
+        var row = Spread(toggle, right, 0);
+        row.Height = 28;
+        row.Margin = new Thickness(0, 20, 0, 2);
+        row.Padding = new Thickness(12, 0, 2, 0);
         return row;
     }
 
-    static TextBlock Muted(string text) => Label(text, 12, Fnt).Pad(12, 4, 12, 4);
-
-    /// <summary>侧栏 18×18 小图标钮：悬停 #F4F4F2 底、圆角 5。</summary>
-    static Border SideIcon(FontIcon icon, Action action)
-    {
-        var button = new Border { Width = 18, Height = 18, CornerRadius = new CornerRadius(5), Background = Brush(Clear), Child = icon.Align(HorizontalAlignment.Center, VerticalAlignment.Center) };
-        button.PointerEntered += (_, _) => { button.Background = Brush(Field); icon.Foreground = Brush(Txt); };
-        button.PointerExited += (_, _) => { button.Background = Brush(Clear); icon.Foreground = Brush(Fnt); };
-        button.PointerReleased += (_, e) => { e.Handled = true; action(); };
-        return button;
-    }
+    static TextBlock Muted(string text) => Label(text, 12, Side).Pad(12, 4, 12, 4);
 
     /// <summary>
-    /// 对话行（Web `.v3-side-session`）：198×32、14px、左 12 右 36 留给 ⋯（距右 6）；悬停 #F4F4F2，当前 #E6E6E2。
-    /// 重命名时变成 198×32 输入框（圆角 7、深色边），下方“Enter 保存 · Esc 取消”。
+    /// NavigationViewItem / Session：224×32、圆角 4、左 12 右 36 留给 ⋯；13px 墨色字，当前项 #E6E6E2 底（无指示条），悬停 4% 黑。
+    /// 右键或 ⋯ 打开 MenuFlyout（置顶、重命名 F2、删除）；重命名时变成输入框，Enter 保存、Esc 取消。
     /// </summary>
     UIElement SessionRow(JsonNode item)
     {
@@ -157,29 +167,30 @@ public sealed class Sidebar : Grid
         var active = _shell.Selection == WorkspaceSection.Assistant && _shell.ActiveChatId == id;
         if (_renaming == id) return RenameBox(id, title);
 
-        var text = Label(title, 14, active ? Txt : Sub, active ? Medium : Regular).Pad(12, 0, 36, 0).Align(v: VerticalAlignment.Center);
+        var text = Label(title, 13, Txt, active ? Medium : Regular).Pad(12, 0, 36, 0).Align(v: VerticalAlignment.Center);
         ToolTipService.SetToolTip(text, title);
-        var more = new Border { Width = 24, Height = 24, Child = Icon("ellipsis", 12, Fnt).Align(HorizontalAlignment.Center, VerticalAlignment.Center), Opacity = 0, Margin = new Thickness(0, 0, 6, 0) }
-            .Align(HorizontalAlignment.Right, VerticalAlignment.Center).Tip($"{title} 的更多操作");
-        var row = new Grid { Width = 198, Height = 32, CornerRadius = new CornerRadius(8), Background = Brush(active ? Hl : Clear) };
+        var more = new V3IconButton("ellipsis", $"{title} 的更多操作", () => { }, 24, 12, Fnt) { Opacity = 0 };
+        more.HorizontalAlignment = HorizontalAlignment.Right;
+        more.VerticalAlignment = VerticalAlignment.Center;
+        more.Margin = new Thickness(0, 0, 6, 0);
+        var row = new Grid { Height = 32, CornerRadius = new CornerRadius(4), Background = Brush(active ? Hl : Clear) };
         row.Children.Add(text);
         row.Children.Add(more);
-        row.PointerEntered += (_, _) => { more.Opacity = 1; text.Foreground = Brush(Txt); if (!active) row.Background = Brush(Field); };
-        row.PointerExited += (_, _) => { more.Opacity = 0; text.Foreground = Brush(active ? Txt : Sub); if (!active) row.Background = Brush(Clear); };
+        row.OnHover(h => { more.Opacity = h ? 1 : 0; if (!active) row.Background = Brush(h ? Alpha(Microsoft.UI.Colors.Black, 0.04) : Clear); });
         row.PointerReleased += (_, e) => { if (e.OriginalSource is not FrameworkElement source || !IsInside(source, more)) _shell.OpenChat(id); };
 
         MenuFlyout Menu()
         {
             var menu = new MenuFlyout();
-            var pin = new MenuFlyoutItem { Text = pinned ? "取消置顶" : "置顶" };
+            var pin = new MenuFlyoutItem { Text = pinned ? "取消置顶" : "置顶", Icon = new FontIcon { Glyph = Icons.Glyph("pin") } };
             pin.Click += async (_, _) =>
             {
                 try { await _shell.Sessions.SetPinnedAsync(App.Session.Api, id, !pinned); }
-                catch { await Alert("置顶状态保存失败，请重试"); }
+                catch { await V3Dialog.AlertAsync(XamlRoot, "置顶状态保存失败，请重试"); }
             };
-            var rename = new MenuFlyoutItem { Text = "重命名" };
+            var rename = new MenuFlyoutItem { Text = "重命名", Icon = new FontIcon { Glyph = Icons.Glyph("pencil") }, KeyboardAcceleratorTextOverride = "F2" };
             rename.Click += (_, _) => { _renaming = id; Render(); };
-            var delete = new MenuFlyoutItem { Text = "删除", Foreground = Brush(Red), IsEnabled = !_shell.Sessions.RunningIds.Contains(id) };
+            var delete = new MenuFlyoutItem { Text = "删除", Icon = new FontIcon { Glyph = Icons.Glyph("trash") }, Foreground = Brush(Red), IsEnabled = !_shell.Sessions.RunningIds.Contains(id), KeyboardAcceleratorTextOverride = "Del" };
             delete.Click += (_, _) => ConfirmDelete(id, title);
             menu.Items.Add(pin);
             menu.Items.Add(rename);
@@ -201,11 +212,8 @@ public sealed class Sidebar : Grid
 
     UIElement RenameBox(string id, string title)
     {
-        var box = new TextBox
-        {
-            Text = title, MaxLength = 120, FontSize = 14, Width = 198, Height = 32, MinHeight = 0, Padding = new Thickness(12, 6, 12, 0),
-            CornerRadius = new CornerRadius(7), BorderThickness = new Thickness(1), BorderBrush = Brush(Txt), Background = Brush(V3.White),
-        }.Tip($"重命名对话 {title}");
+        var box = Input("", title, 120).Tip($"重命名对话 {title}");
+        box.BorderBrush = Brush(Txt);
         var done = false;
         void Save()
         {
@@ -223,10 +231,10 @@ public sealed class Sidebar : Grid
         };
         box.LostFocus += (_, _) => Save();
         box.Loaded += (_, _) => { box.Focus(FocusState.Programmatic); box.SelectAll(); };
-        return VStack(3, box, Label("Enter 保存 · Esc 取消", 12, Fnt).Pad(12, 2, 0, 3));
+        return VStack(3, box, Label("Enter 保存 · Esc 取消", 12, Side).Pad(12, 2, 0, 3));
     }
 
-    /// <summary>删除确认（Mac `confirmationDialog`）：标题“删除这条对话？”、说明含会话名与“此操作无法撤销”。</summary>
+    /// <summary>删除确认（稿 02B 14 · 01.1j）：ContentDialog「删除这条对话？」，说明含会话名与“此操作无法撤销”。</summary>
     void ConfirmDelete(string id, string title)
     {
         V3Overlay.Show(XamlRoot, close =>
@@ -238,80 +246,75 @@ public sealed class Sidebar : Grid
                 remove.Title = "正在删除…";
                 try { await _shell.Sessions.DeleteAsync(App.Session.Api, id); _shell.ChatDeleted(id); close(); }
                 catch { remove.Enabled = true; remove.Title = "删除"; }
-            }, V3Button.Kind.Danger, height: 36);
-            return V3Dialog.Make(V3DialogHead.Make("删除这条对话？", $"「{title}」及其中的全部消息将被永久删除。\n此操作无法撤销。"),
-                [new V3Button("取消", close, height: 36), remove], close, width: 420);
+            }, V3Button.Kind.Danger);
+            return V3Dialog.Make(V3DialogHead.Make("删除这条对话？", $"「{title}」及其中的全部消息将被永久删除。此操作无法撤销。"),
+                [new V3Button("取消", close), remove], close);
         });
     }
 
-    async Task Alert(string message)
-    {
-        var dialog = new ContentDialog { XamlRoot = XamlRoot, Title = message, CloseButtonText = "知道了" };
-        await dialog.ShowAsync();
-    }
-
-    /// <summary>
-    /// 底部账号入口（Web `.v3-side-user`）：最小 44 高、内边距 0/6、间距 8、圆角 8；名称 14/500 行高 20，邮箱 12 行高 18（最宽 130）。
-    /// 游客显示“我”头像与“游客模式 / 登录 / 恢复登录”。
-    /// </summary>
+    /// <summary>账户行：56 高、左右 16；PersonPicture 24、名字 13/500、「· 档位」12 灰、右侧上下箭头。游客显示「游客模式 · 登录」。</summary>
     UIElement UserEntry()
     {
+        Grid Row(UIElement avatar, string name, string? trailing, bool chevron)
+        {
+            var grid = new Grid { Height = 56, Padding = new Thickness(16, 0, 16, 0), ColumnSpacing = 10, Background = Brush(Clear) };
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = Star() });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.Children.Add(((FrameworkElement)avatar).Align(v: VerticalAlignment.Center));
+            var label = HStack(6, Label(name, 13, Txt, Medium), trailing is null ? null : Label(trailing, 12, Fnt));
+            SetColumn(label, 1);
+            grid.Children.Add(label);
+            if (chevron) { var c = Icon("chevron.up.chevron.down", 12, Side).Align(v: VerticalAlignment.Center); SetColumn(c, 2); grid.Children.Add(c); }
+            grid.OnHover(h => grid.Background = Brush(h ? Alpha(Microsoft.UI.Colors.Black, 0.04) : Clear));
+            return grid;
+        }
         if (SignedInUser is not { } user)
         {
-            var guest = HStack(8,
-                new Border { Width = 36, Height = 36, CornerRadius = new CornerRadius(18), Background = Brush(0x17191C), Child = Label("我", 14, V3.White).Align(HorizontalAlignment.Center, VerticalAlignment.Center) },
-                VStack(3, Label("游客模式", 13.5, Txt, Medium), Label("登录 / 恢复登录", 11, Hex(0x96968F))));
-            guest.Margin = new Thickness(6, 0, 6, 0);
-            guest.Background = Brush(Clear);
-            guest.PointerReleased += (_, _) => _ = _shell.RequestLoginAsync();
-            return guest;
+            var guest = new Border { Width = 24, Height = 24, CornerRadius = new CornerRadius(12), Background = Brush(Txt), Child = Label("我", 11, V3.White).Align(HorizontalAlignment.Center, VerticalAlignment.Center) };
+            return Row(guest, "游客模式", "· 登录", false).OnTap(() => _ = _shell.RequestLoginAsync(), "登录或恢复登录");
         }
-        var name = user.Nickname.Length > 0 ? user.Nickname : "未设置昵称";
-        var row = new Border
-        {
-            MinHeight = 44, Padding = new Thickness(6, 0, 6, 0), CornerRadius = new CornerRadius(8),
-            Background = Brush(_shell.Selection == WorkspaceSection.Account ? Hl : Clear),
-            Child = HStack(8, new UserAvatar(user, 36), VStack(0,
-                Label(name, 14, Txt, Medium).Frame(height: 20),
-                Label(user.Email ?? "微信登录", 12, Fnt).Frame(height: 18).Also(x => x.MaxWidth = 130))),
-        }.Tip($"打开个人菜单，当前账号：{(user.Nickname.Length > 0 ? user.Nickname : user.Email ?? "我")}");
-        row.PointerEntered += (_, _) => { if (_shell.Selection != WorkspaceSection.Account) row.Background = Brush(Field); };
-        row.PointerExited += (_, _) => row.Background = Brush(_shell.Selection == WorkspaceSection.Account ? Hl : Clear);
-        row.PointerReleased += (_, _) =>
+        var name = user.Nickname.Length > 0 ? user.Nickname : user.Email ?? "我";
+        var row = Row(new UserAvatar(user, 24), name, _tier is null ? null : $"· {_tier}", true);
+        if (_shell.Selection == WorkspaceSection.Account) row.Background = Brush(Alpha(Microsoft.UI.Colors.Black, 0.05));
+        return row.OnTap(() =>
         {
             Flyout? flyout = null;
-            var menu = new UserMenu(user, () => { flyout?.Hide(); _shell.OpenPlans(); }, () => { flyout?.Hide(); _shell.Select(WorkspaceSection.Account); }, () => flyout?.Hide());
-            flyout = V3Popover.Show(row, menu, FlyoutPlacementMode.Top, 8);
-        };
-        return row;
+            var menu = new UserMenu(user,
+                () => { flyout?.Hide(); _shell.OpenPlans(); },
+                () => { flyout?.Hide(); _shell.OpenCareerProfile(); },
+                () => { flyout?.Hide(); _shell.Select(WorkspaceSection.Account); },
+                () => flyout?.Hide());
+            flyout = V3Popover.Show(row, menu, FlyoutPlacementMode.TopEdgeAlignedLeft, 8);
+        }, $"打开个人菜单，当前账号：{name}");
     }
 }
 
 /// <summary>
-/// 个人菜单（Web `SidebarUserMenu` / `.bill-user-menu`），对应 Mac `UserMenu`：288 宽、内边距 8；
-/// 头部 8/8/16 带下边线（头像 36、名称 16/500、档位 12 靠右），菜单项 40 高、14/500、16 号图标。
+/// 个人菜单（稿 01 页 03.01，与线上一致）：288 宽；头部头像 36、名称 16/500、档位 12 靠右，下边线；
+/// 我的额度（右侧积分，用完红色）、求职画像、个人设置、退出登录。条目 40 高、14/500、16 号图标，悬停 #F4F4F2。
 /// </summary>
 public sealed class UserMenu : StackPanel
 {
     readonly TextBlock _tier = Label("", 12, Sub);
-    readonly TextBlock _credits = Label("—", 14, Sub, Medium);
+    readonly TextBlock _credits = Label("—", 13, Sub);
     bool _loggingOut;
 
-    public UserMenu(User user, Action openPlans, Action openAccount, Action close)
+    public UserMenu(User user, Action openPlans, Action openCareerProfile, Action openAccount, Action close)
     {
-        Width = 288 - 16; // Flyout 内边距 8 已计入
+        Width = 288 - 16;
         var name = Label(user.Nickname.Length > 0 ? user.Nickname : user.Email ?? "我", 16, Txt, Medium);
-        var head = new Border
+        Children.Add(new Border
         {
             Padding = new Thickness(8, 8, 8, 16), Margin = new Thickness(0, 0, 0, 4), BorderBrush = Brush(Line), BorderThickness = new Thickness(0, 0, 0, 1),
             Child = Columns(12, (Auto, new UserAvatar(user, 36)), (Star(), name.Align(v: VerticalAlignment.Center)), (Auto, _tier.Align(v: VerticalAlignment.Center))),
-        };
-        Children.Add(head);
-        Children.Add(Item("我的额度", "", openPlans, _credits));
-        Children.Add(Item("个人设置", "", openAccount));
+        });
+        Children.Add(Item("我的额度", "gauge.with.dots.needle.33percent", openPlans, _credits));
+        Children.Add(Item("求职画像", "person.text.rectangle", openCareerProfile));
+        Children.Add(Item("个人设置", "gearshape", openAccount));
         Children.Add(Divider().Pad(6, 4, 6, 4));
         TextBlock? logoutLabel = null;
-        var logout = Item("退出登录", "", () =>
+        var logout = Item("退出登录", "rectangle.portrait.and.arrow.right", () =>
         {
             if (_loggingOut) return;
             _loggingOut = true;
@@ -329,38 +332,35 @@ public sealed class UserMenu : StackPanel
                 _tier.Text = summary.TierLabel;
                 _credits.Text = $"{summary.AvailableText} 积分";
                 _credits.Foreground = Brush(summary.Exhausted ? Red : Sub);
-                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(Children[1], $"我的额度, {summary.AvailableText} 积分");
             }
             catch { }
         };
     }
 
-    /// <summary>`.v3-menu-item`：最小 40 高、内边距 8/10、间距 10、14/500；悬停 #F4F4F2、圆角 6。图标为 Fluent（Mac 为 gauge / gearshape / rectangle.portrait.and.arrow.right）。</summary>
-    static Border Item(string title, string glyph, Action action, TextBlock? trailing = null)
+    static Border Item(string title, string symbol, Action action, TextBlock? trailing = null)
     {
         var grid = Columns(10,
-            (Px(16), new FontIcon { Glyph = glyph, FontSize = 13, FontFamily = IconFamily, Foreground = Brush(Txt) }),
+            (Px(16), Icon(symbol, 14, Txt)),
             (Star(), Label(title, 14, Txt, Medium).Align(v: VerticalAlignment.Center)),
             (Auto, (UIElement?)trailing?.Align(v: VerticalAlignment.Center) ?? new Border()));
-        var row = new Border { Child = grid, MinHeight = 40, Padding = new Thickness(10, 0, 10, 0), CornerRadius = new CornerRadius(6), Background = Brush(Clear) }.Tip(title);
-        row.PointerEntered += (_, _) => row.Background = Brush(Field);
-        row.PointerExited += (_, _) => row.Background = Brush(Clear);
-        row.PointerReleased += (_, _) => action();
+        var row = new Border { Child = grid, MinHeight = 40, Padding = new Thickness(10, 0, 10, 0), CornerRadius = new CornerRadius(4), Background = Brush(Clear) };
+        row.OnHover(h => row.Background = Brush(h ? Field : Clear));
+        row.OnTap(action, title);
         return row;
     }
 }
 
-/// <summary>头像，对应 Mac `UserAvatar`：默认头像（`/api/auth/default-avatar`）用随包 Logo，私有头像经桌面会话下载；没有时显示名字首字。</summary>
-public sealed class UserAvatar : DrawOffer.App.DesignSystem.BorderControl
+/// <summary>PersonPicture：默认头像（`/api/auth/default-avatar`）用随包 Logo，私有头像经桌面会话下载；没有时墨黑底白色首字。</summary>
+public sealed class UserAvatar : BorderControl
 {
     public UserAvatar(User user, double size)
     {
         Width = size;
         Height = size;
         CornerRadius = new CornerRadius(size / 2);
-        Background = Brush(0x17191C);
+        Background = Brush(Txt);
         var initial = (user.Nickname.Length > 0 ? user.Nickname : user.Email ?? "我")[..1];
-        Child = Label(initial, size * 0.4, V3.White, Medium).Align(HorizontalAlignment.Center, VerticalAlignment.Center);
+        Child = Label(initial, size * 0.45, V3.White).Align(HorizontalAlignment.Center, VerticalAlignment.Center);
         Loaded += async (_, _) => await LoadAsync(user.AvatarUrl);
     }
 
@@ -384,5 +384,3 @@ public sealed class UserAvatar : DrawOffer.App.DesignSystem.BorderControl
         catch { }
     }
 }
-
-

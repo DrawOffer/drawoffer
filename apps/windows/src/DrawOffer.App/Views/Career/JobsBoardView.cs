@@ -52,9 +52,10 @@ public sealed partial class JobsBoardView : UserControl
 
     static string Account => App.Session.Phase == Core.Session.SessionViewModel.SessionPhase.SignedIn ? App.Session.User?.Id ?? "" : "";
 
-    public JobsBoardView(Action requireAccount)
+    /// <summary>外壳只在登录后创建本页；游客路径保留为空操作。</summary>
+    public JobsBoardView(Action? requireAccount = null)
     {
-        _requireAccount = requireAccount;
+        _requireAccount = requireAccount ?? (() => { });
         _search.Changed += text => { _query = text; RenderContent(); };
         Content = _root;
         Loaded += async (_, _) => { _active = true; await LoadAsync(); };
@@ -708,7 +709,7 @@ public sealed partial class JobsBoardView : UserControl
             if (generation != _generation) return;
             _applications = result.Select(a => a.IncludingSessions(arrangements)).ToList();
             _sessions = arrangements; _overview = metrics;
-            if (OpenApplication is { } target) { _selected = _applications.FirstOrDefault(a => a.Id == target); OpenApplication = null; }
+            if ((OpenApplication ?? Shell.WorkspaceShell.Current.PendingApplication) is { } target) { _selected = _applications.FirstOrDefault(a => a.Id == target); OpenApplication = null; Shell.WorkspaceShell.Current.PendingApplication = null; }
         }
         catch (OperationCanceledException) { return; }
         catch (ApiException error) when (error.Status == System.Net.HttpStatusCode.Unauthorized) { App.Session.ReportAuthenticationFailure(); _failure = "登录已失效，请重新登录。"; }

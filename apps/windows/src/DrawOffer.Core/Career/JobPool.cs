@@ -72,6 +72,28 @@ public static class JobPool
             ? (uri.HostNameType == UriHostNameType.IPv6 ? uri.Host.Trim('[', ']') : url.Substring(url.IndexOf(uri.Host, StringComparison.OrdinalIgnoreCase), uri.Host.Length))
             : url;
 
+    /// <summary>Mac `PoolSync.text`：官网同步时间，今天只写「HH:mm」，其余写「昨天/日期 HH:mm」。</summary>
+    public static string? Synced(string value, DateTimeOffset? now = null, TimeZoneInfo? zone = null)
+    {
+        var at = now ?? Beijing.Now; var tz = zone ?? Beijing.Zone;
+        if (CareerApplication.Date(value) is not { } date) return null;
+        return SwiftCalendar.SameDay(date, at, tz) ? CareerDeckFormat.Clock(date, tz) : Date(value, at, tz);
+    }
+
+    /// <summary>Mac `PoolSync.deadline`：`YYYY-MM-DD` → 「11月30日」与「还剩 N 天 / 今天截止」，已过期时 Left 为 null；无法解析返回 null。</summary>
+    public static (string Date, string? Left)? Deadline(string value, DateTimeOffset? now = null, TimeZoneInfo? zone = null)
+    {
+        var at = now ?? Beijing.Now; var tz = zone ?? Beijing.Zone;
+        var parts = (value.Length > 10 ? value[..10] : value).Split('-');
+        if (parts.Length != 3 || !int.TryParse(parts[0], out var y) || !int.TryParse(parts[1], out var m) || !int.TryParse(parts[2], out var d)) return null;
+        DateTime day;
+        try { day = new DateTime(y, m, d); } catch (ArgumentOutOfRangeException) { return null; }
+        var today = SwiftCalendar.Local(at, tz).Date;
+        var left = (day - today).Days;
+        var text = (y == today.Year ? "" : $"{y}年") + $"{m}月{d}日";
+        return (text, left > 0 ? $"还剩 {left} 天" : left == 0 ? "今天截止" : null);
+    }
+
     /// <summary>`poolError` 中工作区会遇到的错误码。</summary>
     public static string Error(string code) => code switch
     {

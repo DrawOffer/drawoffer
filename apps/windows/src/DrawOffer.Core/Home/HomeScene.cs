@@ -2,17 +2,6 @@ using System.Globalization;
 using System.Text.Json.Nodes;
 using DrawOffer.Core.Models;
 
-namespace DrawOffer.Core.Models
-{
-    /// <summary>首页与模拟面试共用的练习焦点（Mac `HomeScene.swift` 的 `PracticeFocus`）。</summary>
-    public sealed record PracticeFocus(string Kind, string Ref, string Label)
-    {
-        /// <summary>只接受对象且 ref 非空；否则为 null。</summary>
-        public static PracticeFocus? From(JsonNode? json) =>
-            json is JsonObject && json.Text("ref").Length > 0 ? new PracticeFocus(json.Text("kind"), json.Text("ref"), json.Text("label")) : null;
-    }
-}
-
 namespace DrawOffer.Core.Home
 {
     // 首页 · 哪里要提升：移植 Web `features/assistant/homeImprove/scene.ts`。

@@ -48,7 +48,6 @@ public sealed partial class DatasetLibraryPage
         var layout = new Grid(); layout.RowDefinitions.Add(new()); layout.RowDefinitions.Add(new() { Height = GridLength.Auto });
         layout.Children.Add(new ScrollViewer { Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
         var foot = new Border { Child = footer, BorderBrush = Brush(Line), BorderThickness = new Thickness(0, 1, 0, 0) }; Grid.SetRow(foot, 1); layout.Children.Add(foot);
-        var x = V3Dialog.CloseButton(close).Align(HorizontalAlignment.Right, VerticalAlignment.Top).Pad(0, width <= 500 ? 20 : 26, width <= 500 ? 16 : 26, 0); layout.Children.Add(x);
         return V3Dialog.Frame(layout, width);
     }
     async Task Rename(string kind, JsonNode? item = null)

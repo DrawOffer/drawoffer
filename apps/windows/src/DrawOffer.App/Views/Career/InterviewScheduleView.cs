@@ -38,9 +38,10 @@ public sealed partial class InterviewScheduleView : UserControl
     static TimeZoneInfo Zone => Beijing.Zone;
     static string Account => App.Session.Phase == Core.Session.SessionViewModel.SessionPhase.SignedIn ? App.Session.User?.Id ?? "" : "";
 
-    public InterviewScheduleView(Action requireAccount)
+    /// <summary>外壳只在登录后创建本页；游客路径保留为空操作。</summary>
+    public InterviewScheduleView(Action? requireAccount = null)
     {
-        _requireAccount = requireAccount;
+        _requireAccount = requireAccount ?? (() => { });
         Content = _root;
         // ⌘N → Ctrl+N：在当前日期 9:00 新建
         var shortcut = new KeyboardAccelerator { Key = Windows.System.VirtualKey.N, Modifiers = Windows.System.VirtualKeyModifiers.Control };

@@ -13,15 +13,14 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
 using Windows.Foundation;
+using Windows.UI;
 using static DrawOffer.App.DesignSystem.V3;
 
 namespace DrawOffer.App.Views;
 
 /// <summary>
-/// 简历模板（Web `features/templates/ResumeTemplatesPage.tsx`），对应 Mac `TemplatesView`。
-/// 登录后读取 `GET /api/resume-templates` 的真实启用模板与使用次数，并可直接创建简历；
-/// 游客没有模板接口权限，只展示随包的虚构示例，“使用此模板”先登录，登录后按模板 key 匹配真实模板继续创建。
-/// 账号变化时外壳会重建本页（Mac `.onChange(of: account)` 清空状态）。
+/// 简历模板（Windows 稿 05 页 03.1，Web `ResumeTemplatesPage.tsx`，Mac `TemplatesView`）：登录后读取 `GET /api/resume-templates` 的真实启用模板与使用次数，
+/// 默认按热度排序、四列卡片、每页 20 套；点卡片打开预览（03.1a），确认后创建简历。游客由外壳拦在首页，这里不再展示随包示例。
 /// </summary>
 public sealed class TemplatesPage : Page
 {
@@ -30,13 +29,14 @@ public sealed class TemplatesPage : Page
     readonly StackPanel _body = new();
     readonly CancellationTokenSource _cancel = new();
     IReadOnlyList<ResumeTemplate> _templates = [];
-    string _source = "";
-    bool _loading;
+    bool _ready, _loading;
     string? _loadError;
     /// <summary>Web `TemplateFilterPopover`：风格与适用场景多选，同组内任一命中、两组同时满足。</summary>
     readonly List<string> _selectedStyles = [];
     readonly List<string> _selectedUses = [];
     int _page = 1;
+    /// <summary>排序：默认按热度（`use_count` 降序，同数保持展示顺序），可切回展示顺序。</summary>
+    bool _byPopularity = true;
     V3Overlay? _preview, _creating;
     /// <summary>预览里点了主按钮：预览关闭后再进入创建（Mac `createAfterDismiss`）。</summary>
     ResumeTemplate? _createAfterDismiss;
@@ -44,16 +44,21 @@ public sealed class TemplatesPage : Page
     // 工具栏常驻：筛选浮层锚在 TemplateFilter 上，筛选变化时只换结果区，不重建锚点
     readonly TextBlock _found = Sans("", 12, Sub);
     readonly BorderControl _clear;
+    readonly BorderControl _sort;
+    readonly TextBlock _sortLabel = Sans("", 12, Hex(0x96968F));
     readonly TemplateFilter _filter;
     readonly StackPanel _results = new();
 
-    static string Account => App.Session.Phase == SessionViewModel.SessionPhase.SignedIn ? App.Session.User?.Id ?? "" : "";
-    static bool Guest => Account.Length == 0;
-    bool Ready => _source == (Guest ? "guest" : Account);
-
-    List<ResumeTemplate> Filtered => _templates.Where(t =>
-        (_selectedStyles.Count == 0 || _selectedStyles.Intersect(t.StyleCategories).Any())
-        && (_selectedUses.Count == 0 || _selectedUses.Intersect(t.UseCases).Any())).ToList();
+    List<ResumeTemplate> Filtered
+    {
+        get
+        {
+            var items = _templates.Where(t =>
+                (_selectedStyles.Count == 0 || _selectedStyles.Intersect(t.StyleCategories).Any())
+                && (_selectedUses.Count == 0 || _selectedUses.Intersect(t.UseCases).Any())).ToList();
+            return _byPopularity ? items.Select((t, i) => (t, i)).OrderByDescending(x => x.t.UseCount ?? 0).ThenBy(x => x.i).Select(x => x.t).ToList() : items;
+        }
+    }
     int PageCount => Math.Max(1, (Filtered.Count + PageSize - 1) / PageSize);
     List<ResumeTemplate> PageItems => Filtered.Skip((Math.Min(_page, PageCount) - 1) * PageSize).Take(PageSize).ToList();
     int FilterCount => _selectedStyles.Count + _selectedUses.Count;
@@ -76,115 +81,131 @@ public sealed class TemplatesPage : Page
 
     public TemplatesPage()
     {
-        _clear = new BorderControl { Child = Sans("清除筛选", 12, Txt, Medium), Background = Brush(Clear) }.OnTap(ClearFilters, "清除筛选");
+        _clear = new BorderControl { Child = Sans("清除筛选", 12, Txt, Medium), Height = 28, Padding = new Thickness(10, 0, 10, 0), CornerRadius = new CornerRadius(4), Background = Brush(Clear) };
+        _clear.OnHover(h => _clear.Background = Brush(h ? Field : Clear));
+        _clear.OnTap(ClearFilters, "清除筛选");
+        _sort = new BorderControl { Child = _sortLabel, Background = Brush(Clear) };
+        _sort.OnTap(() => V3Popover.Menu(_sort, 140,
+            new V3MenuRow("按热度排序", () => SetSort(true), isChecked: _byPopularity),
+            new V3MenuRow("按展示顺序", () => SetSort(false), isChecked: !_byPopularity)), "模板排序");
         _filter = new TemplateFilter(_selectedStyles, _selectedUses, FiltersChanged);
-        Content = new V3Page(_body);
+        Content = new V3Page(_body, top: 72);
         Loaded += (_, _) => { Render(); _ = LoadAsync(); };
         Unloaded += (_, _) => { _cancel.Cancel(); _createAfterDismiss = null; _preview?.Close(); _creating?.Close(); };
     }
 
+    void SetSort(bool popularity) { _byPopularity = popularity; _page = 1; RenderResults(); }
+
     void Render()
     {
         _body.Children.Clear();
-        _body.Children.Add(V3PageHead.Make(["TEMPLATES", Ready ? $"{_templates.Count}" : "–"], "简历模板",
+        _body.Children.Add(V3PageHead.Make(["TEMPLATES", _ready ? $"{_templates.Count} 套" : "–"], "简历模板",
             "浏览当前可用版式，选择后填写简历名称并进入编辑器。", compact: true));
-        if (Guest) _body.Children.Add(Sans("当前展示随包的虚构示例，可离线预览；登录后显示线上全部可用模板。", 12, Fnt).Top(6));
-        if (_loadError is { } error && !Ready)
+        if (_loadError is { } error && !_ready)
         {
             var retry = new V3Button("重新加载", () => _ = LoadAsync(), V3Button.Kind.Ghost, icon: "arrow.clockwise") { Enabled = !_loading };
-            _body.Children.Add(Centered(64,
-                Icon("arrow.clockwise", 26, Fnt).Frame(height: 150),
-                Serif("模板暂时无法加载", 18).Top(13),
-                Sans(error, 13, Sub),
-                retry.Top(28)));
+            _body.Children.Add(Blank(TemplatesArt.None(), "模板暂时无法加载", error, retry));
         }
-        else if (!Ready)
+        else if (!_ready)
         {
-            // ProgressView("正在加载简历模板…")：转圈在上、文字在下，占 250 高
-            var loading = VStack(8, new ProgressRing { IsActive = true, Width = 20, Height = 20 }, Sans("正在加载简历模板…", 13))
+            // 首次加载：ProgressRing 转圈，文案「正在加载简历模板…」
+            var loading = VStack(8, new ProgressRing { IsActive = true, Width = 20, Height = 20 }, Sans("正在加载简历模板…", 13, Sub))
                 .Align(HorizontalAlignment.Center, VerticalAlignment.Center);
-            _body.Children.Add(new Grid { MinHeight = 250, Children = { loading } });
+            _body.Children.Add(new Grid { MinHeight = 320, Children = { loading } });
         }
         else if (_templates.Count == 0)
         {
-            _body.Children.Add(Centered(64,
-                Serif("当前没有可用模板", 18),
-                Sans("模板启用后会显示在这里，你仍可以从已有简历继续编辑。", 13, Sub),
-                new V3Button("返回全部简历", BackToResumes, V3Button.Kind.Ghost, icon: "doc").Top(28)));
+            // ③ 当前没有可用模板：只给「返回全部简历」
+            _body.Children.Add(Blank(TemplatesArt.None(), "当前没有可用模板", "模板启用后会显示在这里，你仍可以从已有简历继续编辑。",
+                new V3Button("返回全部简历", BackToResumes, V3Button.Kind.Ghost)));
         }
         else
         {
-            // `.tpl-toolbar`：距头部 28、高 30、间距 12
-            var toolbar = Columns(12, (Auto, Detach(_found)), (Auto, Detach(_clear)), (Star(), new Border()),
-                (Auto, Sans("按展示顺序", 12, Fnt).Pad(0, 0, 4, 0)), (Auto, Detach(_filter)));
+            // 工具栏：距头部 30、高 32；左摘要与清除筛选，右排序与筛选
+            var toolbar = Columns(12, (Auto, Detach(_found)), (Auto, Detach(_clear)), (Star(), new Border()), (Auto, Detach(_sort)), (Auto, Detach(_filter)));
             foreach (var child in toolbar.Children.OfType<FrameworkElement>()) child.VerticalAlignment = VerticalAlignment.Center;
-            toolbar.Height = 30;
-            _body.Children.Add(toolbar.Top(28));
+            toolbar.Height = 32;
+            _body.Children.Add(toolbar.Top(30));
             _body.Children.Add(Detach(_results));
             RenderResults();
         }
     }
 
-    /// <summary>筛选或翻页后只更新工具栏文字与结果区。</summary>
+    /// <summary>筛选、排序或翻页后只更新工具栏文字与结果区。</summary>
     void RenderResults()
     {
         var filtered = Filtered;
         _found.Text = $"找到 {filtered.Count} 套模板";
         _clear.Visibility = FilterCount > 0 ? Visibility.Visible : Visibility.Collapsed;
+        _sortLabel.Text = _byPopularity ? "按热度排序" : "按展示顺序";
         _filter.Refresh();
         _results.Children.Clear();
         if (filtered.Count == 0)
         {
-            _results.Children.Add(Centered(42,
-                Icon("line.3.horizontal.decrease", 24, Fnt).Frame(height: 150),
-                Serif("没有符合条件的模板", 18).Top(13),
-                Sans(EmptyMessage, 13, Sub),
-                new V3Button("清除筛选", ClearFilters, V3Button.Kind.Ghost, icon: "line.3.horizontal.decrease").Top(28)));
+            // ② 没有符合条件的模板：说明里直接点出冲突的条件
+            _results.Children.Add(Blank(TemplatesArt.Filter(FilterCount), "没有符合条件的模板", EmptyMessage,
+                new V3Button("清除筛选", ClearFilters, V3Button.Kind.Ghost), top: 90));
+            return;
         }
-        var grid = new AdaptiveGrid(200, 20, 32).Top(24);
+        // 卡片 200 宽、列距 20、行距 30
+        var grid = new AdaptiveGrid(200, 20, 30).Top(22);
         foreach (var template in PageItems) grid.Children.Add(Cell(template));
         _results.Children.Add(grid);
-        if (filtered.Count > 0)
-            _results.Children.Add(V3Pagination.Make(Math.Min(_page, PageCount), filtered.Count, page => { _page = page; RenderResults(); }, PageSize));
+        if (PageCount > 1)
+            _results.Children.Add(V3Pagination.Make(Math.Min(_page, PageCount), filtered.Count, page => { _page = page; RenderResults(); }, PageSize).Top(24));
     }
 
+    /// <summary>
+    /// 模板卡片（稿 TemplateCard 200×320）：白底细边的缩略纸面（圆角 6，悬停描边加深），名称 13/500 距纸 14，
+    /// 标签（20 高）与「N 使用」一行，距名称 4。
+    /// </summary>
     FrameworkElement Cell(ResumeTemplate template)
     {
         var chips = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-        foreach (var label in template.StyleCategories.Concat(template.UseCases)) chips.Children.Add(V3Chip.Make(label).Align(v: VerticalAlignment.Center));
+        foreach (var label in template.StyleCategories.Concat(template.UseCases)) chips.Children.Add(V3Chip.Make(label, height: 20, size: 11).Align(v: VerticalAlignment.Center));
         var meta = Columns(6, (Star(), chips),
-            (Auto, template.UseCount is { } count ? Number($"{FormatUses(count)} 使用", 10.5, Fnt, Regular).Align(v: VerticalAlignment.Center) : new Border()));
+            (Auto, template.UseCount is { } count ? Number($"{FormatUses(count)} 使用", 10.5, Hex(0x96968F), Regular).Align(v: VerticalAlignment.Center) : new Border()));
         meta.Height = 20;
-        var body = VStack(0,
-            TemplateThumbnail.Make(template, Guest),
-            Sans(template.Name, 14, Txt, Medium).Frame(height: 20).Top(14),
-            meta.Top(4));
-        return new BorderControl { Child = body, Background = Brush(Clear) }.OnTap(() => ShowPreview(template), $"查看模板：{template.Name}");
+        var paper = new Grid { CornerRadius = new CornerRadius(6), Background = Brush(V3.White) };
+        paper.Children.Add(new AspectPanel(200.0 / 266) { Children = { TemplateThumbnail.Make(template).Also(t => t.VerticalAlignment = VerticalAlignment.Top) } });
+        var frame = new Border { CornerRadius = new CornerRadius(6), BorderBrush = Brush(Cl), BorderThickness = new Thickness(1), IsHitTestVisible = false };
+        paper.Children.Add(frame);
+        var body = VStack(0, paper, Sans(template.Name, 13, Txt, Medium).Frame(height: 16).Top(14), meta.Top(4));
+        var cell = new BorderControl { Child = body, Background = Brush(Clear) };
+        cell.OnHover(h => frame.BorderBrush = Brush(h ? Hex(0xC9C9C3) : Cl));
+        return cell.OnTap(() => ShowPreview(template), $"查看模板：{template.Name}");
+    }
+
+    /// <summary>空状态：插图 + 20/600 标题 + 13 说明 + 描边按钮，整体居中。</summary>
+    static StackPanel Blank(FrameworkElement art, string title, string message, FrameworkElement action, double top = 150)
+    {
+        var heading = Serif(title, 20);
+        var text = Sans(message, 13, Sub).Wrap();
+        text.TextAlignment = TextAlignment.Center;
+        var stack = VStack(0, art, heading.Top(58), text.Top(2), action.Top(28));
+        foreach (var child in stack.Children.OfType<FrameworkElement>()) child.HorizontalAlignment = HorizontalAlignment.Center;
+        stack.Margin = new Thickness(0, top, 0, 40);
+        return stack;
     }
 
     async Task LoadAsync()
     {
-        var owner = Account;
         _loading = true; _loadError = null;
         Render();
         try
         {
-            IReadOnlyList<ResumeTemplate> result;
-            if (owner.Length == 0) result = await GuestTemplates.LoadAsync(_cancel.Token);
             // Mac `HTTPAPIClient.listResumeTemplates` 在客户端层过滤退役模板；Windows 客户端层没有过滤，在这里补上
-            else result = (await App.Session.Api.ListResumeTemplatesAsync(_cancel.Token)).Where(t => !ResumeRequest.RetiredTemplateKeys.Contains(t.Key)).ToList();
+            _templates = (await App.Session.Api.ListResumeTemplatesAsync(_cancel.Token)).Where(t => !ResumeRequest.RetiredTemplateKeys.Contains(t.Key)).ToList();
             _cancel.Token.ThrowIfCancellationRequested();
-            if (owner != Account) return;
-            _templates = result; _source = owner.Length == 0 ? "guest" : owner;
+            _ready = true;
         }
         catch (OperationCanceledException) { return; }
         catch (Exception error)
         {
-            if (owner != Account) return;
             if (error is ApiException { Status: System.Net.HttpStatusCode.Unauthorized }) { _loading = false; App.Session.ReportAuthenticationFailure(); return; }
-            _loadError = owner.Length == 0 ? "随包示例读取失败，请重新打开模板页。" : "请检查网络后重试，已有简历不会受到影响。";
+            _loadError = "请检查网络后重试，已有简历不会受到影响。";
         }
-        if (owner == Account) _loading = false;
+        _loading = false;
         Render();
         OpenPendingCreate();
     }
@@ -195,17 +216,11 @@ public sealed class TemplatesPage : Page
 
     static void BackToResumes() => WorkspaceShell.Current.Select(WorkspaceSection.Resumes);
 
-    void Use(ResumeTemplate template)
-    {
-        if (Guest) _ = WorkspaceShell.Current.RequestLoginAsync(template);
-        else OpenCreate(template);
-    }
-
-    /// <summary>登录前选的是随包示例，ID 与线上不同，按模板 key 找到对应的真实模板。</summary>
+    /// <summary>登录前在首页选的模板：进入本页后按模板 key 找到线上模板继续创建。</summary>
     void OpenPendingCreate()
     {
         var shell = WorkspaceShell.Current;
-        if (Guest || !Ready || shell.PendingCreateKey is not { } key) return;
+        if (!_ready || shell.PendingCreateKey is not { } key) return;
         shell.PendingCreateKey = null;
         if (_templates.FirstOrDefault(t => t.Key == key) is { } template) OpenCreate(template);
     }
@@ -215,15 +230,14 @@ public sealed class TemplatesPage : Page
         if (_preview is { IsOpen: true } || XamlRoot is null) return;
         // Web 预览只在当前这一页里切换上一套 / 下一套
         var list = PageItems;
-        var guest = Guest;
-        _preview = V3Overlay.Show(XamlRoot, close => new TemplatePreview(template, guest, list, XamlRoot.Size.Height, close, picked =>
+        _preview = V3Overlay.Show(XamlRoot, close => new TemplatePreview(template, list, XamlRoot.Size.Height, close, picked =>
         {
             _createAfterDismiss = picked;
             close();
         }).Root, dismissed: () =>
         {
             _preview = null;
-            if (_createAfterDismiss is { } picked) { _createAfterDismiss = null; Use(picked); }
+            if (_createAfterDismiss is { } picked) { _createAfterDismiss = null; OpenCreate(picked); }
         });
     }
 
@@ -233,7 +247,6 @@ public sealed class TemplatesPage : Page
         _creating = V3Overlay.Show(XamlRoot, close => CreateResumeSheet.Make(template, close, id =>
         {
             close();
-            // Mac `onCreated`：editResumeID = id.isEmpty ? nil : id; selection = .resumes
             if (id.Length == 0) WorkspaceShell.Current.Select(WorkspaceSection.Resumes);
             else WorkspaceShell.Current.EditResume(id);
         }), dismissed: () => _creating = null);
@@ -247,13 +260,6 @@ public sealed class TemplatesPage : Page
         return value == Math.Round(value) ? $"{(int)value}k" : value.ToString("0.0", CultureInfo.InvariantCulture) + "k";
     }
 
-    /// <summary>`VStack(spacing: 8) { … }.frame(maxWidth: .infinity).padding(.top, n)`：居中的状态块。</summary>
-    static StackPanel Centered(double top, params FrameworkElement[] children)
-    {
-        foreach (var child in children) child.HorizontalAlignment = HorizontalAlignment.Center;
-        return VStack(8, children).Top(top);
-    }
-
     /// <summary>常驻元素换到新的父容器前先从旧容器取下。</summary>
     static T Detach<T>(T element) where T : FrameworkElement
     {
@@ -262,9 +268,58 @@ public sealed class TemplatesPage : Page
         return element;
     }
 
-    /// <summary>真实模板经会话准备私有图片；随包示例不读取会话、不发请求。</summary>
-    internal static Task<PaperPreparation> PreparePaperAsync(ResumeTemplate template, bool guest, CancellationToken ct) =>
-        guest ? GuestTemplates.PrepareAsync(template, ct) : App.Session.Api.PreparePaperAsync(template.ToRenderRequest(), ct);
+    /// <summary>线上模板经会话准备私有图片。</summary>
+    internal static Task<PaperPreparation> PreparePaperAsync(ResumeTemplate template, CancellationToken ct) =>
+        App.Session.Api.PreparePaperAsync(template.ToRenderRequest(), ct);
+}
+
+/// <summary>空状态插图（稿 02 · 模板列表状态）。</summary>
+static class TemplatesArt
+{
+    /// <summary>③ 没有可用模板：三张虚线空白纸面。</summary>
+    public static FrameworkElement None()
+    {
+        var canvas = new Canvas { Width = 202, Height = 108 };
+        for (var i = 0; i < 3; i++)
+        {
+            var paper = new Grid { Width = 82, Height = 106, Background = Brush(V3.White) };
+            paper.Children.Add(new Microsoft.UI.Xaml.Shapes.Rectangle { Stroke = Brush(Line), StrokeThickness = 1, StrokeDashArray = new DoubleCollection { 3, 2 } });
+            paper.Children.Add(VStack(6, Fill(Line, 1.5, 32, 4), Fill(Line, 1, 52, 3)).Pad(10, 12, 0, 0));
+            canvas.Children.Add(paper.At(i * 60, 0));
+        }
+        AutomationProperties.SetAccessibilityView(canvas, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
+        return canvas;
+    }
+
+    /// <summary>② 筛选无结果：三张缩略纸面（两侧带色条、中间墨黑），右下圆形漏斗角标与橙色已选数量。</summary>
+    public static FrameworkElement Filter(int count)
+    {
+        var canvas = new Canvas { Width = 214, Height = 124 };
+        canvas.Children.Add(Paper(Hex(0x9CC8AE), 66, 108).Also(p => p.Opacity = 0.85).At(0, 10));
+        canvas.Children.Add(Paper(Hex(0x9DB4E6), 64, 108).Also(p => p.Opacity = 0.85).At(150, 10));
+        canvas.Children.Add(Paper(Txt, 88, 120).Elevate(3).At(62, 0));
+        var badge = new Border
+        {
+            Width = 54, Height = 54, CornerRadius = new CornerRadius(27), Background = Brush(V3.White), BorderBrush = Brush(Cl), BorderThickness = new Thickness(1),
+            Child = Icon("line.3.horizontal.decrease", 18, Txt).Align(HorizontalAlignment.Center, VerticalAlignment.Center),
+        }.Elevate(4);
+        canvas.Children.Add(badge.At(124, 66));
+        if (count > 0)
+            canvas.Children.Add(new Border
+            {
+                Width = 20, Height = 20, CornerRadius = new CornerRadius(10), Background = Brush(Orange),
+                Child = Number($"{count}", 10, V3.White, Semibold).Align(HorizontalAlignment.Center, VerticalAlignment.Center),
+            }.At(166, 60));
+        AutomationProperties.SetAccessibilityView(canvas, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
+        return canvas;
+
+        static Border Paper(Color accent, double width, double height)
+        {
+            var lines = VStack(5, Fill(accent, 1, width * 0.45, 4));
+            for (var row = 0; row < 3; row++) { lines.Children.Add(Fill(accent, 1, width * 0.25, 3).Top(4)); lines.Children.Add(Fill(Line, 1, width * 0.68, 2)); }
+            return new Border { Width = width, Height = height, Background = Brush(V3.White), BorderBrush = Brush(Line), BorderThickness = new Thickness(1), Padding = new Thickness(8), Child = lines };
+        }
+    }
 }
 
 /// <summary>
@@ -331,7 +386,7 @@ sealed class AspectPanel(double ratio) : Panel
 /// <summary>缩略纸面（Mac `TemplateThumbnail`）：A4 比例白底、圆角 6、#D3D3CE 描边；新建简历弹窗与编辑器模板面板共用。</summary>
 public static class TemplateThumbnail
 {
-    public static FrameworkElement Make(ResumeTemplate template, bool guest)
+    public static FrameworkElement Make(ResumeTemplate template, bool guest = false)
     {
         var cancel = new CancellationTokenSource();
         var failed = false;
@@ -355,7 +410,7 @@ public static class TemplateThumbnail
         {
             try
             {
-                var result = await TemplatesPage.PreparePaperAsync(template, guest, cancel.Token);
+                var result = await TemplatesPage.PreparePaperAsync(template, cancel.Token);
                 cancel.Token.ThrowIfCancellationRequested();
                 // 794×1123 的纸面按宽度缩放，左上对齐，不接收点按
                 var paper = new ResumePaperView { Width = 794, Height = 1123, IsHitTestVisible = false };
@@ -377,16 +432,16 @@ public static class TemplateThumbnail
 }
 
 /// <summary>
-/// 03.1a 模板预览（Mac `TemplatePreview`），对齐 Web `TemplatePreviewDialog`（760×900，放不下时随窗口收矮）：标题与标签、使用次数，
-/// 点阵舞台里 420 宽（100%）的 A4，两侧圆形切换钮（循环，← → 同样），底部缩放条，页脚「第 n / N 套」、取消与主按钮。
+/// 03.1a 模板预览（Windows 稿 ContentDialog 680×854，窗口放不下时收矮）：标题 20/600 与标签、使用次数；#F4F4F1 圆角 8 的舞台里
+/// 360 宽（100%）的 A4，两侧 32 圆形切换钮（循环，← → 同样），纸下方 109×28 缩放条；CommandSpace 左「第 n / N 套」，取消与「创建简历」各 140 宽。
+/// 不放 ×，Esc 关闭。
 /// </summary>
 sealed class TemplatePreview
 {
     const double MinZoom = 0.5, MaxZoom = 2.0, Step = 0.1;
-    /// <summary>100% 时纸面宽 420（A4 794 × 0.5292）。</summary>
-    const double Base = 0.5292;
+    /// <summary>100% 时纸面宽 360（A4 794 × 0.4534）。</summary>
+    const double Base = 360.0 / 794;
 
-    readonly bool _guest;
     readonly IReadOnlyList<ResumeTemplate> _list;
     readonly Action _close;
     readonly Action<ResumeTemplate> _use;
@@ -398,18 +453,16 @@ sealed class TemplatePreview
     string? _error;
     ResumePaperView? _paper;
     Border? _paperBox;
-    Viewbox? _paperScale;
     TextBlock? _zoomLabel;
     BorderControl? _zoomOut, _zoomIn;
 
     public Border Root { get; }
 
-    public TemplatePreview(ResumeTemplate template, bool guest, IReadOnlyList<ResumeTemplate> list, double windowHeight, Action close, Action<ResumeTemplate> use)
+    public TemplatePreview(ResumeTemplate template, IReadOnlyList<ResumeTemplate> list, double windowHeight, Action close, Action<ResumeTemplate> use)
     {
-        _template = template; _guest = guest; _list = list; _close = close; _use = use;
-        Root = V3Dialog.Frame(_content, 760);
-        // Web：760×900，窗口放不下时减去上下各 24 的遮罩留白
-        Root.Height = Math.Min(900, windowHeight - 48);
+        _template = template; _list = list; _close = close; _use = use;
+        Root = V3Dialog.Frame(_content, 680);
+        Root.Height = Math.Min(854, windowHeight - 48);
         // ← → 切换上一套 / 下一套；用 PreviewKeyDown 抢在滚动区之前
         Root.PreviewKeyDown += (_, e) =>
         {
@@ -438,7 +491,7 @@ sealed class TemplatePreview
     {
         try
         {
-            var result = await TemplatesPage.PreparePaperAsync(template, _guest, ct);
+            var result = await TemplatesPage.PreparePaperAsync(template, ct);
             ct.ThrowIfCancellationRequested();
             var paper = new ResumePaperView { Width = 794, Height = _height };
             paper.Rendered += (_, height) => { _height = Math.Max(1123, height); UpdateZoom(); };
@@ -455,79 +508,71 @@ sealed class TemplatePreview
     {
         _content.Children.Clear();
         _content.RowDefinitions.Clear();
-        _content.RowDefinitions.Add(new RowDefinition { Height = Px(100) });
+        _content.RowDefinitions.Add(new RowDefinition { Height = Auto });
         _content.RowDefinitions.Add(new RowDefinition { Height = Star() });
         _content.RowDefinitions.Add(new RowDefinition { Height = Auto });
 
-        // 头部：标题 20 半粗（29 高、右留 40 给关闭钮），标签与使用次数（20 高），左右 32、顶 28
-        var tags = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Height = 20 };
+        // 头部：标题 20/600（32 高），标签与使用次数（22 高），左右 24、顶 22
+        var tags = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Height = 22 };
         foreach (var label in _template.StyleCategories.Concat(_template.UseCases)) tags.Children.Add(V3Chip.Make(label).Align(v: VerticalAlignment.Center));
-        if (_template.UseCount is { } count) tags.Children.Add(Number($"{TemplatesPage.FormatUses(count)} 使用", 11, Fnt, Regular).Pad(6, 0, 0, 0).Align(v: VerticalAlignment.Center));
-        var head = VStack(7, Label(_template.Name, 20, Txt, Semibold).Frame(height: 29).Pad(0, 0, 40, 0), tags).Pad(32, 28, 32, 0);
-        head.VerticalAlignment = VerticalAlignment.Top;
-        var close = new BorderControl { Width = 28, Height = 28, Background = Brush(Clear), Child = Icon("xmark", 12, Fnt).Align(HorizontalAlignment.Center, VerticalAlignment.Center) }
-            .OnTap(_close, "关闭").Align(HorizontalAlignment.Right, VerticalAlignment.Top).Pad(0, 26, 26, 0);
-        _content.Children.Add(head);
-        _content.Children.Add(close);
+        if (_template.UseCount is { } count) tags.Children.Add(Number($"{TemplatesPage.FormatUses(count)} 使用", 11.5, Fnt, Regular).Align(v: VerticalAlignment.Center));
+        _content.Children.Add(VStack(6, Serif(_template.Name, 20).Frame(height: 32), tags).Pad(24, 22, 24, 18));
 
-        // 舞台：点阵底 + 可双向滚动的纸面 + 两侧切换钮 + 底部缩放条，圆角 11，左右 31、底 24
+        // 舞台：可双向滚动的纸面（下方缩放条随纸面）+ 两侧切换钮
         var scroll = new ScrollViewer
         {
             HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollMode = ScrollMode.Auto, VerticalScrollMode = ScrollMode.Auto,
         };
-        var host = new Grid();
+        var host = new StackPanel();
         scroll.SizeChanged += (_, e) => host.MinWidth = e.NewSize.Width;
         if (_paper is not null)
         {
             Detach(_paper);
-            _paperScale = new Viewbox { Child = _paper, Stretch = Stretch.Fill };
             _paperBox = new Border
             {
-                Child = _paperScale, CornerRadius = new CornerRadius(4), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(76, 34, 76, 80),
-            }.Elevate(12);
+                Child = new Viewbox { Child = _paper, Stretch = Stretch.Fill }, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(76, 40, 76, 0),
+                BorderBrush = Brush(Cl), BorderThickness = new Thickness(1),
+            };
             host.Children.Add(_paperBox);
         }
-        else if (_error is { } error) host.Children.Add(Sans(error, 13, Red).Pad(40, 40, 40, 40).Align(HorizontalAlignment.Center, VerticalAlignment.Top));
-        else host.Children.Add(new ProgressRing { IsActive = true, Width = 16, Height = 16, Margin = new Thickness(40), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top });
-        scroll.Content = host;
+        else if (_error is { } error) host.Children.Add(Sans(error, 13, Red).Pad(40, 40, 40, 40).Align(HorizontalAlignment.Center));
+        else host.Children.Add(new ProgressRing { IsActive = true, Width = 16, Height = 16, Margin = new Thickness(40), HorizontalAlignment = HorizontalAlignment.Center });
 
         _zoomOut = ZoomButton("−", "缩小模板", () => Change(-1));
         _zoomIn = ZoomButton("+", "放大模板", () => Change(1));
-        _zoomLabel = Number("", 11.5, Txt, Medium);
+        _zoomLabel = Number("", 12, Txt, Regular);
         AutomationProperties.SetName(_zoomLabel, "模板预览缩放比例");
-        var zoomRow = Columns(0, (Auto, _zoomOut), (Star(), _zoomLabel.Align(HorizontalAlignment.Center, VerticalAlignment.Center)), (Auto, _zoomIn));
-        zoomRow.Padding = new Thickness(6, 0, 6, 0);
+        var zoomRow = Columns(4, (Auto, _zoomOut), (Star(), _zoomLabel.Align(HorizontalAlignment.Center, VerticalAlignment.Center)), (Auto, _zoomIn));
+        zoomRow.Padding = new Thickness(4, 0, 4, 0);
         var zoomBar = new Border
         {
-            Child = zoomRow, Width = 132, Height = 32, CornerRadius = new CornerRadius(8), Background = Brush(V3.White),
-            BorderBrush = Brush(Cl), BorderThickness = new Thickness(1), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Bottom,
-            Margin = new Thickness(0, 0, 0, 16),
-        }.Elevate(3);
+            Child = zoomRow, Width = 109, Height = 28, CornerRadius = new CornerRadius(4), Background = Brush(V3.White),
+            BorderBrush = Brush(Cl), BorderThickness = new Thickness(1), HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 20, 0, 40),
+        };
         AutomationProperties.SetName(zoomBar, "模板预览缩放");
+        if (_paper is not null) host.Children.Add(zoomBar);
+        scroll.Content = host;
 
-        var stage = new Grid { CornerRadius = new CornerRadius(11), Margin = new Thickness(31, 0, 31, 24) };
-        stage.Children.Add(new V3DotStage(null, height: null));
+        var stage = new Grid { CornerRadius = new CornerRadius(8), Background = Brush(Stage), Margin = new Thickness(24, 0, 24, 24) };
         stage.Children.Add(scroll);
-        // 两侧圆形切换钮（左右各 20），只占两侧，不挡住纸面滚动
         stage.Children.Add(NavButton(Previous, left: true).Align(HorizontalAlignment.Left, VerticalAlignment.Center).Pad(20, 0, 0, 0));
         stage.Children.Add(NavButton(Next, left: false).Align(HorizontalAlignment.Right, VerticalAlignment.Center).Pad(0, 0, 20, 0));
-        stage.Children.Add(zoomBar);
         Grid.SetRow(stage, 1);
         _content.Children.Add(stage);
 
-        // 页脚：「第 n / N 套」、取消（36 高 80 宽）与主按钮（36 高 100 宽），左右 32、至少 88 高、顶线
-        var buttons = HStack(10,
-            new V3Button("取消", _close, V3Button.Kind.Ghost, height: 36, width: 80),
-            new V3Button(_guest ? "使用此模板" : "创建简历", () => _use(_template), V3Button.Kind.Dark, height: 36, width: 100));
-        UIElement position = Index is { } index ? Sans($"第 {index + 1} / {_list.Count} 套", 11.5, Fnt) : new Border();
-        var foot = Spread(position, buttons, 10);
-        foot.Padding = new Thickness(32, 0, 32, 0);
-        foot.MinHeight = 88;
-        var footBorder = new Border { Child = foot, BorderBrush = Brush(Line), BorderThickness = new Thickness(0, 1, 0, 0) };
-        Grid.SetRow(footBorder, 2);
-        _content.Children.Add(footBorder);
+        // CommandSpace：#F4F4F1、内边距 24；左「第 n / N 套」，右取消与唯一的黑色主按钮（各 140 宽）
+        var buttons = HStack(8,
+            new V3Button("取消", _close, V3Button.Kind.Ghost, width: 140),
+            new V3Button("创建简历", () => _use(_template), V3Button.Kind.Dark, width: 140));
+        UIElement position = Index is { } index ? Sans($"第 {index + 1} / {_list.Count} 套", 12, Fnt) : new Border();
+        var foot = new Border
+        {
+            Child = Spread(position, buttons, 12), Padding = new Thickness(24), Background = Brush(Stage),
+            BorderBrush = Brush(Line), BorderThickness = new Thickness(0, 1, 0, 0),
+        };
+        Grid.SetRow(foot, 2);
+        _content.Children.Add(foot);
         UpdateZoom();
     }
 
@@ -536,7 +581,7 @@ sealed class TemplatePreview
     {
         var scale = _zoom * Base;
         if (_paper is not null) _paper.Height = _height;
-        if (_paperBox is not null) { _paperBox.Width = 794 * scale; _paperBox.Height = _height * scale; }
+        if (_paperBox is not null) { _paperBox.Width = 794 * scale + 2; _paperBox.Height = _height * scale + 2; }
         if (_zoomLabel is not null) _zoomLabel.Text = $"{(int)Math.Round(_zoom * 100, MidpointRounding.AwayFromZero)}%";
         if (_zoomOut is not null) _zoomOut.Opacity = _zoom > MinZoom ? 1 : 0.35;
         if (_zoomIn is not null) _zoomIn.Opacity = _zoom < MaxZoom ? 1 : 0.35;
@@ -552,10 +597,10 @@ sealed class TemplatePreview
     {
         var button = new BorderControl
         {
-            Width = 36, Height = 36, CornerRadius = new CornerRadius(18), Background = Brush(V3.White), BorderBrush = Brush(Cl), BorderThickness = new Thickness(1),
-            Child = Icon(left ? "chevron.left" : "chevron.right", 12, Sub).Align(HorizontalAlignment.Center, VerticalAlignment.Center),
+            Width = 32, Height = 32, CornerRadius = new CornerRadius(16), Background = Brush(V3.White), BorderBrush = Brush(Cl), BorderThickness = new Thickness(1),
+            Child = Icon(left ? "chevron.left" : "chevron.right", 12, Txt).Align(HorizontalAlignment.Center, VerticalAlignment.Center),
             Opacity = target is null ? 0.4 : 1,
-        }.Elevate(3);
+        };
         var name = target is not null ? $"{(left ? "上一个" : "下一个")}模板：{target.Name}" : left ? "没有上一个模板" : "没有下一个模板";
         return button.OnTap(() => { if (target is not null) Show(target); }, name, () => target is not null);
     }
@@ -563,7 +608,7 @@ sealed class TemplatePreview
     BorderControl ZoomButton(string title, string label, Action action)
     {
         var plus = title == "+";
-        return new BorderControl { Width = 24, Height = 24, Background = Brush(Clear), Child = Label(title, 14, Sub, Medium).Align(HorizontalAlignment.Center, VerticalAlignment.Center) }
+        return new BorderControl { Width = 28, Height = 22, Background = Brush(Clear), Child = Label(title, 14, Sub).Align(HorizontalAlignment.Center, VerticalAlignment.Center) }
             .OnTap(action, label, () => plus ? _zoom < MaxZoom : _zoom > MinZoom);
     }
 
@@ -659,8 +704,8 @@ static class CreateResumeSheet
 }
 
 /// <summary>
-/// Web `V3TemplateFilter`（Mac `TemplateFilter`）：`.tpl-filter-trigger` 按钮（默认 30 高，圆角 8，有筛选时蓝底蓝字「筛选 · N」）+
-/// 300 宽 `.tpl-filter-pop`（标题与重置，风格、适用场景两组胶囊多选）。模板页与编辑器模板面板共用；选中项直接改传入的列表，再调 changed。
+/// 筛选（Windows 稿 Filter ComboBox）：白底 32 高、圆角 4、#E4E4E0 边、底部 1px 深色强调线，「筛选」或「筛选 · N」+ ⌄；
+/// 浮层 300 宽（03.1b）：标题「筛选简历模板」与重置，风格、适用场景两组 FilterChip 多选（选中白底细边、未选灰底），选中即生效。
 /// </summary>
 public sealed class TemplateFilter : BorderControl
 {
@@ -669,24 +714,22 @@ public sealed class TemplateFilter : BorderControl
 
     readonly List<string> _styles, _uses;
     readonly Action _changed;
-    readonly FontIcon _icon = Icon("line.3.horizontal.decrease", 11);
-    readonly TextBlock _title = Sans("", 12, Txt, Medium);
-    readonly FontIcon _chevron = Icon("chevron.down", 9);
-    readonly RotateTransform _rotation = new() { CenterX = 4.5, CenterY = 4.5 };
+    readonly TextBlock _title = Sans("", 13, Txt);
     Flyout? _flyout;
     bool _open;
 
     int Count => _styles.Count + _uses.Count;
 
-    public TemplateFilter(List<string> styles, List<string> uses, Action changed, double height = 30)
+    public TemplateFilter(List<string> styles, List<string> uses, Action changed, double height = 32)
     {
         _styles = styles; _uses = uses; _changed = changed;
-        _chevron.RenderTransform = _rotation;
-        Child = HStack(6, _icon, _title, _chevron);
+        _title.VerticalAlignment = VerticalAlignment.Center;
+        Child = Columns(12, (Star(), _title), (Auto, Icon("chevron.down", 10, Sub).Align(v: VerticalAlignment.Center)));
         Height = height;
-        Padding = new Thickness(11, 0, 18, 0);
-        CornerRadius = new CornerRadius(8);
-        BorderThickness = new Thickness(1);
+        MinWidth = 96;
+        Padding = new Thickness(11, 0, 11, 0);
+        CornerRadius = new CornerRadius(4);
+        BorderThickness = new Thickness(1, 1, 1, 1);
         this.OnTap(Toggle, "筛选简历模板");
         Refresh();
     }
@@ -694,14 +737,13 @@ public sealed class TemplateFilter : BorderControl
     /// <summary>筛选值或开合变化后重画按钮与浮层内容。</summary>
     public void Refresh()
     {
-        var on = Count > 0;
-        _icon.Foreground = Brush(on ? Blue : Sub);
-        _title.Text = on ? $"筛选 · {Count}" : "筛选";
-        _title.Foreground = Brush(on ? Blue : Txt);
-        _chevron.Foreground = Brush(on ? Blue : Fnt);
-        _rotation.Angle = _open ? 180 : 0;
-        Background = Brush(on ? BlueSoft : _open ? Field : V3.White);
-        BorderBrush = Brush(on ? Hex(0xC9D7F4) : Cl);
+        _title.Text = Count > 0 ? $"筛选 · {Count}" : "筛选";
+        Background = Brush(_open ? Field : V3.White);
+        BorderBrush = new LinearGradientBrush
+        {
+            StartPoint = new Point(0, 0), EndPoint = new Point(0, 1),
+            GradientStops = { new GradientStop { Color = Cl, Offset = 0 }, new GradientStop { Color = Cl, Offset = 0.94 }, new GradientStop { Color = Count > 0 ? Txt : Hex(0x8A8A84), Offset = 0.94 } },
+        };
         if (_flyout is not null) _flyout.Content = Popover();
     }
 
@@ -709,19 +751,19 @@ public sealed class TemplateFilter : BorderControl
     {
         if (_open) { _flyout?.Hide(); return; }
         _open = true;
-        _flyout = V3Popover.Show(this, Popover(), FlyoutPlacementMode.Bottom, padding: 0);
+        _flyout = V3Popover.Show(this, Popover(), FlyoutPlacementMode.BottomEdgeAlignedRight, padding: 0);
         _flyout.Closed += (_, _) => { _open = false; _flyout = null; Refresh(); };
         Refresh();
     }
 
     UIElement Popover()
     {
-        var reset = new BorderControl { Width = 22, Height = 22, Background = Brush(Clear), Child = Icon("arrow.clockwise", 12, Sub).Align(HorizontalAlignment.Center, VerticalAlignment.Center), Opacity = Count == 0 ? 0.4 : 1 }
-            .OnTap(() => { _styles.Clear(); _uses.Clear(); Changed(); }, enabled: () => Count > 0).Tip("重置筛选");
-        var head = Spread(Sans("筛选简历模板", 13, Txt, Medium), reset, 0);
-        head.Height = 16;
-        var body = VStack(0, head, Group("风格", StyleOptions, _styles).Top(20), Group("适用场景", UseOptions, _uses).Top(18));
-        body.Padding = new Thickness(18, 16, 18, 18);
+        var reset = new BorderControl { Width = 28, Height = 28, CornerRadius = new CornerRadius(4), Background = Brush(Clear), Child = Icon("arrow.clockwise", 13, Sub).Align(HorizontalAlignment.Center, VerticalAlignment.Center), Opacity = Count == 0 ? 0.4 : 1 }
+            .OnTap(() => { _styles.Clear(); _uses.Clear(); Changed(); }, "重置筛选", () => Count > 0).Tip("重置筛选");
+        var head = Spread(Sans("筛选简历模板", 13, Txt, Semibold), reset, 0);
+        head.Height = 28;
+        var body = VStack(0, head, Group("风格", StyleOptions, _styles).Top(10), Group("适用场景", UseOptions, _uses).Top(10));
+        body.Padding = new Thickness(17, 13, 17, 17);
         body.Width = 300;
         AutomationProperties.SetName(body, "筛选简历模板");
         return body;
@@ -729,18 +771,19 @@ public sealed class TemplateFilter : BorderControl
 
     StackPanel Group(string title, string[] options, List<string> values)
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
         foreach (var option in options)
         {
             var on = values.Contains(option);
             row.Children.Add(new BorderControl
             {
-                Child = Sans(option, 12, on ? Blue : Sub, Medium).Align(v: VerticalAlignment.Center),
-                Padding = new Thickness(12, 0, 12, 0), Height = 28, CornerRadius = Capsule(28), Background = Brush(on ? BlueSoft : Field),
+                Child = Sans(option, 12, Txt, on ? Medium : Regular).Align(HorizontalAlignment.Center, VerticalAlignment.Center),
+                MinWidth = 40, Padding = new Thickness(8, 0, 8, 0), Height = 28, CornerRadius = new CornerRadius(14),
+                Background = Brush(on ? V3.White : Field), BorderBrush = Brush(on ? Hex(0xC9C9C3) : Field), BorderThickness = new Thickness(1),
             }.OnTap(() => { if (on) values.Remove(option); else values.Add(option); Changed(); }, option)
              .Also(chip => { if (on) AutomationProperties.SetItemStatus(chip, "已选中"); }));
         }
-        return VStack(9, Sans(title, 11, Fnt).Frame(height: 13), row);
+        return VStack(10, Sans(title, 12, Fnt).Frame(height: 18), row);
     }
 
     void Changed() { _changed(); Refresh(); }

@@ -132,7 +132,7 @@ public sealed class ChatPreviewPanel : UserControl
     FrameworkElement TabButton(ChatPreviewTab tab)
     {
         var selected = tab.Key == Current?.Key;
-        var symbol = tab.Kind switch { ChatPreviewTab.Kinds.Resume => "doc.text", ChatPreviewTab.Kinds.Generated => "sparkle", ChatPreviewTab.Kinds.Image => "photo", _ => "doc" };
+        var symbol = tab.Kind switch { ChatPreviewTab.Kinds.Resume => "doc.text", ChatPreviewTab.Kinds.Generated => "doc.richtext", ChatPreviewTab.Kinds.Image => "photo", _ => "doc" };
         var color = _o.Unavailable.Contains(tab.Key) ? Fnt : Txt;
         var label = HStack(5, Icon(symbol, 11, color), Sans(tab.Label.NonEmpty() ?? "未命名", 12, color).Frame().Also(t => t.MaxWidth = 140));
         label.OnTap(() => _o.Activate(tab.Key), tab.Label);
