@@ -40,5 +40,5 @@
 
 ## 5. Git
 
-- 默认分支 `main`；功能分支 `feat/`、`fix/`、`chore/` 前缀，PR 合入 `main`，不直接推送或改写 `main`。
+- 默认分支 `master`；功能分支 `feat/`、`fix/`、`chore/` 前缀，PR 合入 `master`，不直接推送或改写 `master`。
 - 只在用户要求时提交、推送、建 PR；合并需要用户授权。
