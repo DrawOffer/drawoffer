@@ -284,10 +284,12 @@ public actor SessionCoordinator {
     }
 
     /// 打开识别 WebSocket 前先确保 access 有效；握手失败（4401）由界面按登录失效处理。
-    public func speechSocket(interviewID: String, questionID: String, purpose: String) async throws -> URLSessionWebSocketTask {
+    public func speechSocket(interviewID: String, questionID: String, purpose: String, local: Bool) async throws -> URLSessionWebSocketTask {
         let transport = self.transport
-        return try await authorized { access in
-            try transport.speechSocket(path: "/api/mock-interviews/\(interviewID)/speech", query: questionID.isEmpty ? ["purpose": purpose] : ["question_id": questionID, "purpose": purpose], access: access)
+        var query = questionID.isEmpty ? ["purpose": purpose] : ["question_id": questionID, "purpose": purpose]
+        if local { query["recognizer"] = "local" }
+        return try await authorized { [query] access in
+            try transport.speechSocket(path: "/api/mock-interviews/\(interviewID)/speech", query: query, access: access)
         }
     }
 

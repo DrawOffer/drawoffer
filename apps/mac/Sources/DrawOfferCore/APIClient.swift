@@ -17,7 +17,7 @@ public protocol APIClient: Sendable {
     func accountAvatar(path: String) async throws -> Data
     func resumeImage(path: String) async throws -> (data: Data, contentType: String)
     func mockAudio(path: String, method: String, body: JSONValue?) async throws -> Data
-    func speechSocket(interviewID: String, questionID: String, purpose: String) async throws -> URLSessionWebSocketTask
+    func speechSocket(interviewID: String, questionID: String, purpose: String, local: Bool) async throws -> URLSessionWebSocketTask
 }
 
 public enum APIError: Error, Equatable {
@@ -66,7 +66,7 @@ extension APIClient {
     public func accountAvatar(path: String) async throws -> Data { throw APIError.unauthorized }
     public func resumeImage(path: String) async throws -> (data: Data, contentType: String) { throw APIError.unauthorized }
     public func mockAudio(path: String, method: String, body: JSONValue?) async throws -> Data { throw APIError.unauthorized }
-    public func speechSocket(interviewID: String, questionID: String, purpose: String) async throws -> URLSessionWebSocketTask { throw APIError.unauthorized }
+    public func speechSocket(interviewID: String, questionID: String, purpose: String, local: Bool) async throws -> URLSessionWebSocketTask { throw APIError.unauthorized }
     public func preparePaper(_ request: ResumeRenderRequest) async throws -> PaperPreparation {
         try await PaperAssets.prepare(request, account: "") { _, _ in throw APIError.invalidResponse }
     }
