@@ -14,6 +14,8 @@ let package = Package(
     ],
     targets: [
         .target(name: "DrawOfferCore"),
+        // sherpa-onnx 的 C 封装：运行时 dlopen 打进 App 的动态库，链接期不依赖它。
+        .target(name: "CSherpaOnnx", exclude: ["vendor/README.md"]),
         .target(
             name: "DrawOfferRender",
             dependencies: ["DrawOfferCore"],
@@ -21,7 +23,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "DrawOfferApp",
-            dependencies: ["DrawOfferCore", "DrawOfferRender"],
+            dependencies: ["DrawOfferCore", "DrawOfferRender", "CSherpaOnnx"],
             resources: [.copy("Resources/Branding"), .copy("Resources/Home"), .copy("Resources/Library"), .copy("Resources/Career"), .copy("Resources/Models"), .copy("Resources/AppIcon.png")]
         ),
         .testTarget(

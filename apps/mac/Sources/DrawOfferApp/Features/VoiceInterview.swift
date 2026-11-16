@@ -6,7 +6,7 @@ import SwiftUI
 /// 实时语音作答（Web `SpeechRecognition` + `useMicrophone`）：AVAudioEngine 取麦克风，转换为 16 kHz 单声道 PCM16，
 /// 约每 100ms 一帧经 `WS /api/mock-interviews/{id}/speech` 发送；停止时发 `{"type":"stop"}`，等待 `final` 取得一次性
 /// `session_id`。握手超时 15 秒、停止后 30 秒没有最终稿按识别失败处理，发送积压超过 1 MB 主动放弃。录音不落盘。
-/// macOS 26 且中文识别资源已装好时改用本机识别（`LocalTranscriber`，不计费）：音频照常上传供保存录音，
+/// 本机识别资源已装好时改用本机识别（macOS 26 用 `LocalTranscriber`，更早用 `SenseVoiceTranscriber`，不计费）：音频照常上传供保存录音，
 /// 实时文字来自本机，停止时随 `stop` 发出文字与逐词时间；其余情况走服务端识别。
 @MainActor @Observable
 final class VoiceRecorder {

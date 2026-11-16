@@ -3,9 +3,9 @@ import CoreMedia
 import Foundation
 import Speech
 
-/// 本机语音识别：macOS 26 自带的 SpeechTranscriber（离线、不计费）。
+/// 本机语音识别（离线、不计费）：macOS 26 用系统自带的 SpeechTranscriber，更早的系统用 SenseVoice（`SenseVoiceTranscriber`）。
 /// 录音照常经 WebSocket 上传给服务端保存（`recognizer=local`），识别在本机完成，停止时把文字和逐词时间随 `stop` 发出。
-/// 系统低于 26、不支持中文或中文识别资源还没装好时返回 nil，调用方退回云端识别；资源首次缺失时在后台下载，下次录音再用。
+/// 识别资源还没装好时返回 nil，调用方退回云端识别；资源首次缺失时在后台下载，下次录音再用。
 struct LocalTranscript: Sendable {
     struct Word: Sendable { let text: String; let startMs: Int; let endMs: Int }
     let text: String
@@ -34,9 +34,22 @@ enum LocalSpeech {
     private static var downloading = false
 
     /// 能用本机识别时返回已启动的识别器（输入为麦克风原始格式）；否则 nil。`onText` 在主线程收到实时文字。
+    /// 开发时设 `DRAWOFFER_LOCAL_ASR=sensevoice` 可在 macOS 26 上也走 SenseVoice。
     static func start(inputFormat: AVAudioFormat, onText: @escaping @MainActor (String) -> Void) async -> LocalSession? {
-        guard #available(macOS 26.0, *) else { return nil }
-        return await LocalTranscriber.make(inputFormat: inputFormat, onText: onText)
+        let forced = ProcessInfo.processInfo.environment["DRAWOFFER_LOCAL_ASR"] == "sensevoice"
+        if #available(macOS 26.0, *), !forced {
+            return await LocalTranscriber.make(inputFormat: inputFormat, onText: onText)
+        }
+        return await SenseVoiceTranscriber.make(inputFormat: inputFormat, onText: onText)
+    }
+
+    static func downloadSenseVoice() {
+        guard !downloading else { return }
+        downloading = true
+        Task.detached(priority: .utility) {
+            try? await SenseVoiceModel.install()
+            await MainActor.run { downloading = false }
+        }
     }
 
     @available(macOS 26.0, *)
