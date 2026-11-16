@@ -24,7 +24,7 @@
 [![WinUI 3](https://img.shields.io/badge/WinUI_3-native-512BD4?style=flat-square&logo=dotnet&logoColor=white)](apps/windows)
 [![Stars](https://img.shields.io/github/stars/DrawOffer/drawoffer?style=flat-square&color=ffcb47&label=stars)](https://github.com/DrawOffer/drawoffer/stargazers)
 
-<img src="docs/images/hero.png" alt="DrawOffer — the job-search partner that knows your story" width="100%">
+<img src="docs/images/home.webp" alt="DrawOffer home: latest progress and your knowledge graph" width="100%">
 
 </div>
 
@@ -45,50 +45,62 @@ This repository hosts the **native macOS and Windows desktop clients**. They sha
 </tr>
 </table>
 
-## 📅 From a job posting to an offer
+## ✨ Features
 
-### `Sep 12` Save the right job as you browse
+### 🏠 Home & long-term memory
 
-Save postings from job sites. Requirements are organized for you, and DrawOffer tells you which role fits your experience best.
+See where your last practice got you, which topics are still shaky and what to do next. Every topic asked in practice or a real interview goes into your **knowledge graph**.
 
-<img src="docs/images/story-collect-jobs.png" alt="Save a job posting into DrawOffer" width="100%">
+### 📝 Resume: edit on the page
 
-### `Sep 14` One resume for one role
+<img src="docs/images/check.webp" alt="Resume editor with AI review notes in the margin" width="100%">
 
-Tailor each section to the job description with only what you really did. 60+ Chinese templates filtered by role; the page you see is exactly the PDF you send.
+- WYSIWYG native editor; the page and the exported PDF use the same renderer
+- **Check resume** reads it like an interviewer and marks what is worth fixing; nothing is written until you approve
+- 60+ Chinese templates filtered by role; switch without re-formatting
+- Import Markdown / Word / PDF; export PDF or a share link
 
-<img src="docs/images/templates.png" alt="60+ Chinese resume templates by role" width="100%">
-
-### `Sep 18` Every application accounted for
-
-Screening, assessments, written tests, interviews: where each company stands and what comes next, on one board and one calendar.
-
-### `Sep 23` Interview tomorrow — practice tonight
-
-Questions based on this role and your resume, answered by text or voice. You will know which parts you still cannot explain clearly.
-
-### `Sep 24` The night after, see what went wrong
-
-Upload the recording and review it question by question. Every topic you were asked goes into your knowledge graph.
+### 📌 Applications & interview calendar
 
 <table>
 <tr>
-<td width="50%"><img src="docs/images/knowledge-graph.png" alt="Knowledge graph of every topic from resumes, practice and interviews"></td>
-<td width="50%"><img src="docs/images/knowledge-graph-focus.png" alt="Knowledge graph focused on one role"></td>
+<td width="50%"><img src="docs/images/board.webp" alt="Application board"></td>
+<td width="50%"><img src="docs/images/schedule.webp" alt="Interview calendar"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>Board</b> · where every application stands</sub></td>
+<td align="center"><sub><b>Calendar</b> · tests and interviews, no clashes</sub></td>
 </tr>
 </table>
 
-### `Sep 30` Answer the hard question again
+### 🎙 Mock interviews & reviews
 
-Mock interviews start where you got stuck. Try the same question again and see if it is clear this time.
+<table>
+<tr>
+<td width="50%"><img src="docs/images/mock.webp" alt="Voice mock interview"></td>
+<td width="50%"><img src="docs/images/review.webp" alt="Interview review report"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>Mock interview</b> · questions from the role and your resume</sub></td>
+<td align="center"><sub><b>Review</b> · per-question scores and core skills</sub></td>
+</tr>
+</table>
 
-<img src="docs/images/home.png" alt="Home: four topics from this interview were added to your graph" width="100%">
+- Answer by text or voice; upload a real interview recording to review it the same way
+- On macOS 26+, voice answers are transcribed on device
 
-### `Oct 20` Got offers — now choose well
+### 💬 AI chat & library
 
-Compare offers side by side. Your records stay, so your next job search continues from here.
-
-<div align="center"><img src="docs/images/memory-map.png" alt="Resumes, jobs, mock and real interviews connected into one memory" width="100%"></div>
+<table>
+<tr>
+<td width="50%"><img src="docs/images/chat.webp" alt="AI chat grounded in your records"></td>
+<td width="50%"><img src="docs/images/datasets.webp" alt="Library of notes and documents"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>Chat</b> · ask about your own job search</sub></td>
+<td align="center"><sub><b>Library</b> · notes and docs used for questions and edits</sub></td>
+</tr>
+</table>
 
 ## 🖥 Platforms
 

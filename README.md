@@ -26,7 +26,7 @@
 [![Stars](https://img.shields.io/github/stars/DrawOffer/drawoffer?style=flat-square&color=ffcb47&label=stars)](https://github.com/DrawOffer/drawoffer/stargazers)
 [![Last commit](https://img.shields.io/github/last-commit/DrawOffer/drawoffer?style=flat-square&color=5b8def)](https://github.com/DrawOffer/drawoffer/commits/master)
 
-<img src="docs/images/hero.png" alt="DrawOffer 职绘：懂你经历的求职搭档" width="100%">
+<img src="docs/images/home.webp" alt="DrawOffer 首页：最近一次练习的进展和你的知识图谱" width="100%">
 
 </div>
 
@@ -59,87 +59,73 @@ DrawOffer 是面向应届生和求职者的 AI 求职搭档。它把你的简历
 </tr>
 </table>
 
-## 📅 从看到岗位，到拿到 Offer
+## ✨ 功能
 
-> 一位同学的求职季，DrawOffer 陪着走完每一步。
+### 🏠 首页与长期记忆
 
-### `9月12日` 看到合适的岗位，顺手收下
+打开就能看到最近一次练习练到了哪、哪些知识点还不牢，以及下一步该做什么。每一场练习和面试问到的点都会记进**知识图谱**，标出还不牢和刚练稳的。
 
-在招聘网站看到就存下来。岗位要求帮你整理好，再告诉你哪个和你的经历最对得上。
+- 🧠 知识图谱串起简历、岗位、练习和真实面试里出现过的每个知识点
+- 📌 最近进展按时间排开，每条都能直接点进去接着练
+- 🗂 面试日程、投递、简历、资料库各给一句话现状和入口
 
-<img src="docs/images/story-collect-jobs.png" alt="在招聘网站看到岗位，顺手存进 DrawOffer" width="100%">
+### 📝 简历：边看纸面边改
 
-### `9月14日` 一份简历，对上一个岗位
+<img src="docs/images/check.webp" alt="简历编辑器：AI 检查简历，在纸边标出值得改的地方" width="100%">
 
-对着 JD 改写每一段，只用你真实做过的事，每处修改都由你确认。60+ 套中文模板按岗位方向筛选，换模板不用重新排版；纸面与 PDF 导出用同一个渲染器，看到的就是投出去的。
+- ✍️ 原生编辑器所见即所得，纸面与 PDF 导出用同一个渲染器，看到的就是投出去的
+- 🔎 「检查简历」按面试官的眼光读一遍，在纸边标出值得改的地方，逐处确认后才写入
+- 🎨 60+ 套中文模板按岗位方向筛选，换模板不用重新排版
+- 📥 导入 Markdown / Word / PDF 简历，导出 PDF、生成分享链接
 
-<img src="docs/images/templates.png" alt="按岗位分类的 60+ 套中文简历模板" width="100%">
-
-### `9月18日` 投出去的，每一家都有着落
-
-筛选、测评、笔试、面试，每家走到哪一步、下一步做什么，都在投递看板和面试日程里。
-
-### `9月23日` 明天一面，先练一遍
-
-按这个岗位和你的简历出题，文字或语音作答。练完就知道，哪里还讲不清。
-
-### `9月24日` 面完当晚，知道哪里没答好
-
-传上录音，一题一题看：哪里讲清楚了，哪里被追问住了，为什么。被问到的知识点自动记进你的图谱。
+### 📌 投递与面试日程
 
 <table>
 <tr>
-<td width="50%"><img src="docs/images/knowledge-graph.png" alt="知识图谱：简历、练习和面试里出现过的全部知识点"></td>
-<td width="50%"><img src="docs/images/knowledge-graph-focus.png" alt="聚焦一个岗位，只看它要考的知识点"></td>
+<td width="50%"><img src="docs/images/board.webp" alt="投递看板：每个岗位走到哪一步"></td>
+<td width="50%"><img src="docs/images/schedule.webp" alt="面试日程：笔试面试按日历排开"></td>
 </tr>
 <tr>
-<td align="center"><sub>全部知识点：来自简历、练习和真实面试，还不牢的一眼可见</sub></td>
-<td align="center"><sub>点开一个岗位：只看它牵出的考点，直接“聊一聊”</sub></td>
+<td align="center"><sub><b>投递看板</b> · 每家走到哪一步，一眼看清</sub></td>
+<td align="center"><sub><b>面试日程</b> · 笔试、面试按日历排开，不撞车</sub></td>
 </tr>
 </table>
 
-### `9月30日` 被问住的题，再答一次
+- 📋 投递、测评、笔试、面试、Offer，每个岗位的阶段和下一步都在一张看板上
+- 🎯 岗位匹配度告诉你哪个岗位和你的经历最对得上
 
-模拟面试从你卡住的地方开始。同一道题再来一遍，看这次有没有讲清。
+### 🎙 模拟面试与复盘
 
-<img src="docs/images/home.png" alt="首页：这一场问到 4 处，都记进了图谱" width="100%">
+<table>
+<tr>
+<td width="50%"><img src="docs/images/mock.webp" alt="语音模拟面试：按岗位和简历追问"></td>
+<td width="50%"><img src="docs/images/review.webp" alt="复盘报告：每道题得分与通用能力"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>模拟面试</b> · 按岗位和你的简历出题、追问</sub></td>
+<td align="center"><sub><b>复盘报告</b> · 每道题答到哪一层、通用能力怎么样</sub></td>
+</tr>
+</table>
 
-### `10月8日` 明天二面，今晚只补这一处
-
-一面被追问的地方，上次练习也卡在这里。今晚先把它讲清楚，其他的都准备好了。
-
-### `10月20日` 拿到 Offer，也帮你看清怎么选
-
-几个 Offer 放在一起比。求职季的记录都留着，下一次求职，接着往前走。
-
-<div align="center">
-<img src="docs/images/memory-map.png" alt="简历、岗位、模拟面试和每一场真实面试，串成一张求职记忆" width="100%">
-<p><sub>用得越久，它越清楚你差在哪一步</sub></p>
-</div>
-
-<div align="right"><a href="#readme-top">⬆ 回到顶部</a></div>
-
-## ✨ 功能一览
-
-**简历**
-- 📝 原生简历编辑器，所见即所得，与网页版、PDF 导出排版一致
-- 🎨 60+ 套中文模板，按岗位方向与风格筛选，一键切换
-- 📥 导入 Markdown / Word / PDF 简历，导出 PDF、生成分享链接
-
-**岗位与投递**
-- 📌 投递看板记录每个岗位的阶段：投递、测评、笔试、面试、Offer
-- 🎯 岗位匹配度：哪个岗位和你的经历最对得上
-- 🗓 面试日程按日历排开，笔试面试不撞车
-
-**面试**
-- 🎙 AI 模拟面试：按岗位和简历出题，项目追问、专业基础、自我介绍都会练到
-- 🗣 语音作答记录停顿和口头禅，结束后生成复盘报告
+- 🗣 文字或语音作答，项目追问、专业基础、自我介绍都会练到
+- 📊 结束后生成复盘报告：每道题得分、没答好的原因，和上一场比进步了多少
+- 🎧 真实面试也能传录音复盘，被问到的知识点自动记进图谱
 - 💻 macOS 26 起语音作答在本机离线转写，不经过云端识别
 
-**长期记忆**
-- 🧠 知识图谱：每一场练习和面试问到的点都记下来，标出还不牢和刚练稳的
-- 📚 资料库：上传面经、笔记、项目文档，出题和改简历时都会参考
-- 💬 AI 对话：基于你的求职记录直接问，“明天二面今晚该补什么？”
+### 💬 AI 对话与资料库
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/chat.webp" alt="AI 对话：基于你的求职记录回答"></td>
+<td width="50%"><img src="docs/images/datasets.webp" alt="资料库：面经、笔记和项目文档"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>AI 对话</b> · “明天二面今晚该补什么？”直接问</sub></td>
+<td align="center"><sub><b>资料库</b> · 面经、笔记、项目文档，出题和改简历都会参考</sub></td>
+</tr>
+</table>
+
+<div align="right"><a href="#readme-top">⬆ 回到顶部</a></div>
 
 ## 🖥 平台支持
 
