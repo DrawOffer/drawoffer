@@ -1,0 +1,21 @@
+node_modules/
+dist/
+.runtime/
+.DS_Store
+.sync/
+
+# Electron 壳
+apps/desktop/release/
+
+# 原生客户端构建产物与生成的简历纸面渲染器
+apps/mac/.build/
+apps/mac/Vendor/
+apps/windows/**/bin/
+apps/windows/**/obj/
+apps/native/renderer/dist/
+apps/mac/Sources/DrawOfferRender/Resources/paper.html
+apps/mac/Sources/DrawOfferRender/Resources/editor.html
+apps/mac/Sources/DrawOfferRender/Resources/templates/
+apps/windows/src/DrawOffer.App/Assets/Renderer/paper.html
+apps/windows/src/DrawOffer.App/Assets/Renderer/editor.html
+apps/windows/src/DrawOffer.App/Assets/Renderer/templates/
