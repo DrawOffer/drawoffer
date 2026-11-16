@@ -108,9 +108,8 @@ DrawOffer 是面向应届生和求职者的 AI 求职搭档。它把你的简历
 | --- | --- | --- |
 | 技术 | SwiftUI 原生 | WinUI 3 原生 |
 | 最低系统 | macOS 14 Sonoma | Windows 10 1809 |
-| 状态 | 开发中 | 开发中 |
 
-两端都还没有发布安装包，现在可以先[在线使用网页版](https://www.drawoffer.com/assistant)，账号和数据互通。点击右上角 **Watch → Custom → Releases**，桌面版发布时会收到通知。
+安装包在 [Releases](https://github.com/DrawOffer/drawoffer/releases) 下载。也可以直接[在线使用网页版](https://www.drawoffer.com/assistant)，账号和数据互通。
 
 ## 常见问题
 

@@ -108,9 +108,8 @@ Answer by text or voice. Upload a real interview recording to review it the same
 | --- | --- | --- |
 | Built with | SwiftUI (native) | WinUI 3 (native) |
 | Minimum OS | macOS 14 Sonoma | Windows 10 1809 |
-| Status | In development | In development |
 
-Installers are not released yet. Meanwhile, [use the web app](https://www.drawoffer.com/assistant) — your account and data work across both. Click **Watch → Custom → Releases** to be notified when the desktop apps ship.
+Download installers from [Releases](https://github.com/DrawOffer/drawoffer/releases), or [use the web app](https://www.drawoffer.com/assistant) — your account and data work across both.
 
 ## Development
 
