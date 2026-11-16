@@ -56,4 +56,7 @@ import Testing
     #expect(!DesktopTransport.speechQueryAllowed(["question_id": "x", "purpose": "voice_answer"]))
     #expect(!DesktopTransport.speechQueryAllowed(["question_id": "12", "purpose": "device_check"]))
     #expect(!DesktopTransport.speechQueryAllowed(["purpose": "other"]))
+    #expect(DesktopTransport.speechQueryAllowed(["question_id": "12", "purpose": "voice_answer", "recognizer": "local"]))
+    #expect(DesktopTransport.speechQueryAllowed(["purpose": "device_check", "recognizer": "local"]))
+    #expect(!DesktopTransport.speechQueryAllowed(["question_id": "12", "purpose": "voice_answer", "recognizer": "cloud"]))
 }

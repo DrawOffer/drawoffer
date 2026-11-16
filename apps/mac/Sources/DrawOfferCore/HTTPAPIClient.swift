@@ -178,7 +178,10 @@ final class DesktopTransport: DesktopRequesting {
 
     /// 实时语音识别 WebSocket：`/api/mock-interviews/{id}/speech?question_id=&purpose=`，握手携带 desktop Bearer。
     /// 作答与输入框语音带题号；设备检测试读一句不带题号（结果不保存、不能用来提交回答）。
+    /// 可选 `recognizer=local`：本机识别，服务端只保存录音并接收 `stop` 里的文字与词时间。
     static func speechQueryAllowed(_ query: [String: String]) -> Bool {
+        var query = query
+        if let recognizer = query.removeValue(forKey: "recognizer"), recognizer != "local" { return false }
         let question = query["question_id"] ?? ""
         let numeric = !question.isEmpty && question.allSatisfy { $0.isASCII && $0.isNumber }
         switch query["purpose"] {
@@ -405,8 +408,8 @@ public struct HTTPAPIClient: APIClient {
     }
     public func importResume(_ upload: ResumeImportUpload) async throws -> JSONValue { try await coordinator.importResume(upload) }
     public func mockAudio(path: String, method: String, body: JSONValue?) async throws -> Data { try await coordinator.mockAudio(path: path, method: method, body: body) }
-    public func speechSocket(interviewID: String, questionID: String, purpose: String) async throws -> URLSessionWebSocketTask {
-        try await coordinator.speechSocket(interviewID: interviewID, questionID: questionID, purpose: purpose)
+    public func speechSocket(interviewID: String, questionID: String, purpose: String, local: Bool) async throws -> URLSessionWebSocketTask {
+        try await coordinator.speechSocket(interviewID: interviewID, questionID: questionID, purpose: purpose, local: local)
     }
     public func accountAvatar(path: String) async throws -> Data { try await coordinator.accountAvatar(path: path) }
     public func resumeImage(path: String) async throws -> (data: Data, contentType: String) { try await coordinator.resumeImage(path: path) }

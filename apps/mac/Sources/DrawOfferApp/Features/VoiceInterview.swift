@@ -6,6 +6,8 @@ import SwiftUI
 /// 实时语音作答（Web `SpeechRecognition` + `useMicrophone`）：AVAudioEngine 取麦克风，转换为 16 kHz 单声道 PCM16，
 /// 约每 100ms 一帧经 `WS /api/mock-interviews/{id}/speech` 发送；停止时发 `{"type":"stop"}`，等待 `final` 取得一次性
 /// `session_id`。握手超时 15 秒、停止后 30 秒没有最终稿按识别失败处理，发送积压超过 1 MB 主动放弃。录音不落盘。
+/// 本机识别资源已装好时改用本机识别（macOS 26 用 `LocalTranscriber`，更早用 `SenseVoiceTranscriber`，不计费）：音频照常上传供保存录音，
+/// 实时文字来自本机，停止时随 `stop` 发出文字与逐词时间；其余情况走服务端识别。
 @MainActor @Observable
 final class VoiceRecorder {
     enum Phase: Equatable { case idle, connecting, recording, finishing, failed(String) }
@@ -20,19 +22,29 @@ final class VoiceRecorder {
     private var finalWaiter: CheckedContinuation<Final, Error>?
     private var pendingBytes = 0
     private var earlyFinal: Final?
+    private var local: LocalSession?
+    private var sentBytes = 0
 
     nonisolated(unsafe) static let targetFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true)!
 
     func start(api: any APIClient, interviewID: String, questionID: String, purpose: String = "voice_answer") async {
         guard phase == .idle || { if case .failed = phase { return true }; return false }() else { return }
-        partial = ""; earlyFinal = nil; phase = .connecting
+        partial = ""; earlyFinal = nil; sentBytes = 0; phase = .connecting
         guard await Self.microphoneAllowed() else { phase = .failed("没有麦克风权限。请在“系统设置 › 隐私与安全性 › 麦克风”中允许 DrawOffer。"); return }
         do {
-            let socket = try await api.speechSocket(interviewID: interviewID, questionID: questionID, purpose: purpose)
+            let engine = AVAudioEngine()
+            let format = engine.inputNode.outputFormat(forBus: 0)
+            guard format.sampleRate > 0, let converter = AVAudioConverter(from: format, to: Self.targetFormat) else { throw APIError.invalidResponse }
+            let local = await LocalSpeech.start(inputFormat: format) { [weak self] text in
+                guard let self, self.phase == .recording || self.phase == .finishing else { return }
+                self.partial = text
+            }
+            self.local = local
+            let socket = try await api.speechSocket(interviewID: interviewID, questionID: questionID, purpose: purpose, local: local != nil)
             self.socket = socket
             socket.resume()
             receiver = Task { [weak self] in await self?.receive(socket) }
-            try startEngine(socket)
+            try startEngine(engine, converter: converter, socket: socket, local: local)
             phase = .recording
         } catch {
             if case APIError.unauthorized = error { phase = .failed("登录已失效，请重新登录。") }
@@ -46,14 +58,27 @@ final class VoiceRecorder {
         guard phase == .recording, let socket else { throw APIError.invalidResponse }
         phase = .finishing
         stopEngine()
-        try await socket.send(.string("{\"type\":\"stop\"}"))
-        if let early = earlyFinal { earlyFinal = nil; return early }
         let timeout = Task { [weak self] in
             try? await Task.sleep(for: .seconds(30))
             guard !Task.isCancelled else { return }
             self?.fail("识别超时，请重新录音。")
         }
         defer { timeout.cancel() }
+        if let local {
+            self.local = nil
+            let transcript: LocalTranscript
+            do { transcript = try await local.finish() } catch {
+                socket.cancel(with: .goingAway, reason: nil)
+                fail("本机识别失败，请重新录音。")
+                throw APIError.server(status: 502, code: "本机识别失败，请重新录音。")
+            }
+            guard phase == .finishing, self.socket === socket else { throw APIError.server(status: 502, code: "识别超时，请重新录音。") }
+            partial = transcript.text
+            try await socket.send(.string(transcript.stopMessage(durationMs: sentBytes / 32)))
+        } else {
+            try await socket.send(.string("{\"type\":\"stop\"}"))
+        }
+        if let early = earlyFinal { earlyFinal = nil; return early }
         return try await withCheckedThrowingContinuation { finalWaiter = $0 }
     }
 
@@ -70,6 +95,8 @@ final class VoiceRecorder {
 
     private func teardown() {
         stopEngine()
+        if let local { Task { await local.cancel() } }
+        local = nil
         receiver?.cancel(); receiver = nil
         socket = nil; pendingBytes = 0; level = 0
     }
@@ -103,16 +130,14 @@ final class VoiceRecorder {
         }
     }
 
-    private func startEngine(_ socket: URLSessionWebSocketTask) throws {
-        let engine = AVAudioEngine()
+    private func startEngine(_ engine: AVAudioEngine, converter: AVAudioConverter, socket: URLSessionWebSocketTask, local: LocalSession?) throws {
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, let converter = AVAudioConverter(from: format, to: Self.targetFormat) else { throw APIError.invalidResponse }
         let frames = AVAudioFrameCount(format.sampleRate / 10)
         let deliver: @Sendable (Data, Float) -> Void = { [weak self] data, level in
             Task { @MainActor [weak self] in self?.send(data, level: level, socket: socket) }
         }
-        input.installTap(onBus: 0, bufferSize: frames, format: format, block: Self.tap(converter: converter, deliver: deliver))
+        input.installTap(onBus: 0, bufferSize: frames, format: format, block: Self.tap(converter: converter, local: local, deliver: deliver))
         engine.prepare()
         try engine.start()
         self.engine = engine
@@ -123,6 +148,7 @@ final class VoiceRecorder {
         self.level = level
         guard pendingBytes + data.count <= 1024 * 1024 else { socket.cancel(with: .goingAway, reason: nil); fail("网络太慢，录音没能及时发送，请重新录音。"); return }
         pendingBytes += data.count
+        sentBytes += data.count
         socket.send(.data(data)) { [weak self] error in
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -139,8 +165,9 @@ final class VoiceRecorder {
     }
 
     /// 麦克风回调在音频线程执行，必须在非隔离上下文中创建，不能继承 MainActor。
-    nonisolated static func tap(converter: AVAudioConverter, deliver: @escaping @Sendable (Data, Float) -> Void) -> AVAudioNodeTapBlock {
+    nonisolated static func tap(converter: AVAudioConverter, local: LocalSession?, deliver: @escaping @Sendable (Data, Float) -> Void) -> AVAudioNodeTapBlock {
         { buffer, _ in
+            local?.feed(buffer)
             guard let data = convert(buffer, with: converter) else { return }
             deliver(data, rms(buffer))
         }
