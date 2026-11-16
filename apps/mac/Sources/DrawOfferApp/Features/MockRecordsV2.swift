@@ -2,172 +2,201 @@ import Foundation
 import DrawOfferCore
 import SwiftUI
 
-/// 练习记录（Web `mock-interview/v2/RecordsPage.tsx`，Figma 27 · R.02）：只列完成的场次，点一行看报告；
-/// 开始后放弃的场次没有报告，合成最后一行，展开后可以用同样设置重来。
+/// 全部记录（Figma 09 · 08.01 列表、08.02 空状态、08.03 展开放弃的场次；Web `v2/RecordsPage.tsx`）：
+/// 模拟和真实面试放在一张表里，每一场卡在哪都能看到；开始后放弃的场次合成最后一行，展开后可以用同样设置重来。
+/// 版式跟其他列表页一样走公共页面宽度，从顶部往下排。
 struct MockRecordsV2: View {
     @Environment(SessionStore.self) private var session
     let back: () -> Void
     let openReport: (String) -> Void
     let open: (String) -> Void
+    /// 真实面试的复盘在投递那一边（会话 id、投递 id）。
+    var openReal: (String, String?) -> Void = { _, _ in }
+    var startFirst: () -> Void = {}
 
-    @State private var list: [JSONValue]?
+    @State private var overview: JSONValue?
     @State private var failed = false
-    @State private var showAbandoned = false
-    @State private var headlines: [String: String] = [:]
-    @State private var toast: String?
+    @State private var unfolded = false
+    @State private var importing = false
+    @State private var notice: MockNotice?
     @State private var tick = 0
 
-    private static let week = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"]
-
-    private func when(_ item: JSONValue) -> String { item.text("finished_at").nonEmptyValue ?? item.text("started_at").nonEmptyValue ?? item.text("created_at") }
-    private func job(_ item: JSONValue) -> String {
-        item.display("job_application_id").isEmpty ? "不挑岗位"
-            : [item.text("company_name").nonEmptyValue ?? "未命名公司", item.text("job_title").nonEmptyValue ?? item.text("target_role")].filter { !$0.isEmpty }.joined(separator: " · ")
-    }
-    private func settings(_ item: JSONValue) -> String {
-        [MockMap.typeName(item), MockMap.diffName[item.text("difficulty")] ?? "", item.text("answer_mode") == "voice" ? "语音" : "文字", "\(item["question_count"]?.integer ?? 0) 题"].joined(separator: " · ")
-    }
-    private func tone(_ item: JSONValue) -> Color {
-        switch MockMap.verdictTone(item.text("verdict").nonEmptyValue) {
-        case .blue: return MI.blue
-        case .orange: return MI.orange
-        default: return MI.sub
-        }
-    }
+    private var account: String { if case .signedIn(let user) = session.phase { return user.id }; return "" }
 
     var body: some View {
-        let sorted = (list ?? []).sorted { when($0) > when($1) }
-        let completed = sorted.filter { $0.text("status") == "completed" }
-        let abandoned = sorted.filter { $0.text("status") == "abandoned" }
-        let summary = [completed.isEmpty ? nil : "完成 \(completed.count) 场", abandoned.isEmpty ? nil : "另有 \(abandoned.count) 场中途放弃"].compactMap { $0 }.joined(separator: " · ")
+        let records = overview?["records"]?.items ?? []
+        let rows = records.filter { $0.text("status") != "abandoned" }
+        let abandoned = records.filter { $0.text("status") == "abandoned" }
+        let empty = overview != nil && rows.isEmpty && abandoned.isEmpty
         V3Page {
             VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .center) {
-                    HStack(spacing: 12) {
-                        Button(action: back) {
-                            HStack(spacing: 6) { Image(systemName: "arrow.left").font(.system(size: 13)); Text("模拟面试") }.contentShape(Rectangle())
-                        }.buttonStyle(.plain).accessibilityLabel("返回模拟面试")
-                        Text("/").accessibilityHidden(true)
-                        Text("练习记录")
-                    }.font(V3.sans(16)).foregroundStyle(V3.fnt).frame(height: 20)
-                    Spacer()
-                    Button("练一场新的", action: back).buttonStyle(MockButtonStyle(kind: .dark, size: 13))
-                }
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("练习记录").font(V3.serif(30)).foregroundStyle(MI.ink).frame(height: 40)
-                    if !summary.isEmpty { Text(verbatim: summary).font(V3.sans(14)).foregroundStyle(MI.sub) }
-                }.padding(.top, 12)
-                if failed && list == nil {
-                    VStack(spacing: 10) {
-                        Text("练习记录没有加载出来").font(V3.serif(18)).foregroundStyle(MI.ink).frame(height: 22)
-                        Button("重新加载") { tick += 1 }.buttonStyle(MockButtonStyle())
-                    }.frame(maxWidth: .infinity).padding(.top, 160)
-                } else if list != nil && completed.isEmpty && abandoned.isEmpty {
-                    VStack(spacing: 10) {
-                        Text("还没有练习").font(V3.serif(18)).foregroundStyle(MI.ink).frame(height: 22)
-                        Text("练完一场，这里会多一行记录，点开就是这场的报告。").font(V3.sans(13.5)).foregroundStyle(MI.mute).frame(height: 22)
-                    }.frame(maxWidth: .infinity).padding(.top, 160)
-                } else if list != nil {
+                MockBackCrumb(label: "模拟面试", action: back).padding(.bottom, 20)
+                HStack(alignment: .bottom, spacing: 24) {
                     VStack(alignment: .leading, spacing: 0) {
-                        if !completed.isEmpty { Text("完成的 \(completed.count) 场").font(V3.sans(15, weight: .medium)).frame(height: 22).padding(.bottom, 12) }
-                        ForEach(completed, id: \.self) { item in row(item) }
-                        if !abandoned.isEmpty {
-                            Button { showAbandoned.toggle() } label: {
-                                HStack {
-                                    Text(completed.isEmpty ? "\(abandoned.count) 场都在开始后放弃，没有报告" : "另有 \(abandoned.count) 场开始后放弃，没有报告")
-                                    Spacer()
-                                    Text(showAbandoned ? "收起 ⌃" : "展开 ⌄")
-                                }
-                                .font(V3.sans(13.5)).foregroundStyle(MI.mute).frame(minHeight: 56).contentShape(Rectangle())
-                                .overlay(alignment: .top) { Rectangle().fill(Color(hex: 0xE6E3DC)).frame(height: 1) }
-                            }.buttonStyle(.plain).accessibilityValue(showAbandoned ? "已展开" : "已收起")
-                            if showAbandoned { ForEach(abandoned, id: \.self) { item in abandonedRow(item) } }
-                        }
-                    }.padding(.top, 36)
+                        Text(verbatim: overview.map { heading(rows, $0["tallies"]?["score"]) } ?? "全部记录").font(V3.serif(28)).foregroundStyle(MockPalette.ink).lineHeight(28, 36)
+                        Text("每一场卡在哪，都在这里。").font(V3.sans(14)).foregroundStyle(MockPalette.sub).frame(height: 22).padding(.top, 8)
+                    }
+                    Spacer(minLength: 0)
+                    Button("导入面试记录") { importing = true }.buttonStyle(MockPillStyle(kind: .ghost, height: 38))
+                }
+                if overview == nil && !failed {
+                    V3Loading("正在加载练习记录…").frame(maxWidth: .infinity).padding(.top, 120)
+                } else if empty {
+                    emptyState.padding(.top, 40)
+                } else {
+                    table(rows, abandoned)
                 }
             }
         }
         .background(.white)
-        .task(id: tick) { await load() }
-        .overlay(alignment: .bottomTrailing) {
-            if let toast {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("没有开始新的一场").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.red)
-                    Text(verbatim: toast).font(V3.sans(12)).foregroundStyle(MI.sub)
+        .overlay { MockNoticeToast(notice: $notice) }
+        .task(id: "\(account):\(tick)") { await load() }
+        .centeredSheet(isPresented: $importing) {
+            MockImportDialog(close: { importing = false }, done: {
+                importing = false
+                notice = MockNotice(kind: .queued, title: "已开始生成复盘", message: "好了会出现在这里，也会记进长期记忆")
+                tick += 1
+            })
+        }
+    }
+
+    // MARK: 表格
+
+    private func table(_ rows: [JSONValue], _ abandoned: [JSONValue]) -> some View {
+        GeometryReader { geometry in
+            let w = geometry.size.width
+            VStack(alignment: .leading, spacing: 0) {
+                ZStack(alignment: .topLeading) {
+                    head("时间", x: 0); head("面试", x: w * 0.1163); head("卡在", x: w * 0.4581)
+                    Text("分数").font(V3.sans(12.5)).foregroundStyle(MockPalette.fnt).frame(maxWidth: .infinity, alignment: .trailing).padding(.trailing, 54)
                 }
-                .padding(.horizontal, 16).padding(.vertical, 12).background(.white, in: RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(hex: 0xE6E3DC))).shadow(color: .black.opacity(0.08), radius: 12, y: 4).padding(24)
-                .task(id: toast) { try? await Task.sleep(for: .seconds(5)); self.toast = nil }
+                .frame(height: 26, alignment: .top)
+                .overlay(alignment: .bottom) { Rectangle().fill(MockPalette.cl).frame(height: 1) }
+                if failed && overview == nil {
+                    HStack(spacing: 8) {
+                        Text("记录没有加载出来。").font(V3.sans(13)).foregroundStyle(MockPalette.fnt)
+                        Button("重新加载") { tick += 1 }.buttonStyle(MockLinkStyle(blue: true))
+                    }.padding(.top, 20)
+                }
+                ForEach(rows, id: \.self) { item in MockRecordRow(item: item, width: w) { tap(item) } }
+                if !abandoned.isEmpty {
+                    Button(unfolded ? "收起" : "另有 \(abandoned.count) 场开始后放弃 · 展开") { unfolded.toggle() }
+                        .buttonStyle(MockLinkStyle()).frame(height: 46)
+                        .accessibilityValue(unfolded ? "已展开" : "已收起")
+                }
+                if unfolded {
+                    ForEach(abandoned, id: \.self) { item in
+                        ZStack(alignment: .topLeading) {
+                            Text(verbatim: MockHomeV2.mmdd(item.text("at"))).font(V3.sans(13.5)).foregroundStyle(MockPalette.mute).offset(y: 22)
+                            Text(verbatim: item.text("title")).font(V3.sans(14)).foregroundStyle(MockPalette.fnt).lineLimit(1)
+                                .frame(width: w * 0.4884, alignment: .leading).offset(x: w * 0.1163, y: 12)
+                            Text(verbatim: item.text("subtitle")).font(V3.sans(13)).foregroundStyle(MockPalette.mute).lineLimit(1).offset(x: w * 0.1163, y: 34)
+                            Button("用同样设置重来 ›") { Task { await repeatInterview(item.text("id")) } }.buttonStyle(MockLinkStyle(blue: true))
+                                .frame(maxWidth: .infinity, alignment: .trailing).offset(y: 22)
+                        }
+                        .frame(height: 64, alignment: .topLeading)
+                        .overlay(alignment: .bottom) { Rectangle().fill(MockPalette.line).frame(height: 1) }
+                    }
+                }
             }
+        }
+        .frame(height: 26 + CGFloat(rows.count) * 72 + (abandoned.isEmpty ? 0 : 46) + (unfolded ? CGFloat(abandoned.count) * 64 : 0) + (failed && overview == nil ? 40 : 0))
+        .padding(.top, 40)
+    }
+
+    private func head(_ text: String, x: CGFloat) -> some View {
+        Text(verbatim: text).font(V3.sans(12.5)).foregroundStyle(MockPalette.fnt).offset(x: x)
+    }
+
+    /// 空列表（Figma 09 · 08.02）：一张空的记录表，三行等着填。
+    private var emptyState: some View {
+        V3EmptyCard(title: "还没有面试记录", message: "练完一场模拟面试，这里就会多一行。\n面过的真实面试，可以用右上角「导入面试记录」补进来。", stageHeight: 160) {
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 6).fill(.white).overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(MockPalette.cl))
+                RoundedRectangle(cornerRadius: 2).fill(MockPalette.ink).frame(width: 36, height: 4).offset(x: 12, y: 12)
+                ForEach([28.0, 48, 68], id: \.self) { y in
+                    RoundedRectangle(cornerRadius: 3).strokeBorder(MockPalette.cl, style: StrokeStyle(lineWidth: 1, dash: [3, 2])).frame(width: 106, height: 13).offset(x: 12, y: y)
+                }
+            }
+            .frame(width: 132, height: 92)
+        } actions: {
+            Button("开始第一场模拟面试", action: startFirst).buttonStyle(MockPillStyle(height: 34, padding: 18, size: 13))
         }
     }
 
-    private func dateColumn(_ item: JSONValue, off: Bool = false) -> some View {
-        let date = CareerApplication.date(when(item)) ?? Date()
-        return VStack(alignment: .leading, spacing: 2) {
-            Text(verbatim: MockMap.mmddDot(date)).font(.system(size: 15, weight: .medium)).foregroundStyle(off ? MI.mute : MI.ink)
-            Text(verbatim: Self.week[Beijing.calendar.component(.weekday, from: date) - 1]).font(V3.sans(12)).foregroundStyle(MI.mute)
-        }.frame(width: 64, alignment: .leading)
-    }
-
-    private func copy(_ item: JSONValue, off: Bool = false, headline: String? = nil) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text(verbatim: job(item)).font(V3.sans(15, weight: off ? .regular : .medium)).foregroundStyle(off ? MI.sub : MI.ink).lineLimit(1)
-                Text(verbatim: settings(item)).font(V3.sans(13)).foregroundStyle(MI.mute).lineLimit(1)
-            }
-            if let headline, !headline.isEmpty { Text(verbatim: headline).font(V3.sans(13.5)).foregroundStyle(MI.sub).lineLimit(1) }
-        }.frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func row(_ item: JSONValue) -> some View {
-        let id = item.text("id")
-        let score = item["total_score"]?.numberValue
-        return Button { openReport(id) } label: {
-            HStack(spacing: 16) {
-                dateColumn(item)
-                copy(item, headline: headlines[id])
-                Text(verbatim: score.map { "\(Int($0.rounded()))" } ?? "—").font(.system(size: 26, weight: .medium)).foregroundStyle(tone(item)).frame(width: 56, alignment: .trailing)
-                Text(verbatim: item.text("verdict").nonEmptyValue.flatMap { MockMap.verdictName[$0] } ?? "").font(V3.sans(12.5)).foregroundStyle(tone(item)).lineLimit(1).frame(width: 76, alignment: .leading)
-                Text("看报告 ›").font(V3.sans(13.5)).foregroundStyle(MI.blue).frame(width: 64, alignment: .trailing)
-            }
-            .padding(.vertical, 14).frame(minHeight: 76).contentShape(Rectangle())
-            .overlay(alignment: .top) { Rectangle().fill(Color(hex: 0xE6E3DC)).frame(height: 1) }
-        }.buttonStyle(.plain)
-    }
-
-    private func abandonedRow(_ item: JSONValue) -> some View {
-        HStack(spacing: 16) {
-            dateColumn(item, off: true)
-            copy(item, off: true)
-            Button("用同样设置重来 ›") { Task { await repeatSession(item.text("id")) } }.buttonStyle(MockButtonStyle(kind: .link, size: 13.5))
+    private func heading(_ rows: [JSONValue], _ score: JSONValue?) -> String {
+        if rows.isEmpty { return "全部记录" }
+        if let score, score != .null, (score["count"]?.integer ?? 0) >= 2 {
+            return "\(rows.count) 场面试，从 \(score["first"]?.integer ?? 0) 分到 \(score["latest"]?.integer ?? 0) 分。"
         }
-        .padding(.vertical, 14).frame(minHeight: 60)
-        .overlay(alignment: .top) { Rectangle().fill(Color(hex: 0xE6E3DC)).frame(height: 1) }
+        return "\(rows.count) 场面试。"
+    }
+
+    private func tap(_ item: JSONValue) {
+        // 复盘还没生成，详情页没有可看的内容，留在列表里提示
+        if item.text("status") == "reviewing" { notice = MockNotice(kind: .queued, title: "复盘还在生成", message: "好了这一行会显示分数，到时再点开看"); return }
+        if item.text("kind") == "mock" { openReport(item.text("id")) } else { openReal(item.text("id"), item.text("application_id").nonEmptyValue) }
     }
 
     private func load() async {
+        guard !account.isEmpty else { return }
         do {
-            var items: [JSONValue] = [], cursor = ""
-            repeat {
-                var query = ["limit": "100"]; if !cursor.isEmpty { query["cursor"] = cursor }
-                let page = try await session.api.careerRequest(path: "/api/mock-interviews", method: "GET", query: query, body: nil)
-                items += page["items"]?.items ?? []; cursor = page.text("next_cursor")
-            } while !cursor.isEmpty && !Task.isCancelled
-            list = items; failed = false
-        } catch { if !Task.isCancelled { failed = true }; return }
-        // 每行的一句结论在报告里：只读最近的若干场
-        for item in (list ?? []).filter({ $0.text("status") == "completed" }).sorted(by: { when($0) > when($1) }).prefix(24) where headlines[item.text("id")] == nil {
-            if let detail = try? await session.api.careerRequest(path: "/api/mock-interviews/\(item.text("id"))", method: "GET", query: [:], body: nil) {
-                headlines[item.text("id")] = detail["mock_interview"]?["report"]?.text("headline") ?? ""
-            }
-        }
+            let value = try await session.api.careerRequest(path: "/api/mock-interviews/overview", method: "GET", query: [:], body: nil)
+            if Task.isCancelled { return }
+            overview = value; failed = false
+        } catch { if !Task.isCancelled { failed = true } }
     }
 
-    private func repeatSession(_ id: String) async {
+    private func repeatInterview(_ id: String) async {
         do {
             let result = try await session.api.careerRequest(path: "/api/mock-interviews/\(id)/repeat", method: "POST", query: [:], body: nil)
-            open(result["mock_interview"]?.text("id") ?? "")
-        } catch { toast = MockInterviewText.error(error) }
+            open(result["mock_interview"]?.display("id") ?? "")
+        } catch { notice = MockNotice(title: "没有开始新的一场", message: MockInterviewText.error(error)) }
+    }
+}
+
+/// `.mi3-rec`：72 高的一行，列位置按 860 宽设计稿换成百分比；悬停只换浅底。
+private struct MockRecordRow: View {
+    let item: JSONValue
+    let width: CGFloat
+    let action: () -> Void
+    @State private var hover = false
+    var body: some View {
+        let reviewing = item.text("status") == "reviewing"
+        let stuck = item["stuck"].flatMap { $0 == .null ? nil : $0 }
+        Button(action: action) {
+            ZStack(alignment: .topLeading) {
+                Text(verbatim: MockHomeV2.mmdd(item.text("at"))).font(V3.sans(14, weight: .medium)).foregroundStyle(MockPalette.ink).frame(height: 22).offset(y: 26)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(verbatim: item.text("title")).font(V3.sans(14, weight: .medium)).foregroundStyle(MockPalette.ink).lineLimit(1).frame(height: 22)
+                    Text(verbatim: item.text("subtitle")).font(V3.sans(13)).foregroundStyle(MockPalette.sub).lineLimit(1).frame(height: 20)
+                }
+                .frame(width: width * 0.314, alignment: .leading).offset(x: width * 0.1163, y: 15)
+                if let stuck {
+                    Circle().fill(MockPalette.orange).frame(width: 6, height: 6).offset(x: width * 0.4581, y: 23)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(verbatim: stuck.text("topic")).font(V3.sans(14, weight: .medium)).foregroundStyle(MockPalette.ink).lineLimit(1).frame(height: 22)
+                        Text(verbatim: stuck.text("detail")).font(V3.sans(13)).foregroundStyle(MockPalette.sub).lineLimit(1).frame(height: 20)
+                    }
+                    .frame(width: max(0, width * 0.4186 - 14), alignment: .leading).offset(x: width * 0.4581 + 14, y: 15)
+                }
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    if let score = item["score"]?.numberValue {
+                        Text(verbatim: "\(Int(score))").font(V3.serif(22)).foregroundStyle(MockPalette.ink).frame(height: 30).padding(.top, 22)
+                    } else {
+                        Text(verbatim: reviewing ? "复盘中" : "—").font(V3.sans(13)).foregroundStyle(MockPalette.mute).frame(height: 20).padding(.top, 26)
+                    }
+                    Text(verbatim: "›").font(V3.sans(16)).foregroundStyle(MockPalette.mute).frame(width: 50, alignment: .trailing).padding(.trailing, 4).padding(.top, 25)
+                        .opacity(reviewing ? 0 : 1)
+                }
+            }
+            .frame(width: width, height: 72, alignment: .topLeading)
+            .background(hover && !reviewing ? MockPalette.rowHover : .clear)
+            .overlay(alignment: .bottom) { Rectangle().fill(MockPalette.line).frame(height: 1) }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).onHover { hover = $0 }
+        .accessibilityElement(children: .combine)
     }
 }

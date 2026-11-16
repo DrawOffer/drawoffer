@@ -10,8 +10,17 @@ private struct ScheduleAction: Identifiable {
     var end: Date
 }
 
-/// 05.1 / 05.2 面试日程. Mirrors Web `ScheduleView`: SCHEDULE head with a date jump, 月/周 calendar,
-/// and the 05.2b schedule detail dialog. Web 已不再显示「接下来」列表；日历撑满页面剩余高度。
+/// 月视图格子里的一条日程（作答窗口在开放日和截止日各占一条）。
+private struct ScheduleMonthChip: Identifiable {
+    let id: String
+    let item: ScheduledInterview
+    let text: String
+    let color: Color
+    let time: Date
+}
+
+/// 08 · 面试日程（Figma `5:20`）：01 月视图 / 周视图，日历占满整页（与 Web 一致，已去掉日历下方的「接下来」和空状态卡）；
+/// 02.01 没有可推进流程的新建面试，03–06 日程详情弹窗在 ScheduleDialogs.swift。
 struct InterviewScheduleView: View {
     @Environment(SessionStore.self) private var session
     let requireAccount: () -> Void
@@ -33,18 +42,29 @@ struct InterviewScheduleView: View {
     @State private var showAllWindows = false
     @State private var pageGutter: CGFloat = 32
     private let calendar = Beijing.calendar
-    private static let hourHeight: CGFloat = 64
+    /// 周视图每小时 56 高；时间刻度居中压在整点线上，网格顶部留 6。
+    private static let hourHeight: CGFloat = 56
+    private static let gridInset: CGFloat = 6
     private static let gutter: CGFloat = 52
     private var account: String { if case .signedIn(let user) = session.phase { return user.id }; return "" }
+    private var meInitial: String { if case .signedIn(let user) = session.phase, let first = user.nickname.first { return String(first) }; return "我" }
     private var week: Date { ScheduleCalendar.weekStart(anchor) }
     private var month: Date { calendar.dateInterval(of: .month, for: anchor)!.start }
     private var visible: [ScheduledInterview] { interviews.filter { $0.raw.text("status") != "cancelled" } }
     private func plus(_ date: Date, _ days: Int) -> Date { calendar.date(byAdding: .day, value: days, to: date)! }
-    private func format(_ date: Date, _ pattern: String) -> String { let f = Beijing.formatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = pattern; return f.string(from: date) }
+    private func format(_ date: Date, _ pattern: String) -> String { ScheduleInk.format(date, pattern) }
     private func at(_ day: Date, minute: Int) -> Date { calendar.date(bySettingHour: minute / 60, minute: minute % 60, second: 0, of: day)! }
     private var periodStart: Date { mode == "month" ? month : week }
     private var periodEnd: Date { mode == "month" ? calendar.date(byAdding: .month, value: 1, to: month)! : plus(week, 7) }
-    /// `scheduleHeadTitle`: 2026 年 9 月 / 9 月 21 日 – 27 日.
+    private var periodCount: Int { visible.filter { $0.overlaps(periodStart, periodEnd) }.count }
+    /// `canAddScheduledStage`：已投递、上一阶段已结束、还没进 Offer 的流程才能直接加一场。
+    private static func canAddStage(_ item: CareerApplication) -> Bool {
+        item.raw.text("status") == "active" && item.raw.text("archived_at").isEmpty && !item.raw.text("applied_at").isEmpty
+            && item.raw.text("stage_state") == "awaiting_result" && item.raw.text("current_stage_type") != "offer"
+    }
+    private var eligible: [CareerApplication] { applications.filter(Self.canAddStage) }
+    private var excluded: [CareerApplication] { applications.filter { $0.raw.text("status") == "active" && $0.raw.text("archived_at").isEmpty && !Self.canAddStage($0) } }
+    /// 2026 年 9 月 / 9 月 21 日 – 27 日.
     private var heading: String {
         if mode == "month" { return "\(calendar.component(.year, from: month)) 年 \(calendar.component(.month, from: month)) 月" }
         let end = plus(week, 6)
@@ -53,9 +73,8 @@ struct InterviewScheduleView: View {
     }
     private var subtitle: String {
         guard !account.isEmpty else { return "游客模式 · 登录后管理面试安排" }
-        let count = visible.filter { $0.overlaps(periodStart, periodEnd) }.count
         let today = visible.filter { !$0.openWindow && calendar.isDateInToday($0.start) }.count
-        return "\(mode == "month" ? "本月" : "本周") \(count) 个日程" + (today > 0 ? " · 今天 \(today) 场面试" : "")
+        return "\(mode == "month" ? "本月" : "本周") \(periodCount) 个日程" + (today > 0 ? " · 今天 \(today) 场面试" : "")
     }
 
     var body: some View {
@@ -78,21 +97,26 @@ struct InterviewScheduleView: View {
             if id.isEmpty { pending = nil }
             else if let value = pending { action = value; pending = nil }
         }
-        .sheet(item: $action) { value in
-            if value.kind == "create" {
+        .centeredSheet(item: $action) { value in
+            if value.kind == "create" && eligible.isEmpty {
+                // 02.01 没有可推进的流程：主按钮带着选中的时间去新建求职流程
+                ScheduleNoStageDialog(start: value.start, end: value.end, excluded: excluded, close: { action = nil },
+                                      createProcess: { action = ScheduleAction(kind: "create-process", start: value.start, end: value.end) },
+                                      openRecord: { app in action = nil; record = app })
+            } else if value.kind == "create" || value.kind == "create-process" {
                 CareerForm(action: JobAction(kind: "schedule", application: nil, start: value.start, end: value.end), applications: applications, api: session.api,
                            completed: { action = nil; refresh = UUID() }, close: { action = nil }).frame(width: 880, height: 780)
             } else {
                 ScheduleSessionForm(action: value, interviews: interviews, api: session.api, completed: { action = nil; refresh = UUID() }, close: { action = nil }).frame(width: 560, height: 560)
             }
         }
-        .sheet(item: $detail) { item in
-            ScheduleDetailDialog(interview: item, api: session.api, close: { detail = nil }, changed: { detail = nil; refresh = UUID() }, openRecord: {
+        .centeredSheet(item: $detail) { item in
+            ScheduleDetailDialog(interview: item, api: session.api, meInitial: meInitial, close: { detail = nil }, changed: { detail = nil; refresh = UUID() }, openRecord: {
                 detail = nil
                 record = applications.first { $0.id == item.applicationID }
-            }).frame(width: 520)
+            })
         }
-        .sheet(item: $recordAction) { item in
+        .centeredSheet(item: $recordAction) { item in
             CareerForm(action: item, applications: applications, api: session.api, completed: { recordAction = nil; refresh = UUID() }, close: { recordAction = nil })
                 .frame(width: item.compact ? 480 : 880, height: item.compact ? nil : 780)
         }
@@ -100,18 +124,18 @@ struct InterviewScheduleView: View {
 
     private var page: some View {
         VStack(alignment: .leading, spacing: 0) {
-            head.padding(.bottom, 20)
+            head
             if let failure {
                 HStack(spacing: 10) {
                     Text(failure).font(V3.sans(12.5)).foregroundStyle(V3.red)
                     Button("重试") { refresh = UUID() }.buttonStyle(CareerActionStyle(kind: .link))
-                }.padding(.bottom, 12)
+                }.padding(.top, 10)
             }
             Group { if mode == "month" { monthView } else { weekView } }
-                .frame(minHeight: 280, maxHeight: .infinity, alignment: .top).overlay(alignment: .topTrailing) { if loading { ProgressView().controlSize(.small).padding(6) } }
+                .frame(minHeight: 280, maxHeight: .infinity, alignment: .top).padding(.top, 14)
+                .overlay(alignment: .topTrailing) { if loading { ProgressView().controlSize(.small).padding(6) } }
         }
-        // Web `.career-v3-page` 底部留 24，日历撑满到这里
-        .padding(.top, 52).padding(.bottom, 24)
+        .padding(.top, 64).padding(.bottom, 32)
         .frame(maxHeight: .infinity, alignment: .top)
         .padding(.horizontal, max(0, pageGutter))
         .background { GeometryReader { geometry in Color.clear.onAppear { pageGutter = V3Page<EmptyView>.gutter(card: geometry.size.width) }
@@ -119,37 +143,40 @@ struct InterviewScheduleView: View {
         .background { Button("") { create(start: at(calendar.startOfDay(for: anchor), minute: 9 * 60)) }.keyboardShortcut("n", modifiers: .command).opacity(0) }
     }
 
-    // MARK: Head
+    // MARK: Head（01：11 号眉题、28 号衬线标题、13 号说明；右侧分段 + 前后翻页 + 今天）
 
     private var head: some View {
         HStack(alignment: .top, spacing: 24) {
             VStack(alignment: .leading, spacing: 0) {
-                Text(["SCHEDULE", "\(calendar.component(.year, from: periodStart)) 年", mode == "month" ? "月视图" : "周视图"].joined(separator: " · "))
-                    .font(V3.sans(12, weight: .medium)).foregroundStyle(V3.fnt).frame(height: 18)
+                // 与 Web 05.1/05.2 页头一致：「SCHEDULE · 2026 年 · 月视图」，标题右侧带 ⌄ 打开日期选择
+                Text(verbatim: "SCHEDULE · " + String(calendar.component(.year, from: periodStart)) + " 年 · " + (mode == "month" ? "月视图" : "周视图"))
+                    .font(V3.sans(11)).foregroundStyle(ScheduleInk.faint).frame(height: 13)
                 Button { datePicker.toggle() } label: {
-                    HStack(spacing: 8) { Text(heading).font(V3.serif(28)).foregroundStyle(V3.txt); Image(systemName: "chevron.down").font(.system(size: 12, weight: .medium)).foregroundStyle(V3.fnt) }
-                        .frame(height: 36).contentShape(Rectangle())
+                    HStack(spacing: 8) {
+                        Text(heading).font(V3.serif(28)).foregroundStyle(V3.txt)
+                        Image(systemName: "chevron.down").font(.system(size: 11, weight: .medium)).foregroundStyle(V3.sub)
+                    }.frame(height: 40).contentShape(Rectangle())
                 }
-                .buttonStyle(.plain).padding(.top, 8).accessibilityLabel("\(heading)，选择其他日期")
+                .buttonStyle(.plain).padding(.top, 13).help("选择其他日期").accessibilityLabel("\(heading)，选择其他日期")
                 .popover(isPresented: $datePicker, arrowEdge: .bottom) {
                     DatePicker(mode == "month" ? "选择月份" : "选择周", selection: Binding(get: { anchor }, set: { anchor = $0; datePicker = false }), displayedComponents: .date)
                         .datePickerStyle(.graphical).labelsHidden().padding(16).frame(width: 300)
                 }
-                Text(subtitle).font(V3.sans(14)).foregroundStyle(V3.sub).frame(height: 22).padding(.top, 6)
+                Text(subtitle).font(V3.sans(13)).foregroundStyle(V3.sub).frame(height: 16).padding(.top, 2)
             }
             Spacer(minLength: 0)
-            HStack(spacing: 8) {
-                V3Segmented(options: [("month", "月"), ("week", "周")], selection: $mode, segmentWidth: 52, fontSize: 11.5).accessibilityElement(children: .contain).accessibilityLabel("日程视图")
-                HStack(spacing: 4) {
+            HStack(spacing: 9) {
+                V3Segmented(options: [("month", "月"), ("week", "周")], selection: $mode).accessibilityElement(children: .contain).accessibilityLabel("日程视图")
+                HStack(spacing: 5) {
                     navButton(systemImage: "chevron.left", label: "上一周期") { shift(-1) }
                     Button("今天") { anchor = Date(); overflow = nil }.buttonStyle(ScheduleNavStyle())
                     navButton(systemImage: "chevron.right", label: "下一周期") { shift(1) }
                 }
-            }.padding(.top, 32)
+            }.frame(height: 30).padding(.top, 32)
         }
     }
     private func navButton(systemImage: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: systemImage).font(.system(size: 11, weight: .semibold)) }
+        Button(action: action) { Image(systemName: systemImage).font(.system(size: 9, weight: .semibold)) }
             .buttonStyle(ScheduleNavStyle(square: true)).accessibilityLabel(label)
     }
     private func shift(_ amount: Int) {
@@ -157,7 +184,7 @@ struct InterviewScheduleView: View {
         overflow = nil
     }
     private func create(start: Date, end: Date? = nil) {
-        let value = ScheduleAction(kind: "create", start: start, end: end ?? start.addingTimeInterval(1800))
+        let value = ScheduleAction(kind: "create", start: start, end: end ?? start.addingTimeInterval(3600))
         if account.isEmpty { pending = value; requireAccount() } else { action = value }
     }
     private func open(_ item: ScheduledInterview) {
@@ -183,15 +210,31 @@ struct InterviewScheduleView: View {
         if raw.text("mode") == "onsite" { return [raw.text("location"), "现场"].filter { !$0.isEmpty }.joined(separator: " · ") }
         let url = raw.text("meeting_url")
         let platform = url.contains("feishu.cn") || url.contains("larksuite.com") ? "飞书会议" : url.contains("meeting.tencent.com") ? "腾讯会议" : url.contains("nowcoder.com") ? "牛客网" : nil
+        let stage = raw.text("stage_type")
+        // 笔试 / 测评 / AI 面试只写平台（稿：「牛客网」）
+        if ["written_test", "assessment", "ai_interview"].contains(stage) || raw.text("schedule_kind") == "open_window" { return platform ?? "线上" }
         let mode = raw.text("mode") == "video" ? "视频" : raw.text("mode") == "phone" ? "电话" : "其他方式"
         return [mode, platform].compactMap { $0 }.joined(separator: " · ")
     }
 
-    // MARK: Month
+    // MARK: Month（01.01：每格左上 10.5 号日期，今天蓝圈 + 5% 蓝底；日程条 20 高、圆角 5）
 
-    private func items(_ day: Date) -> [ScheduledInterview] {
-        let start = calendar.startOfDay(for: day)
-        return visible.filter { !$0.openWindow && $0.overlaps(start, plus(start, 1)) }.sorted { $0.start < $1.start }
+    private func chips(_ day: Date) -> [ScheduleMonthChip] {
+        let start = calendar.startOfDay(for: day), end = plus(start, 1)
+        var list: [ScheduleMonthChip] = []
+        for item in visible {
+            let color = Self.color(item, month: true)
+            if item.openWindow {
+                let opens = calendar.isDate(item.start, inSameDayAs: day)
+                let closes = calendar.isDate(item.end.addingTimeInterval(-1), inSameDayAs: day)
+                if opens { list.append(ScheduleMonthChip(id: item.id + "-open", item: item, text: item.company + " " + item.label + "开放", color: color, time: item.start)) }
+                if closes { list.append(ScheduleMonthChip(id: item.id + "-close", item: item, text: item.company + " " + item.label + "截止", color: V3.red, time: item.end)) }
+            } else if item.overlaps(start, end) {
+                let text = item.company + " " + item.label + (calendar.isDateInToday(day) ? " " + format(item.start, "HH:mm") : "")
+                list.append(ScheduleMonthChip(id: item.id, item: item, text: text, color: color, time: item.start))
+            }
+        }
+        return list.sorted { $0.time < $1.time }
     }
     private var monthView: some View {
         let days = ScheduleCalendar.monthDays(anchor)
@@ -199,51 +242,53 @@ struct InterviewScheduleView: View {
         return VStack(spacing: 0) {
             HStack(spacing: 0) {
                 ForEach(["周一", "周二", "周三", "周四", "周五", "周六", "周日"], id: \.self) { name in
-                    // 星期行最小 32 高，标签 24 高、居中，字在标签里下移 2
-                    Text(name).font(V3.sans(10.5)).foregroundStyle(V3.fnt).padding(.horizontal, 8).padding(.top, 2).frame(maxWidth: .infinity, alignment: .topLeading).frame(height: 24)
+                    Text(name).font(V3.sans(10.5)).foregroundStyle(ScheduleInk.faint).padding(.leading, 8).padding(.top, 8)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
-            }.frame(height: 32).overlay(alignment: .bottom) { Rectangle().fill(V3.line).frame(height: 1) }
+            }.frame(height: 30).overlay(alignment: .bottom) { Rectangle().fill(V3.line).frame(height: 1) }
             GeometryReader { viewport in
                 let height = max(84, viewport.size.height / CGFloat(rows))
                 ScrollView(.vertical) {
                     VStack(spacing: 0) {
                         ForEach(0..<rows, id: \.self) { row in
                             HStack(spacing: 0) {
-                                ForEach(0..<7, id: \.self) { column in monthCell(days[row * 7 + column], height: height) }
+                                ForEach(0..<7, id: \.self) { column in monthCell(days[row * 7 + column], column: column, height: height) }
                             }.overlay(alignment: .bottom) { Rectangle().fill(V3.line).frame(height: 1) }
                         }
                     }
-                }.scrollDisabled(height * CGFloat(rows) <= viewport.size.height + 1)
+                }.scrollDisabled(height * CGFloat(rows) <= viewport.size.height + 1).scrollIndicators(.never)
             }
         }
     }
-    private func monthCell(_ day: Date, height: CGFloat) -> some View {
-        let events = items(day)
+    private func monthCell(_ day: Date, column: Int, height: CGFloat) -> some View {
+        let events = chips(day)
         let today = calendar.isDateInToday(day)
         let inside = calendar.isDate(day, equalTo: month, toGranularity: .month)
-        let capacity = max(1, Int((height - 36) / 24))
+        let capacity = max(1, Int((height - 42) / 24))
         let shown = events.count > capacity ? Array(events.prefix(capacity - 1)) : events
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 4) {
+        return ZStack(alignment: .topLeading) {
+            if today { Rectangle().fill(V3.blue.opacity(0.05)) }
+            HStack(spacing: 0) {
                 Button { anchor = day; mode = "week" } label: {
-                    Text("\(calendar.component(.day, from: day))").font(V3.number(10.5, weight: today ? .semibold : .medium))
+                    Text("\(calendar.component(.day, from: day))").font(.system(size: 10.5, weight: today ? .semibold : .medium).monospacedDigit())
                         .foregroundStyle(today ? .white : inside ? V3.txt : V3.fnt2)
-                        .frame(width: 22, height: 22).background(today ? V3.blue : .clear, in: Circle()).contentShape(Circle())
+                        .padding(.leading, today ? 0 : 4)
+                        .frame(width: 22, height: 22, alignment: today ? .center : .leading)
+                        .background(today ? V3.blue : .clear, in: Circle()).contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityLabel(format(day, "M月d日") + "，查看这一周")
                 Spacer(minLength: 0)
                 if events.count > shown.count {
                     Button("另有 \(events.count - shown.count) 项") { overflow = day }
-                        .buttonStyle(.plain).font(V3.sans(10)).foregroundStyle(V3.fnt).padding(.horizontal, 6).frame(height: 20)
+                        .buttonStyle(.plain).font(V3.sans(10)).foregroundStyle(ScheduleInk.faint).frame(height: 22)
                         .popover(isPresented: Binding(get: { overflow == day }, set: { if !$0 { overflow = nil } })) { overflowList(day, events) }
                 }
-            }.frame(height: 22).padding(.top, 6)
-            ForEach(shown) { item in monthEvent(item) }.padding(.trailing, 5)
-            Spacer(minLength: 0)
+            }.padding(.leading, 5).padding(.trailing, 6).padding(.top, 4)
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(shown) { chip in monthEvent(chip, today: today) }
+            }.padding(.top, 38).padding(.horizontal, 5)
         }
-        .padding(.leading, 4).padding(.bottom, 4)
         .frame(maxWidth: .infinity, alignment: .topLeading).frame(height: height, alignment: .topLeading)
-        .background(today ? V3.blue.opacity(0.05) : .clear)
-        .overlay(alignment: .leading) { Rectangle().fill(V3.line).frame(width: 1) }
+        .overlay(alignment: .leading) { if column > 0 { Rectangle().fill(V3.line).frame(width: 1) } }
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { create(start: at(day, minute: 9 * 60)) }
         .dropDestination(for: String.self) { ids, _ in
@@ -253,33 +298,32 @@ struct InterviewScheduleView: View {
             move(item, kind: "reschedule", start: from, end: from.addingTimeInterval(item.end.timeIntervalSince(item.start))); return true
         }
     }
-    private func monthEvent(_ item: ScheduledInterview) -> some View {
-        HStack(spacing: 5) {
-            Circle().fill(Self.color(item, month: true)).frame(width: 5, height: 5)
-            Text(item.company).font(V3.sans(11, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1)
-            Text(item.label).font(V3.sans(11)).foregroundStyle(V3.sub).lineLimit(1)
-            Spacer(minLength: 2)
-            Text(format(item.start, "HH:mm")).font(V3.number(10, weight: .regular)).foregroundStyle(V3.fnt)
+    private func monthEvent(_ chip: ScheduleMonthChip, today: Bool) -> some View {
+        let item = chip.item
+        let selected = selectedID == item.id
+        return HStack(spacing: 6) {
+            Circle().fill(chip.color).frame(width: 5, height: 5)
+            Text(chip.text).font(V3.sans(10, weight: today ? .medium : .regular)).foregroundStyle(today ? V3.link : V3.sub).lineLimit(1)
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 6).frame(height: 20)
-        .background(V3.field, in: RoundedRectangle(cornerRadius: 5))
-        .overlay(RoundedRectangle(cornerRadius: 5).stroke(selectedID == item.id ? V3.txt : .clear, lineWidth: 1.5))
+        .padding(.leading, 6).padding(.trailing, 4).frame(maxWidth: .infinity).frame(height: 20)
+        .background(today ? V3.blue.opacity(0.12) : V3.field, in: RoundedRectangle(cornerRadius: 5))
+        .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(selected ? V3.txt : .clear, lineWidth: 1.5))
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) { open(item) }
-        .onTapGesture { selectedID = item.id }
-        .draggable(item.editable ? item.id : "")
+        .onTapGesture { open(item) }
+        .draggable(item.editable && !item.openWindow ? item.id : "")
         .help(item.company + " " + item.title + " " + item.label)
     }
-    private func overflowList(_ day: Date, _ events: [ScheduledInterview]) -> some View {
+    private func overflowList(_ day: Date, _ events: [ScheduleMonthChip]) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(format(day, "M月d日 · EEE")).font(V3.sans(12, weight: .medium)).foregroundStyle(V3.fnt).padding(.horizontal, 8).padding(.top, 6).padding(.bottom, 8)
-            ForEach(events) { item in
-                Button { overflow = nil; open(item) } label: {
+            Text(format(day, "M月d日 · EEE")).font(V3.sans(12, weight: .medium)).foregroundStyle(ScheduleInk.faint).padding(.horizontal, 8).padding(.top, 6).padding(.bottom, 8)
+            ForEach(events) { chip in
+                Button { overflow = nil; open(chip.item) } label: {
                     HStack(alignment: .top, spacing: 10) {
-                        RoundedRectangle(cornerRadius: 2).fill(Self.color(item, month: true)).frame(width: 3, height: 30)
+                        RoundedRectangle(cornerRadius: 2).fill(chip.color).frame(width: 3, height: 30)
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(item.company).font(V3.sans(12, weight: .semibold)).foregroundStyle(V3.txt)
-                            Text(format(item.start, "HH:mm") + "–" + format(item.end, "HH:mm") + " · " + item.label).font(V3.sans(11)).foregroundStyle(V3.fnt)
+                            Text(chip.text).font(V3.sans(12, weight: .semibold)).foregroundStyle(V3.txt)
+                            Text(format(chip.item.start, "HH:mm") + "–" + format(chip.item.end, "HH:mm") + " · " + chip.item.title).font(V3.sans(11)).foregroundStyle(ScheduleInk.faint)
                         }
                         Spacer(minLength: 0)
                     }.padding(.horizontal, 8).padding(.vertical, 8).contentShape(Rectangle())
@@ -288,7 +332,7 @@ struct InterviewScheduleView: View {
         }.padding(8).frame(width: 256)
     }
 
-    // MARK: Week
+    // MARK: Week（01.02：表头星期 10.5 + 日期 14，今天 30 圆；全天行放作答窗口；每小时 56 高）
 
     private var weekView: some View {
         let windows = visible.filter { $0.openWindow && $0.overlaps(week, plus(week, 7)) }.sorted { $0.end < $1.end }
@@ -299,30 +343,39 @@ struct InterviewScheduleView: View {
                 ForEach(0..<7, id: \.self) { index in
                     let day = plus(week, index)
                     let today = calendar.isDateInToday(day)
-                    // `.interview-calendar-day-header.is-week`：星期 10.5、日期 14 放在 30 的圆里，上下间距 9 − 6
-                    VStack(spacing: 3) {
-                        Text(format(day, "EEE")).font(V3.sans(10.5, weight: today ? .medium : .regular)).foregroundStyle(today ? V3.txt : V3.fnt).frame(height: 13)
-                        Text("\(calendar.component(.day, from: day))").font(V3.number(14, weight: today ? .semibold : .medium))
-                            .foregroundStyle(today ? .white : V3.txt).frame(width: 30, height: 30).background(today ? V3.blue : .clear, in: Circle())
-                    }.frame(maxWidth: .infinity).frame(height: 56)
+                    VStack(spacing: 0) {
+                        Text(format(day, "EEE")).font(V3.sans(10.5, weight: today ? .medium : .regular)).foregroundStyle(today ? V3.txt : ScheduleInk.faint).frame(height: 13).padding(.top, 8)
+                        Text("\(calendar.component(.day, from: day))").font(.system(size: 14, weight: today ? .semibold : .medium).monospacedDigit())
+                            .foregroundStyle(today ? .white : V3.txt).frame(width: 30, height: 30).background(today ? V3.blue : .clear, in: Circle()).padding(.top, 5)
+                        Spacer(minLength: 0)
+                    }.frame(maxWidth: .infinity).frame(height: 64)
                 }
-            }.overlay(alignment: .bottom) { Rectangle().fill(V3.line).frame(height: 1) }
+            }.frame(height: 64).overlay(alignment: .bottom) { Rectangle().fill(V3.line).frame(height: 1) }
             if !windows.isEmpty {
-                HStack(alignment: .top, spacing: 0) {
-                    Text("全天").font(V3.sans(10)).foregroundStyle(V3.fnt).frame(width: Self.gutter, alignment: .leading).padding(.top, 6)
-                    VStack(alignment: .leading, spacing: 3) {
-                        ForEach(shownWindows) { item in windowBar(item) }
-                        if windows.count > 3 {
-                            Button(showAllWindows ? "收起更多项目" : "还有 \(windows.count - 3) 项待完成 · 展开查看") { showAllWindows.toggle() }
-                                .buttonStyle(.plain).font(V3.sans(10, weight: .semibold)).foregroundStyle(V3.sub)
-                                .frame(maxWidth: .infinity).frame(height: 20).background(Color(hex: 0xEEF1F5), in: RoundedRectangle(cornerRadius: 5))
-                        }
-                    }.padding(.vertical, 4)
-                }.frame(minHeight: 34).overlay(alignment: .bottom) { Rectangle().fill(V3.line).frame(height: 1) }
+            HStack(alignment: .top, spacing: 0) {
+                Text("全天").font(V3.sans(10)).foregroundStyle(ScheduleInk.faint).frame(width: Self.gutter, alignment: .leading).padding(.top, 10)
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(shownWindows) { item in windowBar(item) }
+                    if windows.count > 3 {
+                        Button(showAllWindows ? "收起更多项目" : "还有 \(windows.count - 3) 项待完成 · 展开查看") { showAllWindows.toggle() }
+                            .buttonStyle(.plain).font(V3.sans(10, weight: .medium)).foregroundStyle(V3.sub)
+                            .frame(maxWidth: .infinity).frame(height: 20).background(V3.field, in: RoundedRectangle(cornerRadius: 5))
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 6)
+                .background(alignment: .leading) { weekColumnLines }
+            }.frame(minHeight: 34).overlay(alignment: .bottom) { Rectangle().fill(V3.line).frame(height: 1) }
             }
-            timeGrid.frame(height: max(120, box.size.height - 56 - (windows.isEmpty ? 0 : 34)))
+            timeGrid.frame(maxHeight: .infinity)
         }
         .frame(width: box.size.width, height: box.size.height, alignment: .top) }
+    }
+    /// 全天行里的竖分隔线（与下方时间网格对齐）。
+    private var weekColumnLines: some View {
+        GeometryReader { geometry in
+            ForEach(0..<7, id: \.self) { index in
+                Rectangle().fill(V3.line).frame(width: 1, height: geometry.size.height + 12).offset(x: CGFloat(index) * geometry.size.width / 7, y: -6)
+            }
+        }
     }
     private func windowBar(_ item: ScheduledInterview) -> some View {
         GeometryReader { geometry in
@@ -330,14 +383,16 @@ struct InterviewScheduleView: View {
             let first = max(0, calendar.dateComponents([.day], from: week, to: calendar.startOfDay(for: item.start)).day ?? 0)
             let endDay = calendar.startOfDay(for: item.end.addingTimeInterval(-1))
             let last = min(6, calendar.dateComponents([.day], from: week, to: endDay).day ?? 6)
-            HStack(spacing: 6) {
-                RoundedRectangle(cornerRadius: 1).fill(Self.color(item)).frame(width: 2, height: 12)
+            let color = Self.color(item, month: true)
+            HStack(spacing: 5) {
+                RoundedRectangle(cornerRadius: 1).fill(color).frame(width: 2, height: 12)
                 Text(item.company + " " + item.label + "开放").font(V3.sans(10, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1)
                 Spacer(minLength: 0)
             }
-            .padding(.leading, 4).frame(width: max(width, CGFloat(last - first + 1) * width) - 4, height: 22)
-            .background(Self.color(item).opacity(0.10), in: RoundedRectangle(cornerRadius: 5))
-            .offset(x: CGFloat(first) * width + 2)
+            .padding(.leading, 4).frame(width: max(width, CGFloat(last - first + 1) * width) - 8, height: 22)
+            .background(Color.white.mix(with: color, by: 0.10), in: RoundedRectangle(cornerRadius: 5))
+            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(selectedID == item.id ? color.opacity(0.45) : .clear))
+            .offset(x: CGFloat(first) * width + 4)
             .contentShape(Rectangle())
             .onTapGesture { open(item) }
         }.frame(height: 22)
@@ -348,14 +403,15 @@ struct InterviewScheduleView: View {
                 GeometryReader { viewport in
                     let width = (viewport.size.width - Self.gutter) / 7
                     ZStack(alignment: .topLeading) {
-                        VStack(spacing: 0) {
-                            ForEach(0..<24, id: \.self) { hour in
-                                HStack(alignment: .top, spacing: 0) {
-                                    Text(String(format: "%02d:00", hour)).font(V3.number(10, weight: .medium)).foregroundStyle(V3.fnt).frame(width: Self.gutter, alignment: .leading).padding(.top, 3)
-                                    Rectangle().fill(V3.line).frame(height: 1)
-                                }.frame(height: Self.hourHeight, alignment: .top).id("hour\(hour)")
-                            }
+                        // 整点线只画在日期列里，刻度居中压线
+                        ForEach(0..<24, id: \.self) { hour in
+                            let y = Self.gridInset + CGFloat(hour) * Self.hourHeight
+                            Rectangle().fill(V3.line).frame(width: viewport.size.width - Self.gutter, height: 1).offset(x: Self.gutter, y: y)
+                            Text(String(format: "%02d:00", hour)).font(.system(size: 10, weight: .medium).monospacedDigit()).foregroundStyle(ScheduleInk.faint)
+                                .frame(height: 12).offset(y: y - 6)
                         }
+                        // 滚动定位锚点（offset 不改布局位置，锚点单独按行排）
+                        VStack(spacing: 0) { ForEach(0..<24, id: \.self) { hour in Color.clear.frame(width: 1, height: Self.hourHeight).id("hour\(hour)") } }.padding(.top, Self.gridInset)
                         HStack(spacing: 0) {
                             Color.clear.frame(width: Self.gutter)
                             ForEach(0..<7, id: \.self) { index in dayColumn(plus(week, index), width: width) }
@@ -364,20 +420,24 @@ struct InterviewScheduleView: View {
                         if let index = (0..<7).first(where: { calendar.isDateInToday(plus(week, $0)) }) {
                             let now = Date()
                             let minute = CGFloat(calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now))
-                            Rectangle().fill(V3.red).frame(width: width, height: 1.5)
-                                .offset(x: Self.gutter + CGFloat(index) * width, y: minute / 60 * Self.hourHeight)
+                            let y = Self.gridInset + minute / 60 * Self.hourHeight
+                            Rectangle().fill(V3.red).frame(width: width, height: 2).offset(x: Self.gutter + CGFloat(index) * width, y: y - 1)
+                            Circle().fill(V3.red).frame(width: 7, height: 7).offset(x: Self.gutter + CGFloat(index) * width - 3.5, y: y - 3.5)
                         }
                     }
-                }.frame(height: Self.hourHeight * 24)
+                }.frame(height: Self.hourHeight * 24 + Self.gridInset * 2)
             }
+            .scrollIndicators(.never)
             .task(id: week) {
+                // 与 Web 一致默认从 08:00 开始看；本周有更早的安排时滚到那一小时。等一帧布局完成再滚，否则停在 00:00。
                 let earliest = visible.filter { !$0.openWindow && $0.start >= week && $0.start < plus(week, 7) }.map { calendar.component(.hour, from: $0.start) }.min() ?? 8
+                try? await Task.sleep(for: .milliseconds(60))
                 proxy.scrollTo("hour\(min(8, earliest))", anchor: .top)
             }
         }
     }
     private func dayColumn(_ day: Date, width: CGFloat) -> some View {
-        Rectangle().fill(Color.clear).frame(width: width, height: Self.hourHeight * 24)
+        Rectangle().fill(Color.clear).frame(width: width, height: Self.hourHeight * 24 + Self.gridInset * 2)
             .overlay(alignment: .leading) { Rectangle().fill(V3.line).frame(width: 1) }
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 8).onEnded { selection in
@@ -385,14 +445,14 @@ struct InterviewScheduleView: View {
                 let until = at(day, minute: max(15, snap(max(selection.startLocation.y, selection.location.y), upper: 1439)))
                 if until > from { create(start: from, end: until) }
             })
-            .onTapGesture(count: 2) { point in let from = at(day, minute: snap(point.y, upper: 1425)); create(start: from, end: from.addingTimeInterval(1800)) }
+            .onTapGesture(count: 2) { point in let from = at(day, minute: snap(point.y, upper: 1425)); create(start: from, end: from.addingTimeInterval(3600)) }
             .dropDestination(for: String.self) { ids, point in
                 guard let original = interviews.first(where: { $0.id == ids.first }), let item = original.timed, item.editable else { return false }
                 let from = at(day, minute: snap(point.y, upper: 1425))
                 move(original, kind: item.openWindow ? "answer-plan" : "reschedule", start: from, end: from.addingTimeInterval(item.end.timeIntervalSince(item.start))); return true
             }
     }
-    private func snap(_ y: CGFloat, upper: Int) -> Int { min(upper, max(0, Int((y / Self.hourHeight * 60 / 15).rounded()) * 15)) }
+    private func snap(_ y: CGFloat, upper: Int) -> Int { min(upper, max(0, Int(((y - Self.gridInset) / Self.hourHeight * 60 / 15).rounded()) * 15)) }
     private func dayEvents(_ day: Date, index: Int, width: CGFloat) -> some View {
         let events = visible.compactMap(\.timed).filter { $0.overlaps(day, plus(day, 1)) }
         let lanes = ScheduleCalendar.lanes(events)
@@ -403,18 +463,18 @@ struct InterviewScheduleView: View {
             let height = max(22, end.timeIntervalSince(start) / 3600 * Self.hourHeight) - 4
             let color = Self.color(item)
             let selected = selectedID == item.id
-            // `.interview-calendar-event-stack`：时间 10 着色 → 标题 11.5 Medium → 次要 10，左侧 2px 色条
+            // 事件块：10% 色底、左侧 2px 色条；时间 10 号着色 → 标题 11.5 中粗 → 次要 10 号
             VStack(alignment: .leading, spacing: 2) {
-                Text(format(item.start, "HH:mm") + "–" + format(item.end, "HH:mm")).font(V3.number(10, weight: .medium)).foregroundStyle(color).frame(height: 12)
-                Text(item.company + " · " + item.label).font(V3.sans(11.5, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1).frame(height: 15)
-                if height >= 51 { Text(item.openWindow ? "我的作答计划" : Self.meetingLabel(item.raw)).font(V3.sans(10)).foregroundStyle(V3.sub).lineLimit(1).frame(height: 12) }
+                Text(format(item.start, "HH:mm") + " – " + format(item.end, "HH:mm")).font(.system(size: 10, weight: .medium).monospacedDigit()).foregroundStyle(color).frame(height: 12)
+                Text(item.company + " · " + item.label).font(V3.sans(11.5, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1).frame(height: 14)
+                if height >= 44 { Text(item.openWindow ? "我的作答计划" : Self.meetingLabel(item.raw)).font(V3.sans(10)).foregroundStyle(V3.sub).lineLimit(1).frame(height: 12) }
                 Spacer(minLength: 0)
             }
-            .padding(.top, 5).padding(.bottom, 5).padding(.leading, 12).padding(.trailing, 6)
-            .frame(width: width / CGFloat(lane.count) - 4, height: height, alignment: .topLeading)
-            .background(Color.white.mix(with: color, by: 0.10), in: RoundedRectangle(cornerRadius: 6))
+            .padding(.top, 5).padding(.leading, 12).padding(.trailing, 6)
+            .frame(width: max(12, width / CGFloat(lane.count) - 8), height: height, alignment: .topLeading)
+            .background(Color.white.mix(with: color, by: selected ? 0.16 : 0.10), in: RoundedRectangle(cornerRadius: 6))
             .overlay(alignment: .leading) { RoundedRectangle(cornerRadius: 1).fill(color).frame(width: 2).padding(.vertical, 6).padding(.leading, 4) }
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(selected ? V3.blue : .clear, lineWidth: 1.5))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(selected ? color.opacity(0.45) : .clear, lineWidth: 1))
             .overlay(alignment: .top) { if item.editable { resizeHandle(item, top: true) } }
             .overlay(alignment: .bottom) { if item.editable { resizeHandle(item, top: false) } }
             .clipped()
@@ -422,11 +482,11 @@ struct InterviewScheduleView: View {
             .onTapGesture(count: 2) { open(item) }
             .onTapGesture { selectedID = item.id }
             .draggable(item.editable ? item.id : "")
-            .offset(x: Self.gutter + CGFloat(index) * width + CGFloat(lane.index) * width / CGFloat(lane.count) + 2, y: minute / 60 * Self.hourHeight + 2)
+            .offset(x: Self.gutter + CGFloat(index) * width + CGFloat(lane.index) * width / CGFloat(lane.count) + 4, y: Self.gridInset + minute / 60 * Self.hourHeight + 2)
         }
     }
     private func resizeHandle(_ item: ScheduledInterview, top: Bool) -> some View {
-        Capsule().fill(Self.color(item).opacity(0.6)).frame(width: 18, height: 2).frame(maxWidth: .infinity).frame(height: 5).contentShape(Rectangle())
+        Color.clear.frame(maxWidth: .infinity).frame(height: 5).contentShape(Rectangle())
             .gesture(DragGesture().onEnded { drag in
                 let minutes = Int((drag.translation.height / Self.hourHeight * 60 / 15).rounded()) * 15
                 let from = top ? item.start.addingTimeInterval(Double(minutes) * 60) : item.start
@@ -460,219 +520,15 @@ struct InterviewScheduleView: View {
     }
 }
 
-/// `.interview-calendar-nav-arrows` buttons: 30pt bordered squares and the 今天 pill.
+/// 01 右上翻页按钮：29 方形 / 「今天」51 宽，白底 #E4E4E0 描边、圆角 6.5。
 private struct ScheduleNavStyle: ButtonStyle {
     var square = false
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(V3.sans(12.5)).foregroundStyle(V3.txt)
-            .padding(.horizontal, square ? 0 : 10).frame(minWidth: 30).frame(width: square ? 30 : nil, height: 30)
-            .background(configuration.isPressed ? V3.field : .white, in: RoundedRectangle(cornerRadius: 7))
-            .overlay(RoundedRectangle(cornerRadius: 7).stroke(V3.cl))
+        configuration.label.font(V3.sans(12, weight: .medium)).foregroundStyle(V3.txt)
+            .padding(.horizontal, square ? 0 : 13).frame(width: square ? 29 : nil, height: 29)
+            .background(configuration.isPressed ? V3.field : .white, in: RoundedRectangle(cornerRadius: 6.5))
+            .overlay(RoundedRectangle(cornerRadius: 6.5).strokeBorder(V3.cl))
             .contentShape(Rectangle())
-    }
-}
-
-/// 05.2b–05.2i schedule detail: serif title with a status pill, an art stage, the info card and,
-/// for an open window, the personal answer plan.
-private struct ScheduleDetailDialog: View {
-    let interview: ScheduledInterview
-    let api: any APIClient
-    let close: () -> Void
-    let changed: () -> Void
-    let openRecord: () -> Void
-    @Environment(\.openURL) private var openURL
-    @State private var item: ScheduledInterview?
-    @State private var planSet = false
-    @State private var planStart = Date()
-    @State private var planMinutes = 120
-    @State private var busy = false
-    @State private var error: String?
-    private var current: ScheduledInterview { item ?? interview }
-    private var isWindow: Bool { current.openWindow }
-    private var stage: String { current.label }
-    private var isExam: Bool { stage.contains("笔试") }
-    private var isTest: Bool { stage.contains("测评") }
-    private var isAI: Bool { stage.lowercased().contains("ai") }
-    private var cancelled: Bool { current.raw.text("status") == "cancelled" }
-    private var completed: Bool { current.raw.text("status") == "completed" }
-    private var active: Bool { !cancelled && !completed && current.start <= Date() && current.end > Date() }
-    private var canEdit: Bool { current.editable }
-    private var status: (String, Color, Color) {
-        if completed { return ("已完成", V3.green, V3.greenSoft) }
-        if cancelled { return ("已取消", V3.fnt, V3.field) }
-        if isWindow { return ("待完成", V3.orange, V3.orangeSoft) }
-        if active { return ("进行中", V3.blue, V3.blueSoft) }
-        return (isExam || isAI ? "待参加" : "待面试", V3.blue, V3.blueSoft)
-    }
-    private func format(_ date: Date, _ pattern: String) -> String { let f = Beijing.formatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = pattern; return f.string(from: date) }
-    private var relative: String {
-        let until = current.start.timeIntervalSinceNow
-        if !isWindow && !cancelled && !completed && until > 0 {
-            return until < 86400 ? " · 还有 \(Int(until / 3600)) 小时 \(Int(until.truncatingRemainder(dividingBy: 3600) / 60)) 分" : " · \(Int((until / 86400).rounded(.up))) 天后"
-        }
-        return isWindow && !cancelled && !completed ? " · 截止前任选时间完成" : ""
-    }
-    private var meetingURL: URL? { URL(string: current.raw.text("meeting_url")).flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil } }
-    private var kindWord: String { isExam ? "笔试" : isTest ? "测评" : "面试" }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 10) {
-                    Text(current.company + " · " + stage).font(V3.serif(20)).foregroundStyle(V3.txt).lineLimit(1)
-                    Text(status.0).font(V3.sans(11, weight: .medium)).foregroundStyle(status.1).padding(.horizontal, 8).frame(height: 22).background(status.2, in: Capsule())
-                    Spacer(minLength: 0)
-                    Button(action: close) { Image(systemName: "xmark").font(.system(size: 12, weight: .medium)).foregroundStyle(V3.fnt) }.buttonStyle(.plain).accessibilityLabel("关闭")
-                }.frame(height: 29)
-                Text(current.title + relative).font(V3.sans(12.5)).foregroundStyle(V3.sub).padding(.top, 5)
-                if busy && item == nil { Text("正在加载完整面试详情…").font(V3.sans(11.5)).foregroundStyle(V3.fnt).padding(.top, 8) }
-                V3DotStage(height: 160) { art }.padding(.top, 18)
-                rows.padding(.top, 20)
-                if isWindow { planCard.padding(.top, 12) }
-                if !isWindow && completed { note("复盘写在求职记录里，这一场不能再拖动改期。", tone: V3.green) }
-                if !isWindow && current.raw.text("mode") == "onsite" && !completed && !cancelled { note("现场面试没有会议链接，地点和时间都在求职记录里改。", tone: V3.fnt) }
-                if let error { Text(error).font(V3.sans(12)).foregroundStyle(V3.red).padding(.top, 10) }
-            }.padding(.horizontal, 32).padding(.top, 28).padding(.bottom, 28)
-            HStack(spacing: 10) {
-                if primary != nil || (isWindow && canEdit) {
-                    Button { openRecord() } label: { HStack(spacing: 4) { Text("查看求职记录"); Image(systemName: "arrow.right").font(.system(size: 10)) } }.buttonStyle(CareerActionStyle(kind: .link))
-                }
-                Spacer()
-                if isWindow && canEdit && !current.raw.text("answer_plan_start_at").isEmpty {
-                    Button("清除计划") { Task { await savePlan(clear: true) } }.buttonStyle(V3ButtonStyle(kind: .ghost, height: 36)).disabled(busy)
-                }
-                Button("关闭", action: close).buttonStyle(V3ButtonStyle(kind: .ghost, height: 36))
-                if let primary {
-                    Button(primary.0) { primary.1() }.buttonStyle(V3ButtonStyle(kind: .dark, height: 36)).disabled(busy)
-                } else {
-                    Button("查看求职记录") { openRecord() }.buttonStyle(V3ButtonStyle(kind: .dark, height: 36))
-                }
-            }.padding(.horizontal, 32).frame(height: 76).overlay(alignment: .top) { Rectangle().fill(V3.line).frame(height: 1) }
-        }
-        .task {
-            if let start = CareerApplication.date(interview.raw.text("answer_plan_start_at")) {
-                planSet = true; planStart = start
-                if let end = CareerApplication.date(interview.raw.text("answer_plan_end_at")) { planMinutes = max(1, Int(end.timeIntervalSince(start) / 60)) }
-            } else { planStart = max(interview.start, Date()) }
-            busy = true
-            do {
-                let data = try await api.careerRequest(path: "/api/interview-sessions/\(interview.id)", method: "GET", query: [:], body: nil)
-                try Task.checkCancellation()
-                item = ScheduledInterview(data["session"] ?? .null)
-            } catch { /* The list copy stays visible. */ }
-            busy = false
-        }
-    }
-    private var primary: (String, () -> Void)? {
-        guard !cancelled && !completed else { return nil }
-        if isWindow && canEdit { return ("保存作答计划", startPlanSave) }
-        if let meetingURL { return (isExam ? "进入笔试" : isAI ? "进入 AI 面试" : "进入会议", { openURL(meetingURL) }) }
-        return nil
-    }
-    private var rows: some View {
-        let interviewer = [current.raw.text("interviewer_name"), current.raw.text("interviewer_title")].filter { !$0.isEmpty }
-        let person = interviewer.count == 2 ? "\(interviewer[0])（\(interviewer[1])）" : interviewer.first ?? "暂未填写"
-        var list: [(String, String, String, Bool, Bool)] = [
-            isWindow ? ("calendar", "官方时段", format(current.start, "MM-dd HH:mm") + " – " + format(current.end, "MM-dd HH:mm"), true, false)
-                : ("clock", cancelled ? "原定时间" : "时间", format(current.start, "M月d日（EEE） HH:mm") + " – " + format(current.end, "HH:mm"), !cancelled, false),
-            ("user", isExam || isTest ? "联系人" : "面试官", person, false, person == "暂未填写"),
-            ("brief", "形式", ["video": "视频面试", "onsite": "现场面试", "phone": "电话面试"][current.raw.text("mode")] ?? "其他方式", false, false),
-        ]
-        if !current.raw.text("location").isEmpty { list.append(("flag", "地点", current.raw.text("location"), false, false)) }
-        if !current.raw.text("meeting_url").isEmpty { list.append(("link", (kindWord == "面试" ? "会议" : kindWord) + "链接", current.raw.text("meeting_url"), false, false)) }
-        if cancelled && !current.raw.text("cancellation_reason").isEmpty { list.append(("text", "取消原因", current.raw.text("cancellation_reason"), false, false)) }
-        return VStack(spacing: 0) {
-            ForEach(Array(list.enumerated()), id: \.offset) { index, row in
-                if index > 0 { Rectangle().fill(V3.line).frame(height: 1) }
-                HStack(spacing: 10) {
-                    CareerIcon(name: row.0, size: 14, template: true).foregroundStyle(V3.fnt)
-                    Text(row.1).font(V3.sans(12)).foregroundStyle(V3.fnt)
-                    Spacer(minLength: 12)
-                    if row.0 == "link", let url = URL(string: row.2) {
-                        Link(destination: url) { HStack(spacing: 4) { Text(row.2).lineLimit(1).truncationMode(.middle); CareerIcon(name: "link", size: 12, template: true) } }
-                            .font(V3.number(12.5, weight: .regular)).foregroundStyle(Color(hex: 0x2E53AA))
-                    } else {
-                        Text(row.2).font(V3.sans(12.5, weight: row.3 ? .medium : .regular)).foregroundStyle(row.4 ? V3.fnt : V3.txt).lineLimit(1).textSelection(.enabled)
-                    }
-                }.padding(.horizontal, 16).frame(minHeight: 46)
-            }
-        }
-        .background(.white, in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(V3.cl))
-    }
-    private var planCard: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("我的作答计划").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
-                Text("仅作为个人时间安排，不会改变官方截止时间。").font(V3.sans(11)).foregroundStyle(V3.fnt)
-            }
-            Spacer(minLength: 8)
-            if canEdit {
-                DatePicker("计划作答时间", selection: Binding(get: { planStart }, set: { planStart = $0; planSet = true; error = nil }), in: current.start...max(current.start, current.end))
-                    .labelsHidden().datePickerStyle(.field).frame(width: 150)
-                Picker("作答时长", selection: $planMinutes) { ForEach(Array(Set([30, 45, 60, 90, 120, 180, planMinutes])).sorted(), id: \.self) { Text("\($0) 分钟").tag($0) } }
-                    .labelsHidden().frame(width: 96)
-            } else {
-                Text(planSet ? format(planStart, "MM-dd HH:mm") + " · \(planMinutes) 分钟" : "未安排").font(V3.number(12, weight: .regular)).foregroundStyle(V3.sub)
-            }
-        }
-        .padding(.horizontal, 16).frame(minHeight: 64)
-        .background(.white, in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(V3.cl))
-    }
-    private func note(_ text: String, tone: Color) -> some View {
-        HStack(spacing: 8) { Circle().fill(tone).frame(width: 6, height: 6); Text(text).font(V3.sans(11.5)).foregroundStyle(V3.sub) }.padding(.top, 16)
-    }
-    /// `ScheduleArt`: a date card and a slot card for the stage kind.
-    private var art: some View {
-        HStack(spacing: 18) {
-            VStack(spacing: 0) {
-                Text("\(Beijing.calendar.component(.month, from: current.start)) 月").font(V3.sans(10)).foregroundStyle(.white).frame(maxWidth: .infinity).frame(height: 23).background(V3.txt)
-                Text(format(current.start, "dd")).font(V3.number(30)).foregroundStyle(V3.txt).frame(height: 44)
-                Text(isWindow ? format(current.end, "HH:mm") + " 截止" : format(current.start, "EEE HH:mm")).font(V3.sans(10)).foregroundStyle(V3.sub)
-                Spacer(minLength: 0)
-            }
-            .frame(width: 82, height: 100).background(.white).clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(V3.cl)).shadow(color: .black.opacity(0.07), radius: 8, y: 6)
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 7) {
-                    CareerIcon(name: cancelled ? "flag" : completed ? "check" : isWindow ? "edit" : isAI ? "spark" : isExam ? "edit" : current.raw.text("mode") == "onsite" ? "flag" : "user", size: 14, template: true)
-                        .foregroundStyle(status.1)
-                    Text(cancelled ? "已取消" : completed ? "已完成" : isWindow ? (isTest ? "在线测评" : "作答窗口") : isAI ? "AI 面试" : isExam ? "笔试" : current.raw.text("mode") == "onsite" ? "现场面试" : "视频面试")
-                        .font(V3.sans(11, weight: .medium)).foregroundStyle(V3.txt)
-                }
-                Text(isWindow ? format(current.start, "MM-dd") + " 开放 · " + format(current.end, "MM-dd") + " 截止" : format(current.start, "HH:mm") + " – " + format(current.end, "HH:mm"))
-                    .font(V3.sans(10)).foregroundStyle(V3.fnt)
-                if isWindow {
-                    let total = max(1, current.end.timeIntervalSince(current.start))
-                    let ratio = min(1, max(0, Date().timeIntervalSince(current.start) / total))
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(V3.field).frame(width: 120, height: 4)
-                        Capsule().fill(V3.orange).frame(width: 120 * ratio, height: 4)
-                    }
-                    Text(current.end > Date() ? "还剩 \(max(1, Int((current.end.timeIntervalSinceNow / 86400).rounded(.up)))) 天" : "已截止").font(V3.sans(10)).foregroundStyle(V3.sub)
-                }
-            }
-            .padding(14).frame(minWidth: 140, alignment: .leading)
-            .background(.white, in: RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(V3.cl))
-        }.accessibilityHidden(true)
-    }
-    private func startPlanSave() { Task { await savePlan(clear: false) } }
-    private func savePlan(clear: Bool) async {
-        guard canEdit, !busy else { return }
-        let end = planStart.addingTimeInterval(Double(planMinutes) * 60)
-        if !clear && (planStart < current.start || end > current.end) { error = "作答计划必须完整落在官方开放时间内。"; return }
-        busy = true; error = nil
-        do {
-            let f = ISO8601DateFormatter()
-            let body: JSONValue = .object(["base_lock_version": current.raw["lock_version"] ?? .number(1),
-                                           "answer_plan_start_at": clear ? .null : .string(f.string(from: planStart)),
-                                           "answer_plan_end_at": clear ? .null : .string(f.string(from: end))])
-            _ = try await api.careerRequest(path: "/api/interview-sessions/\(current.id)/answer-plan", method: "PUT", query: [:], body: body)
-            changed()
-        } catch {
-            if case APIError.server(let status, let code) = error { self.error = status == 409 ? "记录已更新，请关闭后刷新再试（\(code)）。" : "保存失败（\(code)）。" }
-            else { self.error = "连接失败，作答计划尚未确认保存。" }
-        }
-        busy = false
     }
 }
 

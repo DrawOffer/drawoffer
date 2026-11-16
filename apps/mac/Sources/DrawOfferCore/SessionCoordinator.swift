@@ -168,6 +168,29 @@ public actor SessionCoordinator {
         return result.user
     }
 
+    /// 开发/本地环境的邮箱密码登录：服务端校验后返回一次性授权码，再用本地 PKCE verifier 走 browser/exchange 换会话。
+    public func passwordLogin(email: String, password: String, clientVersion: String) async throws -> User {
+        let current = UUID()
+        try await signOut(generation: current)
+        guard generation == current else { throw APIError.unauthorized }
+        disabled = false
+        let verifier = try randomToken(32)
+        let challenge = base64url(Data(SHA256.hash(data: Data(verifier.utf8))))
+        struct Code: Decodable, Sendable { let code: String }
+        let code = try await transport.send(Code.self, path: "/api/auth/desktop/password", body: [
+            "platform": "macos", "client_version": clientVersion, "code_challenge": challenge,
+            "code_challenge_method": "S256", "email": email, "password": password,
+        ])
+        guard generation == current, !disabled else { throw APIError.unauthorized }
+        let result = try await transport.send(DesktopTokens.self, path: "/api/auth/desktop/browser/exchange", body: [
+            "code": code.code, "code_verifier": verifier, "request_id": UUID().uuidString.lowercased(),
+        ])
+        try Task.checkCancellation()
+        guard generation == current, !disabled else { throw APIError.unauthorized }
+        try persist(result, expectedAccount: nil)
+        return result.user
+    }
+
     private func randomToken(_ count: Int) throws -> String {
         var random = [UInt8](repeating: 0, count: count)
         guard SecRandomCopyBytes(kSecRandomDefault, random.count, &random) == errSecSuccess else { throw APIError.invalidResponse }

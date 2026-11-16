@@ -72,7 +72,7 @@ struct CareerAddContentSheet: View {
                             .overlay(RoundedRectangle(cornerRadius: 10).stroke(CareerPalette.border))
                         }
                     }
-                } else { ProgressView("正在加载资料库…").font(LibraryTypography.sans(12)) }
+                } else { V3Loading("正在加载资料库…").font(LibraryTypography.sans(12)) }
             case .text:
                 CareerTextArea(title: "", text: $text, placeholder: "粘贴\(recordKind)过程、逐字稿或整理后的文字记录…", minHeight: 220)
             }

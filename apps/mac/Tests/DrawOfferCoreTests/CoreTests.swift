@@ -7,14 +7,22 @@ import Testing
     await #expect(throws: APIError.unauthorized) { try await api.listResumeTemplates() }
 }
 
-@Test func mockTemplatesCarryLayoutPlans() async throws {
-    let templates = try await MockAPIClient(signedIn: true).listResumeTemplates()
+/// 客户端不再随包携带模板；测试直接读仓库里的共享样例。
+private func fixtureTemplates() throws -> [ResumeTemplate] {
+    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("../../../native/shared/fixtures/resume-templates.json").standardizedFileURL
+    struct Envelope: Decodable { let templates: [ResumeTemplate] }
+    return try JSONDecoder().decode(Envelope.self, from: Data(contentsOf: url)).templates
+}
+
+@Test func fixtureTemplatesCarryLayoutPlans() throws {
+    let templates = try fixtureTemplates()
     #expect(templates.count == 9)
     #expect(templates.allSatisfy { $0.layoutPlan != nil })
 }
 
 @Test func renderRequestMatchesWebPresentationRule() async throws {
-    let template = try #require(try await MockAPIClient(signedIn: true).listResumeTemplates().first)
+    let template = try #require(try fixtureTemplates().first)
     let encoded = try JSONEncoder().encode(template.renderRequest())
     let request = try JSONDecoder().decode(JSONValue.self, from: encoded)
     #expect(request["protocol_version"] == .number(1))
@@ -74,15 +82,8 @@ private actor DelayedIdentityAPI: APIClient {
     #expect(WorkspaceSection.sidebar.map(\.title) == ["首页", "我的简历", "简历模板", "投递看板", "面试日程", "模拟面试", "岗位广场", "资料库"])
 }
 
-@Test func guestExamplesWorkWithoutGrantingAccountAccess() async throws {
+@Test func guestCannotListTemplates() async throws {
     let api = MockAPIClient()
-    let templates = try GuestTemplates.load()
-    #expect(templates.count == 9)
-    for template in templates {
-        let paper = try await GuestTemplates.prepare(template)
-        #expect(paper.missingImageCount == 0)
-        #expect(paper.request.layoutPlan != nil)
-    }
     await #expect(throws: APIError.unauthorized) { try await api.listResumeTemplates() }
     #expect(try await api.currentUser() == nil)
 }

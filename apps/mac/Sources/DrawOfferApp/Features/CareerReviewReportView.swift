@@ -40,7 +40,7 @@ struct CareerReviewReportView: View {
             VStack(alignment: .leading, spacing: 24) {
                 if session.text("id").isEmpty {
                     CareerBreadcrumb(back: "← 阶段记录", current: "AI 分析报告", action: back)
-                    if loading { ProgressView("正在加载报告…").font(LibraryTypography.sans(12)) }
+                    if loading { V3Loading("正在加载报告…").font(LibraryTypography.sans(12)) }
                     if let error { HStack { Text(error).foregroundStyle(CareerPalette.red); Button("重试") { refreshed = UUID() }.buttonStyle(CareerActionStyle()) } }
                 } else {
                     header
@@ -67,7 +67,7 @@ struct CareerReviewReportView: View {
                 await load(quiet: true)
             }
         }
-        .sheet(isPresented: $textOpen) {
+        .centeredSheet(isPresented: $textOpen) {
             CareerSheet(title: "文字记录与素材", subtitle: session.text("stage_label"), width: 720) {
                 if text.isEmpty { Text("还没有文字记录。").foregroundStyle(CareerPalette.hint) }
                 else { Text(text).font(LibraryTypography.sans(13)).lineSpacing(3).textSelection(.enabled) }

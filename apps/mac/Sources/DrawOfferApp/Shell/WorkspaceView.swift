@@ -16,7 +16,7 @@ struct WorkspaceView: View {
     }
     @State private var loginRequest: LoginRequest?
     @State private var pendingCreateKey: String?
-    private struct ChatTarget: Equatable { let token = UUID(); let sessionID: String?; let initial: String?; var model: String? = nil }
+    private struct ChatTarget: Equatable { let token = UUID(); let sessionID: String?; let initial: String?; var model: String? = nil; var draft: String? = nil }
     @State private var chat: ChatTarget?
     @State private var agentSessions = AgentSessionsModel()
     @State private var focusResumeID: String?
@@ -27,12 +27,17 @@ struct WorkspaceView: View {
     @State private var router = WorkspaceRouter()
     @State private var announcements = AnnouncementCenter()
     @State private var plansPresented = false
+    @State private var careerProfile = false
     /// 首页星图“去练”带过去的练习焦点（模拟面试首页读取后清空）。
     @State private var mockFocus: PracticeFocus?
     @State private var mockFullScreen = false
+    /// 首页点开某一场模拟面试（面试纸 / 报告纸 / “看这一场的报告”）
+    @State private var mockSession: String?
     /// 首页“选择文件”导入简历：我的简历页收到后打开导入。
     @State private var importRequest: UUID?
     @State private var openApplication: String?
+    /// 第 17 页：侧栏可以收起（⌃⌘S 或左上角开关），收起后开关浮在内容区同一位置。
+    @AppStorage("sidebarVisible") private var sidebarVisible = true
 
     private var user: User? {
         if case .signedIn(let user) = session.phase { return user }
@@ -46,18 +51,23 @@ struct WorkspaceView: View {
     #else
     private let fixture = false
     #endif
-    /// 编辑器铺满窗口；模拟面试的场次画面只是不显示侧栏，内容卡四边仍留 12（Web `.v3-window.is-bare .v3-content { left: 12px }`）。
+    /// 编辑器铺满窗口（工具栏与红绿灯同一行）；模拟面试的场次画面只是不显示侧栏。
     private var edge: Bool { bare && selection == .resumes }
 
     var body: some View {
-        HStack(spacing: bare ? 0 : 13) {
-            if !bare {
+        HStack(spacing: 0) {
+            if !bare && sidebarVisible {
             WorkspaceSidebar(selection: $selection, activeChatID: selection == .assistant ? chat?.sessionID : nil, sessions: agentSessions,
                              openChat: { id in chat = ChatTarget(sessionID: id, initial: nil); selection = .assistant },
-                             newChat: { chat = nil; homeDraft = ""; selection = .home },
+                             newChat: { chat = ChatTarget(sessionID: nil, initial: nil); selection = .assistant },
                              requestLogin: { requestLogin() },
                              openPlans: { plansPresented = true },
-                             chatDeleted: { id in if chat?.sessionID == id { chat = nil; selection = .home } })
+                             openCareerProfile: { careerProfile = true; selection = .account },
+                             chatDeleted: { id in if chat?.sessionID == id { chat = nil; selection = .home } },
+                             toggleSidebar: { withAnimation(.easeOut(duration: 0.18)) { sidebarVisible = false } })
+                    .transition(.move(edge: .leading))
+                // 单层窗口（NavigationSplitView 观感）：侧栏贴满左侧到顶，和内容之间只留 1px 分隔线。
+                Rectangle().fill(.black.opacity(0.08)).frame(width: 1).accessibilityHidden(true)
             }
             VStack(spacing: 0) {
                 if let message = session.errorMessage {
@@ -70,33 +80,37 @@ struct WorkspaceView: View {
                 }
                 mainContent
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(.white).clipShape(RoundedRectangle(cornerRadius: edge ? 0 : 16))
-                .overlay(RoundedRectangle(cornerRadius: edge ? 0 : 16).stroke(edge ? .clear : Color(hex: 0xE4E4E0)))
-                .padding(.vertical, edge ? 0 : 12).padding(.trailing, edge ? 0 : 12).padding(.leading, bare && !edge ? 12 : 0)
-        }.background(Color(hex: 0xF1F1EF))
-        .alert("安装浏览器插件", isPresented: $pluginNotice) {
+                .background(.white)
+                // 模拟面试场次画面不显示侧栏：顶部让出红绿灯一行；其余内容直接铺满窗口，不再套圆角描边卡片。
+                .padding(.top, bare && !edge ? 40 : 0)
+                .overlay(alignment: .topLeading) {
+                    if !bare && !sidebarVisible {
+                        SidebarToggleButton { withAnimation(.easeOut(duration: 0.18)) { sidebarVisible = true } }
+                            .padding(.leading, 88).padding(.top, 2)
+                    }
+                }
+        }.background(.white).ignoresSafeArea(.container, edges: .top)
+        .centeredAlert("安装浏览器插件", isPresented: $pluginNotice) {
             Button("在浏览器打开") { WebBridge.open("/career/applications", api: session.api) }
             Button("知道了", role: .cancel) {}
         } message: { Text("浏览器插件在 Chrome / Edge 中使用，安装包与安装说明在 Web 的岗位看板页面提供。") }
-        .alert("此功能尚未开放", isPresented: $featureNotice) {
+        .centeredAlert("此功能尚未开放", isPresented: $featureNotice) {
             Button("知道了", role: .cancel) {}
         } message: { Text("此功能将在后续版本开放。你已输入的内容会保留，可以继续浏览模板。") }
-        .sheet(item: $loginRequest) { request in
-            VStack(spacing: 12) {
-                HStack {
-                    Text(request.reason).font(.headline)
-                    Spacer()
-                    Button("暂不登录") { loginRequest = nil }
-                }.padding(20)
-                SignInView()
-            }.frame(width: 520, height: 560)
+        // 登录按 macOS 稿 01 页「02 · 登录页」做成整窗页面（盖住侧栏），右上角「暂不登录」回到游客模式
+        .overlay {
+            if loginRequest != nil {
+                SignInView(fullPage: true, dismiss: { loginRequest = nil }).transition(.opacity)
+            }
         }
-        .environment(router)
-        .environment(announcements)
-        .sheet(isPresented: Binding(get: { announcements.detail != nil }, set: { if !$0 { announcements.detail = nil } })) {
+        .centeredSheet(isPresented: Binding(get: { announcements.detail != nil }, set: { if !$0 { announcements.detail = nil } })) {
             AnnouncementDetailSheet().environment(announcements)
         }
-        .sheet(isPresented: $plansPresented) { PlansSheet() }
+        .centeredSheet(isPresented: $plansPresented) { PlansSheet() }
+        // 所有弹窗与确认框画在整个窗口正中（设计稿 11-16）；浮层也要拿到 router 与公告，所以宿主放在这两个 environment 里面
+        .modalHost()
+        .environment(router)
+        .environment(announcements)
         .onAppear { if fixture { selection = .mock } }
         .task(id: user?.id ?? "") {
             announcements.reset(account: user?.id ?? "")
@@ -106,13 +120,25 @@ struct WorkspaceView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await announcements.refresh(api: session.api); announcements.autoOpenImportant(api: session.api) }
         }
+        .onChange(of: selection) { old, new in
+            // 未登录只开放首页：点其他栏目留在原处，直接弹出整窗登录页
+            if user == nil, let new, new != .home {
+                selection = old == nil || old == new ? .home : old
+                requestLogin()
+                return
+            }
+            if new != .account { careerProfile = false }
+        }
+        .onChange(of: user == nil) { _, guest in if guest { selection = .home } }
         .onChange(of: router.pending) {
             switch router.take() {
             case .section(let section): selection = section
-            case .draft(let text): homeDraft = String(text.prefix(4000)); selection = .home
+            case .draft(let text): chat = ChatTarget(sessionID: nil, initial: nil, draft: String(text.prefix(4000))); selection = .assistant
             case .editResume(let id): editResumeID = id; selection = .resumes
             case .plans: plansPresented = true
             case .application(let id): openApplication = id; selection = .jobs
+            case .mock(let focus): mockFocus = focus; selection = .mock
+            case .mockSession(let id): mockSession = id; selection = .mock
             case nil: break
             }
         }
@@ -148,21 +174,16 @@ struct WorkspaceView: View {
         switch selection {
         case .home, nil:
             if user != nil {
-                // 登录后与 Web 一致：首页是“哪里要提升”星图；游客仍显示引导首页。
-                HomeImproveView(draft: $homeDraft,
-                    send: startChat,
-                    practice: { focus in mockFocus = focus; selection = .mock },
-                    editResume: { editResumeID = $0; selection = .resumes },
-                    navigate: { selection = $0 },
-                    importResume: { importRequest = UUID(); selection = .resumes })
+                // macOS 设计稿 02A：新用户 / 练第一场 / 有记忆三种首页，按长期记忆和模拟面试场次自动选
+                HomeMemoryView(editResume: { editResumeID = $0; selection = .resumes },
+                               practice: { focus in mockFocus = focus; selection = .mock },
+                               openMock: { id, _ in mockSession = id; selection = .mock },
+                               navigate: { selection = $0 })
             } else {
-                AssistantHomeView(nickname: nil, draft: $homeDraft,
-                    browse: { selection = .templates }, requireAccount: { requestLogin(reason: "登录 DrawOffer；你的输入会保留。") }, showPlugin: { pluginNotice = true },
-                    navigate: { selection = $0 }, editResume: { editResumeID = $0; selection = .resumes },
-                    send: { text in chat = ChatTarget(sessionID: nil, initial: text); homeDraft = ""; selection = .assistant })
+                GuestHomeView(requireAccount: { requestLogin(reason: "登录 DrawOffer，开始你的第一份简历。") })
             }
         case .datasets: DatasetLibraryView(requireAccount: { requestLogin(reason: "登录后管理你的资料库。") })
-                case .mock: MockInterviewView(requireAccount: { requestLogin(reason: "登录后开始模拟面试。") }, showSchedule: { selection = .schedule }, navigate: { selection = $0 }, incomingFocus: $mockFocus, fullScreen: $mockFullScreen)
+                case .mock: MockInterviewView(requireAccount: { requestLogin(reason: "登录后开始模拟面试。") }, showSchedule: { selection = .schedule }, navigate: { selection = $0 }, incomingFocus: $mockFocus, incomingSession: $mockSession, fullScreen: $mockFullScreen)
         case .schedule: InterviewScheduleView(requireAccount: { requestLogin(reason: "登录后管理面试安排。") })
         case .jobs: JobsBoardView(requireAccount: { requestLogin(reason: "登录后管理岗位和求职进度。") }, openApplication: $openApplication)
         case .templates:
@@ -177,6 +198,7 @@ struct WorkspaceView: View {
                                   created: { _ in Task { await agentSessions.load(api: session.api, account: user?.id ?? "") } },
                                   deleted: { self.chat = nil; selection = .home; Task { await agentSessions.load(api: session.api, account: user?.id ?? "") } },
                                   sessionsChanged: { Task { await agentSessions.load(api: session.api, account: user?.id ?? "") } },
+                                  initialModelID: chat.model, initialDraft: chat.draft,
                                   runningChanged: { id, running in
                                       if running { agentSessions.runningIDs.insert(id) } else { agentSessions.runningIDs.remove(id) }
                                   })
@@ -186,7 +208,7 @@ struct WorkspaceView: View {
             if user != nil { JobPoolView(openApplication: { openApplication = $0; selection = .jobs }) }
             else { PlaceholderView(section: .opportunities) }
         case .account:
-            if user != nil { AccountSection() } else { PlaceholderView(section: .account) }
+            if user != nil { AccountSection(career: $careerProfile) } else { PlaceholderView(section: .account) }
         case let section?: PlaceholderView(section: section)
         }
     }
@@ -208,8 +230,8 @@ struct WebActionStyle: ButtonStyle {
     @Environment(\.isEnabled) private var enabled
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.font(.system(size: 13, weight: .medium))
-            .foregroundStyle(.white).opacity(enabled ? 1 : 0.5).padding(.horizontal, 16).padding(.vertical, 10)
-            .background(Color(hex: 0x17191C).opacity(configuration.isPressed ? 0.8 : 1), in: RoundedRectangle(cornerRadius: 8))
+            .foregroundStyle(.white).opacity(enabled ? 1 : 0.5).padding(.horizontal, 14).frame(height: 32)
+            .background(Color(hex: 0x17191C).opacity(configuration.isPressed ? 0.8 : 1), in: RoundedRectangle(cornerRadius: 6))
     }
 }
 

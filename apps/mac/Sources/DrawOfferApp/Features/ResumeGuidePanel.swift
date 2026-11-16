@@ -3,8 +3,8 @@ import DrawOfferCore
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 新建简历的引导（Web `guide/ResumeGuidePanel.tsx`）：纸面在左，引导在右。每一步一行小字进度、一个大标题、
-/// 一句说明、细线列表和唯一的黑色主按钮。表单直写的步骤（求职意向、基本信息、教育、证书与获奖）走 `guide/writes`；
+/// 新建简历的引导（Figma 03 页分区 05「对话版」，Web `guide/ResumeGuidePanel.tsx`）：纸面在左，引导在纸右边一列。
+/// 每一步是职绘问一句（头像 + 气泡，补充一句灰字），下面是这一步要填的格子、快捷回答胶囊和输入框；编辑器里不用黑色按钮。表单直写的步骤（求职意向、基本信息、教育、证书与获奖）走 `guide/writes`；
 /// 技能、经历、个人简介由 AI 按写作法则写好直接上纸；资料一步把文件交给引导对话读一遍，只用来预填后面的表单。
 /// 步骤由服务端记录（`PATCH /api/resumes/{id}/guide`，版本冲突时重新读取）。
 struct ResumeGuidePanel: View {
@@ -84,23 +84,23 @@ struct ResumeGuidePanel: View {
     }
 
     var body: some View {
-        // Web `.wb3-guide`：440 宽、没有卡片框和白底，内边距 4/2/32；关闭靠工具卡片「引导」或 Esc。
+        // 分区 05：400 宽一列、没有卡片框和白底；关闭靠纸面上沿「引导」或 Esc。
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     content
-                    if let notice { Text(notice).font(V3.sans(13)).foregroundStyle(V3.red).padding(.top, 20) }
+                    if let notice { Text(notice).font(V3.sans(12.5)).foregroundStyle(V3.red).padding(.top, 20).padding(.leading, ResumeTalk.indent) }
                     if notice == nil, let lastWrite, !busy, !running {
                         HStack(spacing: 8) {
                             Image(systemName: "checkmark").font(.system(size: 11))
                             Text("\(lastWrite.label)已写进左边")
                             Button("撤销") { Task { await undoLast() } }.buttonStyle(.plain).foregroundStyle(V3.blue)
-                        }.font(V3.sans(13)).foregroundStyle(V3.fnt).padding(.top, 20)
+                        }.font(V3.sans(12.5)).foregroundStyle(ResumeTalk.note).padding(.top, 20).padding(.leading, ResumeTalk.indent)
                     }
-                }.padding(.horizontal, 2).padding(.top, 4).padding(.bottom, 32).frame(maxWidth: .infinity, alignment: .leading)
+                }.padding(.top, 12).padding(.bottom, 32).frame(maxWidth: .infinity, alignment: .leading)
             }.scrollIndicators(.never)
         }
-        .frame(width: 440).frame(maxHeight: .infinity, alignment: .top)
+        .frame(width: ResumeTalk.columnWidth).frame(maxHeight: .infinity, alignment: .top)
         .accessibilityElement(children: .contain).accessibilityLabel("引导创建简历")
         .task {
             welcome = guide.text("status") == "active" && step != "materials"
@@ -119,6 +119,7 @@ struct ResumeGuidePanel: View {
 
     // MARK: Step chrome
 
+    /// 一步：顶上一行小字（上一步 · 第几步），职绘问一句（头像 + 白底气泡，补充灰字），下面是这一步的格子与快捷回答（缩进到气泡左缘）。
     private func stepView<Content: View>(_ step: String, title: String, note: String? = nil, thinking: Bool = false,
                                          back: (() -> Void)? = nil, backLabel: String = "上一步", @ViewBuilder content: () -> Content) -> some View {
         let index = (G.steps.firstIndex(of: step) ?? 0) + 1
@@ -127,42 +128,31 @@ struct ResumeGuidePanel: View {
                 if let back { Button("‹ \(backLabel)", action: back).buttonStyle(.plain) } else { Spacer().frame(width: 1) }
                 Spacer()
                 Text("\(G.labels[step] ?? "") · \(index) / \(G.steps.count)")
-            }.font(V3.sans(13)).foregroundStyle(V3.fnt).frame(minHeight: 20)
-            HStack(spacing: 4) {
-                ForEach(Array(G.steps.enumerated()), id: \.offset) { position, _ in
-                    RoundedRectangle(cornerRadius: 1.5).fill(position < index ? V3.txt : V3.hl).frame(height: 3)
-                }
-            }.padding(.top, 12).accessibilityHidden(true)
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(title).font(V3.sans(28, weight: .bold)).tracking(-0.28).foregroundStyle(V3.txt).lineHeight(28, 38).fixedSize(horizontal: false, vertical: true)
-                if thinking { ProgressView().controlSize(.small) }
-            }.padding(.top, 52)
-            if let note { Text(note).font(V3.sans(15)).foregroundStyle(V3.sub).lineHeight(15, 24).fixedSize(horizontal: false, vertical: true).padding(.top, 8) }
-            content()
-        }.padding(.top, 72)
+            }.font(V3.sans(12)).foregroundStyle(ResumeTalk.note).frame(minHeight: 18).padding(.leading, ResumeTalk.indent)
+            ResumeTalkAssistant(text: title, note: note, thinking: thinking).padding(.top, 14)
+            VStack(alignment: .leading, spacing: 0) { content() }.padding(.leading, ResumeTalk.indent)
+        }
     }
 
+    /// 快捷回答一排：主动作在前，其余是同样的白底胶囊（编辑器里不用黑色按钮）。
     private func actions(left: AnyView? = nil, primary: String? = nil, disabled: Bool = false, onPrimary: (() -> Void)? = nil) -> some View {
-        HStack {
-            left
-            Spacer()
-            if let primary, let onPrimary {
-                Button(primary, action: onPrimary).buttonStyle(GuidePrimaryStyle()).disabled(disabled)
-            }
-        }.frame(minHeight: 44).padding(.top, 40)
+        ResumeTalkFlow(spacing: 9) {
+            if let primary, let onPrimary { ResumeTalkChip(title: primary, disabled: disabled, action: onPrimary) }
+            if let left { left }
+        }.padding(.top, 22)
     }
 
     private func textLink(_ title: String, disabled: Bool = false, _ action: @escaping () -> Void) -> AnyView {
-        AnyView(Button(title, action: action).buttonStyle(.plain).font(V3.sans(15)).foregroundStyle(V3.sub).disabled(disabled))
+        AnyView(ResumeTalkChip(title: title, disabled: disabled, action: action))
     }
 
     private func row<Content: View>(_ label: String, hint: String? = nil, @ViewBuilder content: () -> Content) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                Text(label).font(V3.sans(15)).foregroundStyle(V3.txt).frame(width: 92, alignment: .leading)
-                content().font(V3.sans(15))
-                if let hint { Text(hint).font(V3.sans(13)).foregroundStyle(V3.fnt) }
-            }.frame(minHeight: 50)
+                Text(label).font(V3.sans(13)).foregroundStyle(V3.sub).frame(width: 72, alignment: .leading)
+                content().font(V3.sans(13.5))
+                if let hint { Text(hint).font(V3.sans(12)).foregroundStyle(ResumeTalk.note) }
+            }.frame(minHeight: 44)
             Divider().overlay(V3.cl)
         }
     }
@@ -176,7 +166,7 @@ struct ResumeGuidePanel: View {
         HStack(spacing: 18) {
             ForEach(options, id: \.0) { option in
                 Button(option.1) { set(option.0) }.buttonStyle(.plain)
-                    .font(V3.sans(15, weight: value == option.0 ? .semibold : .regular))
+                    .font(V3.sans(13.5, weight: value == option.0 ? .semibold : .regular))
                     .foregroundStyle(value == option.0 ? V3.txt : V3.fnt2)
                     .accessibilityAddTraits(value == option.0 ? .isSelected : [])
             }
@@ -185,23 +175,24 @@ struct ResumeGuidePanel: View {
 
     private func group(_ text: String) -> some View { Text(text).font(V3.sans(12)).foregroundStyle(V3.fnt).padding(.top, 28).padding(.bottom, 8) }
 
-    /// 下划线输入：文字 + 发送键（说怎么改、添加技能）；回车发送，⇧回车换行。
+    /// 输入框（分区 05/12 同一种）：47 高、圆角 13.5、#dcdad2 边，右侧 30 圆形发送钮；回车发送，⇧回车换行。
     private func underline(_ placeholder: String, value: Binding<String>, disabled: Bool = false, send: @escaping (String) -> Void) -> some View {
         let ready = !value.wrappedValue.trimmed.isEmpty && !disabled
         let submit = { guard ready else { return }; let text = value.wrappedValue.trimmed; value.wrappedValue = ""; send(text) }
-        return VStack(spacing: 0) {
-            HStack(alignment: .bottom, spacing: 8) {
-                TextField(placeholder, text: value, axis: .vertical).textFieldStyle(.plain).font(V3.sans(15)).lineLimit(1...6)
-                    .disabled(disabled).accessibilityLabel(placeholder)
-                    .onKeyPress(.return, phases: .down) { press in
-                        if press.modifiers.contains(.shift) { return .ignored }
-                        submit(); return .handled
-                    }
-                Button(action: submit) { Image(systemName: "arrow.up").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white).frame(width: 28, height: 28).background(ready ? V3.txt : V3.sk2, in: Circle()) }
-                    .buttonStyle(.plain).disabled(!ready).accessibilityLabel("发送")
-            }.padding(.vertical, 10)
-            Divider().overlay(V3.cl)
-        }.padding(.top, 24)
+        return HStack(alignment: .center, spacing: 8) {
+            TextField("", text: value, prompt: Text(placeholder).foregroundStyle(ResumeTalk.hint), axis: .vertical)
+                .textFieldStyle(.plain).font(V3.sans(13.5)).lineLimit(1...6)
+                .disabled(disabled).accessibilityLabel(placeholder)
+                .onKeyPress(.return, phases: .down) { press in
+                    if press.modifiers.contains(.shift) { return .ignored }
+                    submit(); return .handled
+                }
+            Button(action: submit) { Image(systemName: "arrow.up").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white).frame(width: 30, height: 30).background(ready ? V3.txt : ResumeTalk.line, in: Circle()) }
+                .buttonStyle(.plain).disabled(!ready).accessibilityLabel("发送")
+        }
+        .padding(.leading, 16).padding(.trailing, 8).padding(.vertical, 8).frame(minHeight: 47)
+        .background(.white, in: RoundedRectangle(cornerRadius: 13.5)).overlay(RoundedRectangle(cornerRadius: 13.5).stroke(ResumeTalk.fieldLine))
+        .padding(.top, 24)
     }
 
     private func meta(_ text: String, link: String, action: @escaping () -> Void) -> some View {
@@ -221,7 +212,7 @@ struct ResumeGuidePanel: View {
             stepView(step, title: "欢迎回来，还差 \(counts.left.count) 步",
                      note: [counts.done.isEmpty ? "" : "已写好：\(counts.done.joined(separator: "、"))", "还差：\(counts.left.joined(separator: "、"))"].filter { !$0.isEmpty }.joined(separator: "　")) {
                 actions(left: textLink("结束引导，自己改") { Task { try? await change("dismiss"); close() } }, primary: "接着写") { welcome = false }
-                Text("结束后，可以从右侧工具栏的「引导」重新打开。").font(V3.sans(12)).foregroundStyle(V3.fnt).padding(.top, 20)
+                Text("结束后，可以从纸面上沿的「引导」重新打开。").font(V3.sans(12)).foregroundStyle(ResumeTalk.note).padding(.top, 20)
             }
         } else if let failure {
             stepView(step, title: failure.kind == "credit" ? "积分不够了" : failure.kind == "invalid" ? "这次没写好" : "这次没整理出来",
@@ -441,7 +432,7 @@ struct ResumeGuidePanel: View {
                         VStack(spacing: 0) {
                             HStack(spacing: 12) {
                                 VStack(alignment: .leading, spacing: 3) {
-                                    Text(item.form.name).font(V3.sans(15, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1)
+                                    Text(item.form.name).font(V3.sans(13.5, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1)
                                     Text(item.form.meta).font(V3.sans(13)).foregroundStyle(V3.fnt).lineLimit(1)
                                 }
                                 Spacer()
@@ -493,7 +484,7 @@ struct ResumeGuidePanel: View {
             group("做了什么")
             VStack(spacing: 0) {
                 TextField("比如：订单查询慢，我加了 Redis 缓存和分页，接口快了很多；还参与了压测。", text: Binding(get: { binding.wrappedValue.did }, set: { experience?.did = String($0.prefix(2000)) }), axis: .vertical)
-                    .textFieldStyle(.plain).font(V3.sans(15)).lineLimit(3...10).padding(.vertical, 14).accessibilityLabel("做了什么")
+                    .textFieldStyle(.plain).font(V3.sans(13.5)).lineLimit(3...10).padding(.vertical, 14).accessibilityLabel("做了什么")
                 Divider().overlay(V3.cl)
                 row("效果") { field("选填，比如：接口从 1 秒降到 200 毫秒", binding.result, limit: 500) }
             }
@@ -553,7 +544,7 @@ struct ResumeGuidePanel: View {
 
     private func honorsArea(_ placeholder: String, _ text: Binding<String>, label: String) -> some View {
         VStack(spacing: 0) {
-            TextField(placeholder, text: text, axis: .vertical).textFieldStyle(.plain).font(V3.sans(15)).lineLimit(3...10).padding(.vertical, 14).accessibilityLabel(label)
+            TextField(placeholder, text: text, axis: .vertical).textFieldStyle(.plain).font(V3.sans(13.5)).lineLimit(3...10).padding(.vertical, 14).accessibilityLabel(label)
             Divider().overlay(V3.cl)
         }
     }
@@ -562,7 +553,7 @@ struct ResumeGuidePanel: View {
         Button(action: action) {
             VStack(spacing: 0) {
                 HStack {
-                    Text(title).font(V3.sans(15, weight: .medium)).foregroundStyle(V3.txt)
+                    Text(title).font(V3.sans(13.5, weight: .medium)).foregroundStyle(V3.txt)
                     Spacer()
                     Text(trailing).font(V3.sans(13)).foregroundStyle(V3.fnt)
                 }.frame(minHeight: 50).contentShape(Rectangle())
@@ -869,7 +860,7 @@ private struct GuideMaterialsStep: View {
                 ForEach(files) { file in
                     VStack(spacing: 0) {
                         HStack {
-                            Text(file.name).font(V3.sans(15, weight: .medium)).lineLimit(1)
+                            Text(file.name).font(V3.sans(13.5, weight: .medium)).lineLimit(1)
                             Spacer()
                             Text(file.status == "uploading" ? "上传中…" : file.status == "failed" ? "没读出来，换一份试试"
                                  : file.status == "reading" || running ? "已存入资料库 · 正在读…" : "已存入资料库").font(V3.sans(13)).foregroundStyle(file.status == "failed" ? V3.red : V3.fnt)
@@ -889,24 +880,24 @@ private struct GuideMaterialsStep: View {
                             started = false
                             files.append(File(id: item.text("id"), name: item.text("file_name"), status: "ready", datasetID: item.text("id")))
                         } label: {
-                            Text(item.text("file_name")).font(V3.sans(15)).foregroundStyle(V3.txt).padding(.leading, 16).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+                            Text(item.text("file_name")).font(V3.sans(13.5)).foregroundStyle(V3.txt).padding(.leading, 16).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                         }.buttonStyle(.plain)
                     }
                 }
             }.padding(.top, 24)
-            if let readError { Text(readError).font(V3.sans(15)).foregroundStyle(V3.red).padding(.top, 8) }
-            HStack {
-                if !done { Button(files.isEmpty ? "没有资料，直接填" : "不用资料了，直接填", action: next).buttonStyle(.plain).font(V3.sans(15)).foregroundStyle(V3.sub).disabled(running) }
-                Spacer()
-                if done { Button(G.nextLabel("materials"), action: next).buttonStyle(V3ButtonStyle(kind: .dark, height: 44)) }
-            }.padding(.top, 32)
+            if let readError { Text(readError).font(V3.sans(13.5)).foregroundStyle(V3.red).padding(.top, 8) }
+            // 05.1：快捷回答胶囊（编辑器里不用黑色按钮）
+            HStack(spacing: 9) {
+                if done { ResumeTalkChip(title: G.nextLabel("materials"), action: next) }
+                else { ResumeTalkChip(title: files.isEmpty ? "没有资料，一栏一栏填" : "不用资料了，一栏一栏填", disabled: running, action: next) }
+            }.padding(.top, 22)
         }
     }
 
     private func linkRow(_ title: String, _ trailing: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 0) {
-                HStack { Text(title).font(V3.sans(15, weight: .medium)).foregroundStyle(V3.txt); Spacer(); Text(trailing).font(V3.sans(13)).foregroundStyle(V3.fnt) }
+                HStack { Text(title).font(V3.sans(13.5, weight: .medium)).foregroundStyle(V3.txt); Spacer(); Text(trailing).font(V3.sans(13)).foregroundStyle(V3.fnt) }
                     .frame(minHeight: 50).contentShape(Rectangle())
                 Divider().overlay(V3.cl)
             }
@@ -1032,11 +1023,11 @@ private struct SkillLevelsStep: View {
                            ForEach(Array(skills.enumerated()), id: \.element.name) { index, skill in
                                VStack(spacing: 0) {
                                    HStack(spacing: 12) {
-                                       Text(skill.name).font(V3.sans(15)).frame(width: 120, alignment: .leading).lineLimit(1)
+                                       Text(skill.name).font(V3.sans(13.5)).frame(width: 120, alignment: .leading).lineLimit(1)
                                        HStack(spacing: 18) {
                                            ForEach(G.skillLevels, id: \.0) { level in
                                                Button(level.1) { skills[index].level = level.0 }.buttonStyle(.plain)
-                                                   .font(V3.sans(15, weight: skill.level == level.0 ? .semibold : .regular))
+                                                   .font(V3.sans(13.5, weight: skill.level == level.0 ? .semibold : .regular))
                                                    .foregroundStyle(skill.level == level.0 ? V3.txt : V3.fnt2)
                                            }
                                        }.accessibilityElement(children: .contain).accessibilityLabel("\(skill.name) 的熟练度")
@@ -1073,7 +1064,7 @@ private struct CityChips: View {
                 HStack(spacing: 4) {
                     Text(city)
                     Button { cities.removeAll { $0 == city } } label: { Image(systemName: "xmark").font(.system(size: 9)) }.buttonStyle(.plain).accessibilityLabel("去掉 \(city)")
-                }.font(V3.sans(15))
+                }.font(V3.sans(13.5))
             }
             TextField("输入城市，回车添加", text: Binding(get: { input }, set: { value in
                 if value.hasSuffix("，") || value.hasSuffix(",") { input = String(value.dropLast()); add() } else { input = String(value.prefix(20)) }
@@ -1097,9 +1088,9 @@ private extension String {
 struct GuidePrimaryStyle: ButtonStyle {
     @Environment(\.isEnabled) private var enabled
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(V3.sans(15, weight: .medium)).foregroundStyle(.white).lineLimit(1).truncationMode(.tail)
-            .padding(.horizontal, 22).frame(height: 44).frame(maxWidth: 280)
-            .background(enabled ? V3.txt.opacity(configuration.isPressed ? 0.85 : 1) : Color(hex: 0xDCDCD8), in: Capsule())
+        configuration.label.font(V3.sans(13, weight: .medium)).foregroundStyle(.white).lineLimit(1).truncationMode(.tail)
+            .padding(.horizontal, 16).frame(height: 32).frame(maxWidth: 280)
+            .background(enabled ? V3.txt.opacity(configuration.isPressed ? 0.85 : 1) : Color(hex: 0xDCDCD8), in: RoundedRectangle(cornerRadius: 6))
             .fixedSize()
     }
 }

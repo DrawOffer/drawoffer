@@ -22,8 +22,9 @@ struct DrawOfferApp: App {
             // 进程环境优先；经 URL Scheme 由系统拉起时没有自定义环境，回退到上次成功使用的地址。
             let environment = ProcessInfo.processInfo.environment
             let defaults = UserDefaults.standard
-            guard let value = environment["DRAWOFFER_API_ORIGIN"] ?? defaults.string(forKey: "DrawOfferAPIOrigin"),
-                  let origin = URL(string: value) else { throw APIError.invalidResponse }
+            // 都没有时默认连线上 www.drawoffer.com；开发环境用 DRAWOFFER_API_ORIGIN 覆盖。
+            let value = environment["DRAWOFFER_API_ORIGIN"] ?? defaults.string(forKey: "DrawOfferAPIOrigin") ?? "https://www.drawoffer.com"
+            guard let origin = URL(string: value) else { throw APIError.invalidResponse }
             let allowLocalHTTP = environment["DRAWOFFER_ALLOW_LOCAL_HTTP"].map { $0 == "1" }
                 ?? defaults.bool(forKey: "DrawOfferAllowLocalHTTP")
             let directory = try FileManager.default.url(for: .applicationSupportDirectory,
@@ -81,7 +82,8 @@ struct DrawOfferApp: App {
                     }
                 }
         }
-        .windowToolbarStyle(.unified(showsTitle: false))
+        // 单层窗口：隐藏标题栏，红绿灯浮在侧栏 / 编辑器工具栏左上，内容铺到窗口顶边。
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandMenu("账号") {

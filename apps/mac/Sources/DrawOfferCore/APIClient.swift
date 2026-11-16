@@ -50,11 +50,7 @@ public actor MockAPIClient: APIClient {
 
     public func listResumeTemplates() async throws -> [ResumeTemplate] {
         guard user != nil else { throw APIError.unauthorized }
-        guard let url = Bundle.module.url(forResource: "resume-templates", withExtension: "json") else {
-            throw APIError.invalidResponse
-        }
-        struct Envelope: Decodable { let templates: [ResumeTemplate] }
-        return try JSONDecoder().decode(Envelope.self, from: Data(contentsOf: url)).templates
+        return []  // 不再随包携带示例模板
     }
 }
 

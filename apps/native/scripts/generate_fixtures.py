@@ -88,8 +88,8 @@ def main() -> None:
     validation_cases.append(case)
     (OUTPUT.parent / "paper-validation.json").write_text(json.dumps(validation_cases, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     output = json.dumps({"templates": templates}, ensure_ascii=False, indent=2) + "\n"
-    targets = [OUTPUT, ROOT / "apps/mac/Sources/DrawOfferCore/Resources/resume-templates.json",
-               ROOT / "apps/windows/src/DrawOffer.Core/Resources/resume-templates.json"]
+    # Mac 客户端不再随包携带游客示例模板（游客只能看首页）；Windows 仍使用。
+    targets = [OUTPUT, ROOT / "apps/windows/src/DrawOffer.Core/Resources/resume-templates.json"]
     for target in targets:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(output, encoding="utf-8")

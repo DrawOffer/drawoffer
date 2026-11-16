@@ -28,6 +28,8 @@ public enum AgentRequest {
             return false
         case 4:
             if parts[0] == "sessions", id(parts[1]), parts[2] == "submissions" { return id(parts[3]) && method == "GET" }
+            // 编辑最后一条消息（02B·08 E）：`messages/{seq}:edit`，流式
+            if parts[0] == "sessions", id(parts[1]), parts[2] == "messages" { return seqAction(parts[3], "edit") && method == "POST" }
             if parts[0] == "sessions", id(parts[1]), parts[2] == "attachments" { return id(parts[3]) && method == "DELETE" }
             if parts[0] == "sessions", id(parts[1]), parts[2] == "memory" { return parts[3] == "recorded" && method == "GET" }
             if parts[0] == "runs", id(parts[1]), parts[2] == "steer" { return id(parts[3]) && method == "GET" }
@@ -37,13 +39,26 @@ public enum AgentRequest {
                 return parts[4] == "retry" && method == "POST" || parts[4] == "file" && method == "GET"
             }
             return false
+        case 6:
+            // 确认卡处理结果（02B·08 B）：`messages/{seq}/cards/{card}:resolve`
+            if parts[0] == "sessions", id(parts[1]), parts[2] == "messages", seq(parts[3]), parts[4] == "cards" {
+                let pieces = parts[5].split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+                return pieces.count == 2 && id(pieces[0]) && pieces[1] == "resolve" && method == "POST"
+            }
+            return false
         default: return false
         }
     }
 
+    private static func seq(_ value: String) -> Bool { !value.isEmpty && value.count <= 12 && value.allSatisfy { $0 >= "0" && $0 <= "9" } }
+    private static func seqAction(_ value: String, _ action: String) -> Bool {
+        let pieces = value.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        return pieces.count == 2 && seq(pieces[0]) && pieces[1] == action
+    }
+
     /// 流式接口：发送消息与重新接入进行中的运行。
     public static func streams(path: String, method: String) -> Bool {
-        allowed(path: path, method: method) && (method == "POST" && (path.hasSuffix("/messages") || path.hasSuffix("/compact")) || method == "GET" && path.hasSuffix("/events"))
+        allowed(path: path, method: method) && (method == "POST" && (path.hasSuffix("/messages") || path.hasSuffix("/compact") || path.hasSuffix(":edit")) || method == "GET" && path.hasSuffix("/events"))
     }
 
     public static func errorMessage(_ error: Error) -> String {
@@ -57,6 +72,7 @@ public enum AgentRequest {
             "AGENT_STREAM_INCOMPLETE": "回复中断了，可以刷新对话查看结果。",
             "AGENT_PROPOSAL_CONFLICT": "简历已变化，这条修改建议无法直接应用。",
             "AGENT_PROPOSAL_EXPIRED": "修改建议已过期，请重新生成。",
+            "AGENT_MESSAGE_NOT_EDITABLE": "这条消息现在不能编辑，可能已有新的回复。",
             "DESKTOP_ROUTE_FORBIDDEN": "当前服务尚未开放桌面端 AI 助手，请在 Web 使用。",
         ][code] ?? (status >= 500 ? "AI 助手暂时不可用，请稍后重试。" : "操作没有完成（\(code)）。")
     }

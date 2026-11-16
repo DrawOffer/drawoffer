@@ -5,7 +5,7 @@ import SwiftUI
 
 /// 简历模板（Web `features/templates/ResumeTemplatesPage.tsx`）。
 /// 登录后读取 `GET /api/resume-templates` 的真实启用模板与使用次数，并可直接创建简历；
-/// 游客没有模板接口权限，只展示随包的虚构示例，“使用此模板”先登录，登录后按模板 key 匹配真实模板继续创建。
+/// 游客由外壳拦在首页、直接弹登录，这里不再展示随包示例。
 struct TemplatesView: View {
     @Environment(SessionStore.self) private var session
     @Environment(WorkspaceRouter.self) private var router: WorkspaceRouter?
@@ -26,15 +26,19 @@ struct TemplatesView: View {
     @State private var selectedStyles: [String] = []
     @State private var selectedUses: [String] = []
     @State private var page = 1
+    /// 79:2093 排序：默认按热度（`use_count` 降序，同数保持展示顺序），可切回展示顺序。
+    @State private var byPopularity = true
     static let pageSize = 20
 
     private var account: String { if case .signedIn(let user) = session.phase { return user.id }; return "" }
     private var guest: Bool { account.isEmpty }
     private var filtered: [ResumeTemplate] {
-        templates.filter {
+        let items = templates.filter {
             (selectedStyles.isEmpty || !Set(selectedStyles).isDisjoint(with: $0.styleCategories))
                 && (selectedUses.isEmpty || !Set(selectedUses).isDisjoint(with: $0.useCases))
         }
+        guard byPopularity else { return items }
+        return items.enumerated().sorted { ($0.element.useCount ?? 0, -$0.offset) > ($1.element.useCount ?? 0, -$1.offset) }.map(\.element)
     }
     private var pageCount: Int { max(1, (filtered.count + Self.pageSize - 1) / Self.pageSize) }
     private var pageItems: [ResumeTemplate] { Array(filtered.dropFirst((min(page, pageCount) - 1) * Self.pageSize).prefix(Self.pageSize)) }
@@ -53,31 +57,24 @@ struct TemplatesView: View {
     private var ready: Bool { source == (guest ? "guest" : account) }
 
     var body: some View {
-        V3Page {
+        // 05 · 简历模板 79:2093（03.1）：860 宽内容列，眉题距顶 64。
+        V3Page(top: 63) {
             VStack(alignment: .leading, spacing: 0) {
-                V3PageHead(eyebrow: ["TEMPLATES", ready ? "\(templates.count)" : "–"], title: "简历模板",
-                           subtitle: "浏览当前可用版式，选择后填写简历名称并进入编辑器。", compact: true) { EmptyView() }
-                if guest {
-                    Text("当前展示随包的虚构示例，可离线预览；登录后显示线上全部可用模板。")
-                        .font(V3.sans(12)).foregroundStyle(V3.fnt).padding(.top, 6)
-                }
+                head
                 if let loadError, !ready {
-                    VStack(spacing: 8) {
-                        Image(systemName: "arrow.clockwise").font(.system(size: 26)).foregroundStyle(V3.fnt).frame(height: 150)
-                        Text("模板暂时无法加载").font(V3.serif(18)).padding(.top, 13)
-                        Text(loadError).font(V3.sans(13)).foregroundStyle(V3.sub)
-                        Button { reload = UUID() } label: { Label("重新加载", systemImage: "arrow.clockwise") }
-                            .buttonStyle(V3ButtonStyle(kind: .ghost)).disabled(loading).padding(.top, 28)
-                    }.frame(maxWidth: .infinity).padding(.top, 64)
+                    // 加载失败：沿用空状态排版，按钮重新加载
+                    TemplatesBlank(title: "模板暂时无法加载", message: loadError, art: { TemplatesNoneArt() }) {
+                        Button { reload = UUID() } label: { Image(systemName: "arrow.clockwise").font(.system(size: 11)); Text("重新加载") }
+                            .buttonStyle(V3ButtonStyle(kind: .ghost, height: 28)).disabled(loading)
+                    }
                 } else if !ready {
-                    ProgressView("正在加载简历模板…").font(V3.sans(13)).frame(maxWidth: .infinity, minHeight: 250)
+                    V3Loading("正在加载简历模板…").font(V3.sans(13)).frame(maxWidth: .infinity, minHeight: 250)
                 } else if templates.isEmpty {
-                    VStack(spacing: 8) {
-                        Text("当前没有可用模板").font(V3.serif(18))
-                        Text("模板启用后会显示在这里，你仍可以从已有简历继续编辑。").font(V3.sans(13)).foregroundStyle(V3.sub)
-                        Button { backToResumes() } label: { Label("返回全部简历", systemImage: "doc") }
-                            .buttonStyle(V3ButtonStyle(kind: .ghost)).padding(.top, 28)
-                    }.frame(maxWidth: .infinity).padding(.top, 64)
+                    // 79:2375 ③ 当前没有可用模板
+                    TemplatesBlank(title: "当前没有可用模板", message: "模板启用后会显示在这里，你仍可以从已有简历继续编辑。", art: { TemplatesNoneArt() }) {
+                        Button { backToResumes() } label: { Image(systemName: "doc").font(.system(size: 11)); Text("返回全部简历") }
+                            .buttonStyle(V3ButtonStyle(kind: .ghost, height: 28))
+                    }
                 } else { grid }
             }
         }
@@ -85,8 +82,9 @@ struct TemplatesView: View {
         .onChange(of: account) { _, _ in templates = []; source = ""; preview = nil; creating = nil; selectedStyles = []; selectedUses = []; page = 1 }
         .onChange(of: selectedStyles) { page = 1 }
         .onChange(of: selectedUses) { page = 1 }
+        .onChange(of: byPopularity) { page = 1 }
         .onChange(of: source) { _, _ in openPendingCreate() }
-        .sheet(item: $preview, onDismiss: {
+        .centeredSheet(item: $preview, onDismiss: {
             if let template = createAfterDismiss { createAfterDismiss = nil; use(template) }
         }) { template in
             // Web 预览只在当前这一页里切换上一套 / 下一套
@@ -99,7 +97,7 @@ struct TemplatesView: View {
                position: list.firstIndex { $0.id == template.id }.map { ($0, list.count) },
                show: { preview = $0 })
         }
-        .sheet(item: $creating) { template in
+        .centeredSheet(item: $creating) { template in
             CreateResumeSheet(template: template, close: { creating = nil }, created: { id in
                 creating = nil
                 onCreated(id)
@@ -107,46 +105,53 @@ struct TemplatesView: View {
         }
     }
 
+    /// 页头：11px 眉题「TEMPLATES · N 套」、28px 衬线标题、13px 说明。
+    private var head: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("TEMPLATES · \(ready ? "\(templates.count) 套" : "–")").font(V3.sans(11)).foregroundStyle(TemplatesStyle.hint).frame(height: 14)
+            Text("简历模板").font(V3.serif(28)).foregroundStyle(V3.txt).frame(height: 40).padding(.top, 12)
+            Text("浏览当前可用版式，选择后填写简历名称并进入编辑器。").font(V3.sans(13)).foregroundStyle(V3.sub).lineLimit(1)
+                .frame(height: 16).padding(.top, 2)
+        }
+    }
+
     private var grid: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // `.tpl-toolbar`：距头部 28、高 30、间距 12
-            HStack(spacing: 12) {
+            // 工具条：距说明 29、高 29；左摘要与清除筛选，右排序说明与筛选 PopUpButton
+            HStack(spacing: 0) {
                 Text("找到 \(filtered.count) 套模板").font(V3.sans(12)).foregroundStyle(V3.sub)
                 if filterCount > 0 {
-                    Button("清除筛选") { selectedStyles = []; selectedUses = [] }.buttonStyle(.plain).font(V3.sans(12, weight: .medium)).foregroundStyle(V3.txt)
+                    Button("清除筛选") { selectedStyles = []; selectedUses = [] }.buttonStyle(.plain)
+                        .font(V3.sans(12, weight: .medium)).foregroundStyle(V3.txt).padding(.leading, 23)
                 }
                 Spacer()
-                Text("按展示顺序").font(V3.sans(12)).foregroundStyle(V3.fnt).padding(.trailing, 4)
-                TemplateFilter(styles: $selectedStyles, uses: $selectedUses)
-            }.frame(height: 30).padding(.top, 28)
-            if filtered.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "line.3.horizontal.decrease").font(.system(size: 24)).foregroundStyle(V3.fnt).frame(height: 150)
-                    Text("没有符合条件的模板").font(V3.serif(18)).padding(.top, 13)
-                    Text(emptyMessage).font(V3.sans(13)).foregroundStyle(V3.sub)
-                    Button { selectedStyles = []; selectedUses = [] } label: { Label("清除筛选", systemImage: "line.3.horizontal.decrease") }
-                        .buttonStyle(V3ButtonStyle(kind: .ghost)).padding(.top, 28)
-                }.frame(maxWidth: .infinity).padding(.top, 42)
-            }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 20)], alignment: .leading, spacing: 32) {
-                ForEach(pageItems) { template in
-                    Button { preview = template } label: {
-                        VStack(alignment: .leading, spacing: 0) {
-                            TemplateThumbnail(template: template, guest: guest)
-                            Text(template.name).font(V3.sans(14, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1).truncationMode(.tail)
-                                .frame(height: 20).padding(.top, 14)
-                            HStack(spacing: 6) {
-                                ForEach(template.styleCategories + template.useCases, id: \.self) { V3Chip(label: $0) }
-                                Spacer(minLength: 0)
-                                if let count = template.useCount {
-                                    Text("\(TemplatesView.formatUses(count)) 使用").font(V3.number(10.5, weight: .regular)).foregroundStyle(V3.fnt).lineLimit(1)
-                                }
-                            }.frame(height: 20).padding(.top, 4)
-                        }.contentShape(Rectangle())
-                    }.buttonStyle(.plain).accessibilityLabel("查看模板：\(template.name)")
+                Menu {
+                    Picker("排序", selection: $byPopularity) {
+                        Text("按热度排序").tag(true)
+                        Text("按展示顺序").tag(false)
+                    }.pickerStyle(.inline).labelsHidden()
+                } label: {
+                    Text(byPopularity ? "按热度排序" : "按展示顺序").font(V3.sans(12)).foregroundStyle(TemplatesStyle.hint)
                 }
-            }.padding(.top, 24)
-            if !filtered.isEmpty { V3Pagination(page: min(page, pageCount), total: filtered.count, pageSize: Self.pageSize) { page = $0 } }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().padding(.trailing, 16).accessibilityLabel("模板排序")
+                TemplateFilter(styles: $selectedStyles, uses: $selectedUses)
+            }.frame(height: 29).padding(.top, 29)
+            if filtered.isEmpty {
+                // 79:2375 ② 没有符合条件的模板
+                TemplatesBlank(title: "没有符合条件的模板", message: emptyMessage, art: { TemplatesFilterArt(count: filterCount) }) {
+                    Button { selectedStyles = []; selectedUses = [] } label: {
+                        Image(systemName: "line.3.horizontal.decrease").font(.system(size: 10)); Text("清除筛选")
+                    }.buttonStyle(V3ButtonStyle(kind: .ghost, height: 28))
+                }
+            } else {
+                // 卡片 200 宽、列距 20、行距 32：灰底缩略纸面 → 名称 → 标签与使用次数
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 20, alignment: .top)], alignment: .leading, spacing: 32) {
+                    ForEach(pageItems) { template in
+                        TemplatesCard(template: template, guest: guest) { preview = template }
+                    }
+                }.padding(.top, 24)
+                if pageCount > 1 { V3Pagination(page: min(page, pageCount), total: filtered.count, pageSize: Self.pageSize) { page = $0 }.padding(.top, 12) }
+            }
         }
     }
 
@@ -156,7 +161,9 @@ struct TemplatesView: View {
         defer { if owner == account { loading = false } }
         do {
             let result: [ResumeTemplate]
-            if owner.isEmpty { result = try GuestTemplates.load() } else { result = try await session.api.listResumeTemplates() }
+            // 游客进不来模板页（外壳只开放首页），这里只读线上模板；不再随包携带本地示例
+            guard !owner.isEmpty else { return }
+            result = try await session.api.listResumeTemplates()
             try Task.checkCancellation()
             guard owner == account else { return }
             templates = result; source = owner.isEmpty ? "guest" : owner
@@ -164,7 +171,7 @@ struct TemplatesView: View {
         } catch {
             guard owner == account else { return }
             if case APIError.unauthorized = error { session.reportAuthenticationFailure(); return }
-            loadError = owner.isEmpty ? "随包示例读取失败，请重新打开模板页。" : "请检查网络后重试，已有简历不会受到影响。"
+            loadError = "请检查网络后重试，已有简历不会受到影响。"
         }
     }
 
@@ -189,10 +196,9 @@ struct TemplatesView: View {
     }
 }
 
-/// 真实模板经会话准备私有图片；随包示例不读取会话、不发请求。
+/// 线上模板经会话准备私有图片。
 private func preparePaper(_ template: ResumeTemplate, guest: Bool, api: any APIClient) async throws -> PaperPreparation {
-    if guest { return try await GuestTemplates.prepare(template) }
-    return try await api.preparePaper(template.renderRequest())
+    try await api.preparePaper(template.renderRequest())
 }
 
 /// 缩略纸面。
@@ -200,6 +206,8 @@ struct TemplateThumbnail: View {
     @Environment(SessionStore.self) private var session
     let template: ResumeTemplate
     let guest: Bool
+    /// 模板页灰底卡片里的纸面用小圆角（稿 2px），编辑器与弹窗沿用 6。
+    var radius: CGFloat = 6
     @State private var paper: ResumeRenderRequest?
     @State private var failed = false
     var body: some View {
@@ -213,8 +221,8 @@ struct TemplateThumbnail: View {
             } else if !failed { ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity) }
             if failed { Text("预览不可用").font(.caption).padding(8).background(.white) }
         }.aspectRatio(210.0 / 297, contentMode: .fit).background(.white)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(hex: 0xD3D3CE)))
+            .clipShape(RoundedRectangle(cornerRadius: radius))
+            .overlay(RoundedRectangle(cornerRadius: radius).stroke(Color(hex: 0xD3D3CE)))
             .task(id: template.id) {
                 do {
                     let result = try await preparePaper(template, guest: guest, api: session.api)
@@ -249,7 +257,7 @@ private struct TemplatePreview: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 7) {
-                Text(template.name).font(.system(size: 20, weight: .semibold)).foregroundStyle(V3.txt).lineLimit(1).frame(height: 29)
+                Text(template.name).font(V3.serif(20)).foregroundStyle(V3.txt).lineLimit(1).frame(height: 29)
                     .padding(.trailing, 40)
                 HStack(spacing: 6) {
                     ForEach(template.styleCategories + template.useCases, id: \.self) { V3Chip(label: $0) }
@@ -261,9 +269,11 @@ private struct TemplatePreview: View {
                 .overlay(alignment: .topTrailing) {
                     Button(action: close) { Image(systemName: "xmark").font(.system(size: 12, weight: .medium)).frame(width: 28, height: 28).contentShape(Rectangle()) }
                         .buttonStyle(.plain).foregroundStyle(V3.fnt).keyboardShortcut(.cancelAction).accessibilityLabel("关闭").padding(.top, 26).padding(.trailing, 26)
+                        .opacity(0).allowsHitTesting(false).accessibilityHidden(true) // macOS Sheet 不显示 ×，只保留 Esc 关闭；可见的关闭在底部按钮行
                 }
             ZStack {
-                V3DotStage(height: nil) { EmptyView() }
+                // 79:677：舞台为 #F4F4F2 纯色底（无点阵），圆角 10
+                RoundedRectangle(cornerRadius: 10).fill(V3.field)
                 ScrollView([.vertical, .horizontal]) {
                     if let paper {
                         let scale = zoom * Self.base
@@ -295,7 +305,7 @@ private struct TemplatePreview: View {
                         .accessibilityElement(children: .contain).accessibilityLabel("模板预览缩放")
                         .padding(.bottom, 16)
                 }
-            }.clipShape(RoundedRectangle(cornerRadius: 11)).padding(.horizontal, 31).padding(.bottom, 24)
+            }.clipShape(RoundedRectangle(cornerRadius: 10)).padding(.horizontal, 32).padding(.bottom, 24)
             HStack(spacing: 10) {
                 if let position { Text("第 \(position.index + 1) / \(position.count) 套").font(V3.sans(11.5)).foregroundStyle(V3.fnt) }
                 Spacer()
@@ -400,12 +410,13 @@ private struct CreateResumeSheet: View {
 }
 
 
-/// Web `V3TemplateFilter`：`.tpl-filter-trigger` 按钮（默认 30 高，圆角 8，有筛选时蓝底蓝字「筛选 · N」）+
-/// 300 宽 `.tpl-filter-pop`（标题与重置，风格、适用场景两组胶囊多选）。模板页与编辑器模板面板共用。
+/// 筛选按钮：79:2093 的 macOS PopUpButton（91×29、白底、#E4E4E0 描边、圆角 7.5，漏斗图标 + 「筛选」+ 上下箭头）；
+/// 有筛选时写成「筛选 · N」并加深描边（79:2375 ②）。弹层 300 宽（79:346）：标题与重置，风格、适用场景两组 ScopeButton 多选。
+/// 模板页与编辑器模板面板共用。
 struct TemplateFilter: View {
     @Binding var styles: [String]
     @Binding var uses: [String]
-    var height: CGFloat = 30
+    var height: CGFloat = 29
     @State private var open = false
     static let styleOptions = ["简约", "经典", "现代", "创意"]
     static let useOptions = ["实习", "校招", "社招"]
@@ -414,15 +425,15 @@ struct TemplateFilter: View {
     var body: some View {
         Button { open.toggle() } label: {
             HStack(spacing: 6) {
-                Image(systemName: "line.3.horizontal.decrease").font(.system(size: 11)).foregroundStyle(count > 0 ? V3.blue : V3.sub)
-                Text(count > 0 ? "筛选 · \(count)" : "筛选")
-                Image(systemName: "chevron.down").font(.system(size: 9, weight: .medium)).foregroundStyle(count > 0 ? V3.blue : V3.fnt)
-                    .rotationEffect(.degrees(open ? 180 : 0))
-            }.font(V3.sans(12, weight: .medium)).foregroundStyle(count > 0 ? V3.blue : V3.txt)
-                .padding(.leading, 11).padding(.trailing, 18).frame(height: height)
-                .background(count > 0 ? V3.blueSoft : (open ? V3.field : .white), in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(count > 0 ? Color(hex: 0xC9D7F4) : V3.cl))
-                .contentShape(Rectangle())
+                Image(systemName: "line.3.horizontal.decrease").font(.system(size: 10)).foregroundStyle(V3.sub)
+                Text(count > 0 ? "筛选 · \(count)" : "筛选").font(V3.sans(12, weight: .medium)).foregroundStyle(V3.txt)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .medium)).foregroundStyle(V3.sub)
+            }
+            .padding(.leading, 12).padding(.trailing, 9).frame(minWidth: 91).frame(height: height).fixedSize()
+            .background(open ? V3.field : .white, in: RoundedRectangle(cornerRadius: 7.5))
+            .overlay(RoundedRectangle(cornerRadius: 7.5).stroke(count > 0 ? V3.txt : V3.cl))
+            .contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityLabel("筛选简历模板")
             .popover(isPresented: $open, arrowEdge: .bottom) { popover }
     }
@@ -437,24 +448,132 @@ struct TemplateFilter: View {
                     .help("重置筛选").accessibilityLabel("重置筛选")
             }.frame(height: 16)
             group("风格", Self.styleOptions, $styles).padding(.top, 20)
-            group("适用场景", Self.useOptions, $uses).padding(.top, 18)
-        }.padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 18).frame(width: 300)
+            group("适用场景", Self.useOptions, $uses).padding(.top, 22)
+        }.padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 22).frame(width: 300)
             .accessibilityElement(children: .contain).accessibilityLabel("筛选简历模板")
     }
 
     private func group(_ title: String, _ options: [String], _ values: Binding<[String]>) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text(title).font(V3.sans(11)).foregroundStyle(V3.fnt).frame(height: 13)
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 11) {
+            Text(title).font(V3.sans(11)).foregroundStyle(TemplatesStyle.hint).frame(height: 13)
+            HStack(spacing: 4) {
                 ForEach(options, id: \.self) { option in
                     let on = values.wrappedValue.contains(option)
-                    Button(option) {
+                    V3ScopeButton(label: option, selected: on) {
                         if on { values.wrappedValue.removeAll { $0 == option } } else { values.wrappedValue.append(option) }
-                    }.buttonStyle(.plain).font(V3.sans(12, weight: .medium)).padding(.horizontal, 12).frame(height: 28)
-                        .foregroundStyle(on ? V3.blue : V3.sub).background(on ? V3.blueSoft : V3.field, in: Capsule())
-                        .accessibilityAddTraits(on ? .isSelected : [])
+                    }
                 }
             }
         }
+    }
+}
+
+
+// MARK: - 05 · 简历模板 卡片与状态
+
+enum TemplatesStyle {
+    /// 稿中眉题、排序说明、使用次数的浅灰字 #96968F。
+    static let hint = Color(hex: 0x96968F)
+}
+
+/// 79:2093 模板卡片：200×264 的 #F4F4F2 圆角 10 底，居中 A4 纸面（155 宽，距顶 18.5）；
+/// 名称 13 中粗距卡 14；标签（10px、20 高、圆角 5）与「N 使用」一行，距名称 4。悬停只让纸面浮起一点阴影，不加灰块。
+struct TemplatesCard: View {
+    let template: ResumeTemplate
+    let guest: Bool
+    let open: () -> Void
+    @State private var hover = false
+    var body: some View {
+        Button(action: open) {
+            VStack(alignment: .leading, spacing: 0) {
+                GeometryReader { box in
+                    let paper = box.size.width * 0.775
+                    TemplateThumbnail(template: template, guest: guest, radius: 2)
+                        .frame(width: paper, height: paper * 297 / 210)
+                        .shadow(color: .black.opacity(hover ? 0.08 : 0), radius: 6, y: 3)
+                        .frame(width: box.size.width).padding(.top, box.size.width * 0.0925)
+                }
+                .aspectRatio(200.0 / 264, contentMode: .fit)
+                .background(V3.field, in: RoundedRectangle(cornerRadius: 10))
+                Text(template.name).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1).truncationMode(.tail)
+                    .frame(height: 16).padding(.top, 14)
+                HStack(spacing: 6) {
+                    ForEach(template.styleCategories + template.useCases, id: \.self) { V3Chip(label: $0, height: 20, size: 10) }
+                    Spacer(minLength: 0)
+                    if let count = template.useCount {
+                        Text("\(TemplatesView.formatUses(count)) 使用").font(V3.sans(10.5)).foregroundStyle(TemplatesStyle.hint).lineLimit(1)
+                    }
+                }.frame(height: 20).padding(.top, 4)
+            }.contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).onHover { hover = $0 }.animation(.easeOut(duration: 0.15), value: hover)
+        .accessibilityLabel("查看模板：\(template.name)")
+    }
+}
+
+/// 79:2375 空状态：无卡片，插图 + 衬线标题 + 说明 + 描边按钮，整体在内容区居中。
+struct TemplatesBlank<Art: View, Actions: View>: View {
+    let title: String
+    let message: String
+    @ViewBuilder var art: () -> Art
+    @ViewBuilder var actions: () -> Actions
+    var body: some View {
+        VStack(spacing: 0) {
+            art().frame(width: 180, height: 100)
+            Text(title).font(V3.serif(16)).foregroundStyle(V3.txt).padding(.top, 54)
+            Text(message).font(V3.sans(12)).foregroundStyle(V3.sub).multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true).padding(.top, 6)
+            HStack(spacing: 10) { actions() }.padding(.top, 26)
+        }.frame(maxWidth: .infinity).padding(.top, 96).padding(.bottom, 40)
+    }
+}
+
+/// ③ 没有可用模板：三张虚线空白纸面。
+struct TemplatesNoneArt: View {
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(0..<3, id: \.self) { index in
+                let x = CGFloat(index) * 54
+                ZStack(alignment: .topLeading) {
+                    RoundedRectangle(cornerRadius: 2).fill(V3.line).frame(width: 26, height: 3).offset(x: 8, y: 10)
+                    RoundedRectangle(cornerRadius: 2).fill(V3.line).frame(width: 38, height: 2).offset(x: 8, y: 18)
+                }
+                .frame(width: 60, height: 82, alignment: .topLeading)
+                .background(.white)
+                .overlay(Rectangle().stroke(V3.line, style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+                .offset(x: x + 12, y: 8)
+            }
+        }.frame(width: 180, height: 100, alignment: .topLeading).accessibilityHidden(true)
+    }
+}
+
+/// ② 筛选无结果：三张缩略纸面（两侧带色条、中间墨黑），右下圆形漏斗角标与橙色已选数量。
+struct TemplatesFilterArt: View {
+    let count: Int
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            paper(accent: Color(hex: 0x9CC8AE)).offset(x: 6, y: 12).opacity(0.85)
+            paper(accent: Color(hex: 0x9DB4E6)).offset(x: 116, y: 12).opacity(0.85)
+            paper(accent: V3.txt).offset(x: 58, y: 4).shadow(color: .black.opacity(0.06), radius: 3, y: 2)
+            Image(systemName: "line.3.horizontal.decrease").font(.system(size: 13, weight: .medium)).foregroundStyle(V3.txt)
+                .frame(width: 40, height: 40).background(.white, in: Circle()).overlay(Circle().stroke(V3.cl))
+                .shadow(color: .black.opacity(0.08), radius: 4, y: 2).offset(x: 102, y: 54)
+            if count > 0 {
+                Text("\(count)").font(.system(size: 9, weight: .semibold)).foregroundStyle(.white)
+                    .frame(width: 16, height: 16).background(V3.orange, in: Circle()).offset(x: 132, y: 48)
+            }
+        }.frame(width: 180, height: 100, alignment: .topLeading).accessibilityHidden(true)
+    }
+
+    private func paper(accent: Color) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            RoundedRectangle(cornerRadius: 1).fill(accent).frame(width: 26, height: 4)
+            ForEach(0..<3, id: \.self) { row in
+                RoundedRectangle(cornerRadius: 1).fill(accent).frame(width: 14, height: 3).padding(.top, 4)
+                RoundedRectangle(cornerRadius: 1).fill(V3.line).frame(width: 40, height: 2)
+            }
+        }
+        .padding(7).frame(width: 60, height: 82, alignment: .topLeading)
+        .background(.white).overlay(Rectangle().stroke(V3.line))
     }
 }

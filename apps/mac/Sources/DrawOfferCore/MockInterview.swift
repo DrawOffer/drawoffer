@@ -10,6 +10,9 @@ public enum MockInterviewRequest {
         if path == "/api/mock-interviews" { return ["GET", "POST"].contains(method) }
         if path == "/api/datasets" { return method == "GET" }
         if path == "/api/mock-interviews/speech-capability" { return method == "GET" }
+        // 首页 / 全部记录的概览、导入面试记录、复盘页的上下文（Figma 09 · 01、08、09、10）
+        if path == "/api/mock-interviews/overview" || path == "/api/mock-interviews/review-context" { return method == "GET" }
+        if path == "/api/mock-interviews/imports" { return method == "POST" }
         let parts = path.split(separator: "/", omittingEmptySubsequences: false)
         guard (4...7).contains(parts.count), parts[0].isEmpty, parts[1] == "api", parts[2] == "mock-interviews",
               let id = UUID(uuidString: String(parts[3])), id.uuidString.lowercased() == parts[3] else { return false }
@@ -29,6 +32,7 @@ public enum MockInterviewRequest {
         case "transcript": return method == "PUT"
         case "re-evaluate": return method == "POST"
         case "recording": return method == "GET"
+        case "judgement": return method == "PUT"
         default: return false
         }
     }

@@ -2,6 +2,42 @@ import DrawOfferCore
 import SwiftUI
 import WebKit
 
+/// 纸上临时显示的一处改法（分区 12：浅蓝底 = 还没换上，橙色 = 要核实）。只是装饰，不改正文。
+public struct PaperLineChange: Equatable, Sendable {
+    public let lineID: String
+    /// AI 看到的原句：纸上这一行已经不是它时不预览。
+    public let before: String
+    public let text: String
+    public let risky: [String]
+    public init(lineID: String, before: String, text: String, risky: [String] = []) {
+        self.lineID = lineID; self.before = before; self.text = text; self.risky = risky
+    }
+    var json: JSONValue {
+        .object(["lineId": .string(lineID), "before": .string(before), "text": .string(text), "risky": .array(risky.map(JSONValue.string))])
+    }
+}
+
+/// 检查简历纸边的小圆圈（12.7–12.11）：空心 = 还没看，蓝 = 正在看，灰 = 看过。
+public struct PaperMark: Equatable, Sendable {
+    public enum State: String, Sendable { case pending, current, done }
+    public let key: String
+    public let nodeIDs: [String]
+    public let state: State
+    public init(key: String, nodeIDs: [String], state: State) { self.key = key; self.nodeIDs = nodeIDs; self.state = state }
+}
+
+/// 光标 / 选区所在的行（纸面 `line` 事件）。坐标是纸面视图里的点，已含缩放。
+public struct PaperLine: Equatable, Sendable {
+    public let unitID: String
+    public let lineIDs: [String]
+    /// 只选了一行里的几个字时，字符范围。
+    public let selection: Range<Int>?
+    /// 第一行的位置。
+    public let rect: CGRect
+    /// 纸面（第一页所在的整张纸）的位置。
+    public let paper: CGRect
+}
+
 /// 原生 → 可编辑纸面的指令（editor protocol 1，见 `apps/native/renderer/editor.tsx`）。
 public enum ResumeEditorCommand: Sendable {
     case undo, redo, focus, resetOrder
@@ -10,6 +46,11 @@ public enum ResumeEditorCommand: Sendable {
     case rename(String, String)
     case remove(String)
     case add(kind: String, title: String)
+    /// 临时高亮这几行、把改法预览在纸上；同一 `source` 再发一次即替换，两项都空即清除。
+    case decorate(source: String, highlight: [String], preview: [PaperLineChange])
+    case marks([PaperMark])
+    /// 滚到这几行（放在屏幕中间）。
+    case reveal([String])
 
     var json: JSONValue {
         switch self {
@@ -22,6 +63,14 @@ public enum ResumeEditorCommand: Sendable {
         case .rename(let id, let title): return .object(["type": .string("rename"), "nodeId": .string(id), "title": .string(title)])
         case .remove(let id): return .object(["type": .string("remove"), "nodeId": .string(id)])
         case .add(let kind, let title): return .object(["type": .string("add"), "kind": .string(kind), "title": .string(title)])
+        case .decorate(let source, let highlight, let preview):
+            return .object(["type": .string("decorate"), "source": .string(source), "highlight": .array(highlight.map(JSONValue.string)),
+                            "preview": .array(preview.map(\.json))])
+        case .marks(let marks):
+            return .object(["type": .string("marks"), "marks": .array(marks.map {
+                .object(["key": .string($0.key), "nodeIds": .array($0.nodeIDs.map(JSONValue.string)), "state": .string($0.state.rawValue)])
+            })])
+        case .reveal(let ids): return .object(["type": .string("reveal"), "nodeIds": .array(ids.map(JSONValue.string))])
         }
     }
 }
@@ -34,6 +83,14 @@ public enum ResumeEditorEvent: Sendable {
     case ask(unitID: String, lineID: String, text: String, instruction: String)
     case zoom(Double)
     case error(String)
+    /// 光标所在的可改写行；nil 表示不在可改的行上（或正在打字）。
+    case line(PaperLine?)
+    /// 在纸面里按了 ⌘K。
+    case lineOpen(PaperLine)
+    /// 纸面总页数。
+    case pages(Int)
+    /// 点了纸边的小圆圈。
+    case mark(String)
 }
 
 /// 把指令排进纸面：编辑器视图持有它，页面 ready 后才真正执行。
@@ -44,6 +101,8 @@ public final class ResumeEditorChannel {
     public func send(_ command: ResumeEditorCommand) { bridge?.call("command", command.json) }
     /// 原生改写正文（引导写入、AI 采纳）：页面按当前模板重新排版。
     public func replaceData(_ data: JSONValue) { bridge?.call("replaceData", data) }
+    /// 07.2 模板悬停预览：`template-preview` 接口返回的 preview（data / style / layout_plan）；nil 恢复原纸面。不改正文、不保存。
+    public func previewTemplate(_ preview: JSONValue?) { bridge?.call("previewTemplate", preview ?? .null) }
 }
 
 /// 可编辑简历纸面：WKWebView 挂载与 Web 相同的 TipTap 编辑器、分页、斜杠菜单与选区工具栏。
@@ -116,7 +175,9 @@ public final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationD
 
     func load(resumeID: String, data: JSONValue, style: JSONValue, layoutPlan: JSONValue?, styleRevision: Int) {
         self.styleRevision = styleRevision
-        call("load", .object(["resumeId": .string(resumeID), "data": data, "style": style, "layout_plan": layoutPlan ?? .null]))
+        // features.lineChat：选区工具栏只管格式，纸面上报光标所在的行（改这一条在原生）
+        call("load", .object(["resumeId": .string(resumeID), "data": data, "style": style, "layout_plan": layoutPlan ?? .null,
+                              "features": .object(["lineChat": .bool(true)])]))
     }
 
     func updateStyle(_ style: JSONValue, revision: Int) {
@@ -166,9 +227,33 @@ public final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationD
                 if let value = body["zoom"] as? Double { onEvent(.zoom(value)) }
             case "error":
                 onEvent(.error(body["message"] as? String ?? "编辑器出错，请重试。"))
+            case "line":
+                onEvent(.line(Self.line(body)))
+            case "line-open":
+                if let line = Self.line(body) { onEvent(.lineOpen(line)) }
+            case "pages":
+                if let count = (body["count"] as? NSNumber)?.intValue, count > 0 { onEvent(.pages(count)) }
+            case "mark":
+                if let key = body["key"] as? String { onEvent(.mark(key)) }
             default: break
             }
         }
+    }
+
+    private static func box(_ value: Any?) -> CGRect? {
+        guard let object = value as? [String: Any] else { return nil }
+        let number = { (key: String) in (object[key] as? NSNumber)?.doubleValue }
+        guard let x = number("x"), let y = number("y"), let width = number("width"), let height = number("height") else { return nil }
+        return CGRect(x: x, y: y, width: width, height: height)
+    }
+
+    private static func line(_ body: [String: Any]) -> PaperLine? {
+        guard let unit = body["unitId"] as? String, let ids = body["lineIds"] as? [String], !ids.isEmpty,
+              let rect = box(body["rect"]), let paper = box(body["paper"]) else { return nil }
+        var selection: Range<Int>?
+        if let range = body["selection"] as? [String: Any], let start = (range["start"] as? NSNumber)?.intValue,
+           let end = (range["end"] as? NSNumber)?.intValue, end > start { selection = start..<end }
+        return PaperLine(unitID: unit, lineIDs: ids, selection: selection, rect: rect, paper: paper)
     }
 
     /// WebKit 把页面对象转成 Foundation 类型；转回 JSON 再解码为 JSONValue。

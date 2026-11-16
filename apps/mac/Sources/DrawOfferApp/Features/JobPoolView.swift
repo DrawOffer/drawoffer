@@ -1,10 +1,13 @@
 import SwiftUI
 import DrawOfferCore
 
-/// 岗位广场（Web `features/jobs/OpportunitiesPage.tsx`，Figma「12 · 官网岗位池」）：公司目录 → 公司岗位列表 → 岗位详情。
+/// 岗位广场（Web `features/jobs/OpportunitiesPage.tsx`）：公司目录 → 公司岗位列表 → 岗位详情。
+/// macOS 稿 06 · 岗位广场：目录按 03「紧凑公司卡片与分页」（82:22919），公司页与详情按 02 重构提案（82:22733 的 B、C）。
 struct JobPoolView: View {
     struct Query: Hashable {
         var keyword = "", city = "", category = "", type = ""
+        /// 岗位排序：`published` 最新发布（默认）/ `collected` 最新收录；不算筛选条件。
+        var sort = "published"
         var filtered: Bool { !keyword.isEmpty || !city.isEmpty || !category.isEmpty || !type.isEmpty }
     }
     enum Route: Hashable { case company(String, Query), job(String) }
@@ -51,8 +54,10 @@ struct PoolLogo: View {
     let name: String
     let url: String
     var size: CGFloat = 24
-    private var radius: CGFloat { [20: 5, 24: 6, 32: 7, 40: 9, 48: 10, 64: 12][size] ?? 6 }
-    private var fontSize: CGFloat { [20: 10, 24: 12, 32: 14, 40: 16, 48: 19, 64: 24][size] ?? 12 }
+    /// 目录紧凑卡片（82:4233）的首字底为 #F4F4F2、无描边；其余位置白底细描边。
+    var filled = false
+    private var radius: CGFloat { [20: 5, 24: 6, 32: 8, 40: 9, 48: 10, 56: 12, 64: 12][size] ?? 6 }
+    private var fontSize: CGFloat { [20: 10, 24: 12, 32: 14, 40: 16, 48: 19, 56: 22, 64: 24][size] ?? 12 }
     private var source: URL? {
         guard url.hasPrefix("/api/company-logos/"), let origin = (session.api as? HTTPAPIClient)?.origin else { return nil }
         return URL(string: url, relativeTo: origin)?.absoluteURL
@@ -63,33 +68,31 @@ struct PoolLogo: View {
             if let image = phase.image { image.resizable().scaledToFit() }
             else { Text(initial).font(V3.sans(fontSize, weight: .medium)).foregroundStyle(Color(hex: 0x454842)) }
         }
-        .frame(width: size, height: size).background(.white)
+        .frame(width: size, height: size).background(filled ? V3.field : .white)
         .clipShape(RoundedRectangle(cornerRadius: radius))
-        .overlay(RoundedRectangle(cornerRadius: radius).stroke(V3.line))
+        .overlay(RoundedRectangle(cornerRadius: radius).stroke(filled ? .clear : V3.cl))
         .accessibilityHidden(true)
     }
 }
 
-/// `BackCrumb`：「← 岗位广场 / 公司 / 当前页」。
+/// 82:1848 面包屑：「岗位广场 / 公司 / 当前页」11.5px，前几级灰色可点、当前页墨黑。
 private struct PoolCrumbs: View {
     let back: () -> Void
     var trail: [(String, () -> Void)] = []
     var current: String?
     var body: some View {
-        HStack(spacing: 12) {
-            Button(action: back) {
-                HStack(spacing: 6) { Image(systemName: "arrow.left").font(.system(size: 13)); Text("岗位广场") }.contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityLabel("返回岗位广场")
+        HStack(spacing: 8) {
+            Button("岗位广场", action: back).buttonStyle(.plain).foregroundStyle(V3.fnt).accessibilityLabel("返回岗位广场")
             ForEach(Array(trail.enumerated()), id: \.offset) { _, item in
-                Text("/").accessibilityHidden(true)
-                Button(item.0, action: item.1).buttonStyle(.plain).lineLimit(1).fixedSize()
+                Text("/").foregroundStyle(V3.fnt2).accessibilityHidden(true)
+                Button(item.0, action: item.1).buttonStyle(.plain).foregroundStyle(V3.fnt).lineLimit(1).fixedSize()
             }
             if let current, !current.isEmpty {
-                Text("/").accessibilityHidden(true)
-                Text(current).lineLimit(1).truncationMode(.tail)
+                Text("/").foregroundStyle(V3.fnt2).accessibilityHidden(true)
+                Text(current).foregroundStyle(V3.txt).lineLimit(1).truncationMode(.tail)
             }
         }
-        .font(V3.sans(16)).foregroundStyle(V3.fnt).frame(height: 20).padding(.bottom, 12)
+        .font(V3.sans(11.5)).frame(height: 14)
     }
 }
 
@@ -122,27 +125,16 @@ private struct PoolChips: View {
     let label: String
     let change: (String) -> Void
     var body: some View {
-        FlowLayout(spacing: 8) {
+        // macOS 稿：筛选标签是一排 ScopeButton（无描边，选中 10% 黑底），数量并进文字。
+        FlowLayout(spacing: 4) {
             ForEach(items, id: \.value) { item in
-                let active = item.value == selection
-                Button { change(item.value) } label: {
-                    HStack(spacing: 6) {
-                        Text(item.label).font(V3.sans(13, weight: active ? .medium : .regular))
-                        if let count = item.count {
-                            Text(verbatim: "\(count)").font(V3.number(11.5, weight: .regular)).foregroundStyle(active ? V3.blue.opacity(0.7) : V3.fnt)
-                        }
-                    }
-                    .foregroundStyle(active ? V3.blue : V3.sub).padding(.horizontal, 12).frame(height: 30)
-                    .background(active ? V3.blueSoft : .white, in: Capsule())
-                    .overlay(Capsule().stroke(active ? V3.blue.opacity(0.35) : V3.cl))
-                    .contentShape(Capsule())
-                }.buttonStyle(.plain).accessibilityAddTraits(active ? .isSelected : [])
+                V3ScopeButton(label: item.count.map { "\(item.label) \($0)" } ?? item.label, selected: item.value == selection) { change(item.value) }
             }
         }.accessibilityElement(children: .contain).accessibilityLabel(label)
     }
 }
 
-/// `Select size="sm"`：32 高白底描边下拉。
+/// macOS 稿 PopUpButton：原生 NSPopUpButton（`Picker` + `.menu`），没有值时显示占位。
 private struct PoolSelect: View {
     let label: String
     let value: String
@@ -150,23 +142,11 @@ private struct PoolSelect: View {
     var placeholder: String?
     let change: (String) -> Void
     var body: some View {
-        let current = options.first { $0.0 == value }?.1
-        Menu {
-            ForEach(options, id: \.0) { option in
-                Button { change(option.0) } label: {
-                    if option.0 == value { Label(option.1, systemImage: "checkmark") } else { Text(option.1) }
-                }
-            }
-        } label: {
-            HStack(spacing: 10) {
-                Text(current ?? placeholder ?? "").font(V3.sans(14)).foregroundStyle(current == nil ? V3.fnt2 : V3.txt).lineLimit(1)
-                Image(systemName: "chevron.down").font(.system(size: 10, weight: .medium)).foregroundStyle(V3.fnt).frame(width: 12)
-            }
-            .padding(.horizontal, 12).frame(minWidth: 64, maxWidth: 160, minHeight: 32, maxHeight: 32, alignment: .leading)
-            .background(.white, in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(V3.cl))
+        Picker(label, selection: Binding(get: { value }, set: { change($0) })) {
+            if !options.contains(where: { $0.0 == value }) { Text(placeholder ?? label).tag(value) }
+            ForEach(options, id: \.0) { option in Text(option.1).tag(option.0) }
         }
-        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().accessibilityLabel(label)
+        .pickerStyle(.menu).labelsHidden().fixedSize().accessibilityLabel(label)
     }
 }
 
@@ -175,8 +155,9 @@ private struct PoolBadge: View {
     let text: String
     var warn = false
     var body: some View {
-        Text(text).font(V3.sans(11.5, weight: .medium)).foregroundStyle(warn ? Color(hex: 0x8A4D12) : V3.blue)
-            .padding(.horizontal, 7).frame(height: 20).background(warn ? V3.orangeSoft : V3.blueSoft, in: RoundedRectangle(cornerRadius: 4)).fixedSize()
+        // 82:22526：17 高、10.5px、圆角 4
+        Text(text).font(V3.sans(10.5, weight: .medium)).foregroundStyle(warn ? Color(hex: 0x8A4D12) : V3.blue)
+            .padding(.horizontal, 7).frame(height: 17).background(warn ? V3.orangeSoft : V3.blueSoft, in: RoundedRectangle(cornerRadius: 4)).fixedSize()
     }
 }
 
@@ -382,7 +363,7 @@ private struct PoolJoinFeedback: ViewModifier {
                     .task(id: notice) { try? await Task.sleep(for: .seconds(3)); if join.notice == notice { join.notice = nil } }
                 }
             }
-            .sheet(item: $join.failure) { failure in
+            .centeredSheet(item: $join.failure) { failure in
                 VStack(spacing: 0) {
                     VStack(spacing: 0) {
                         V3DotStage(height: failure.closed ? 128 : 128) {
@@ -408,119 +389,150 @@ private struct PoolJoinFeedback: ViewModifier {
     }
 }
 
-// MARK: - A · 公司目录
+// MARK: - A · 公司目录（03 · 紧凑公司卡片与分页 82:22920）
 
 private struct JobPoolDirectory: View {
     @Environment(SessionStore.self) private var session
     let open: (String) -> Void
+    /// 一次请求的全部条件；`.task(id:)` 以它为键，回包只在键仍是当前条件时生效（最后一次为准）。
+    struct DirectoryRequest: Hashable { var page = 1, q = "", industry = "", sort = "open", revision = 0 }
     @State private var data: JSONValue?
-    @State private var failed = false
+    @State private var loadedKey: DirectoryRequest?
+    @State private var failedKey: DirectoryRequest?
     @State private var revision = 0
     @State private var industry = ""
     @State private var text = ""
+    /// 防抖后真正提交给服务端的搜索词（Web `useDebouncedValue(text.trim(), 250)`）。
+    @State private var appliedText = ""
     @State private var sort = "open"
+    @State private var page = 1
+    /// 82:5188 分页规则：每页 20 家；筛选、搜索或排序后回到第 1 页。分页、搜索、行业与排序都在服务端 `companies/page` 完成。
+    static let pageSize = 20
 
-    private var companies: [JSONValue] {
-        let needle = text.trimmingCharacters(in: .whitespaces).lowercased()
-        let items = (data?["items"]?.items ?? []).filter { company in
-            (industry.isEmpty || company.text("industry") == industry)
-                && (needle.isEmpty || ([company.text("name")] + (company["aliases"]?.items ?? []).compactMap(\.stringValue)).contains { $0.lowercased().contains(needle) })
-        }
-        let open = { (item: JSONValue) in item["open_count"]?.integer ?? 0 }
-        switch sort {
-        case "today": return items.sorted { ($0["today_new"]?.integer ?? 0, open($0)) > ($1["today_new"]?.integer ?? 0, open($1)) }
-        case "latest": return items.sorted { ($0.text("latest_at"), open($0)) > ($1.text("latest_at"), open($1)) }
-        case "name": return items.sorted { $0.text("name").compare($1.text("name"), locale: Locale(identifier: "zh_CN")) == .orderedAscending }
-        default: return items
-        }
-    }
+    private var request: DirectoryRequest { DirectoryRequest(page: page, q: appliedText, industry: industry, sort: sort, revision: revision) }
+    private var trimmedText: String { String(text.trimmingCharacters(in: .whitespaces).prefix(100)) }
+    private var pendingSearch: Bool { trimmedText != appliedText }
+    private var failed: Bool { !pendingSearch && failedKey == request }
+    private var busy: Bool { pendingSearch || loadedKey != request }
+    private var items: [JSONValue] { data?["items"]?.items ?? [] }
+    private var total: Int { data?["total"]?.integer ?? 0 }
+    private var pageCount: Int { max(1, (total + Self.pageSize - 1) / Self.pageSize) }
 
     var body: some View {
-        V3Page {
+        V3Page(top: 50) {
             VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .bottom, spacing: 24) {
+                // 页头：眉题 + 衬线标题；右侧在招总数与今日新增
+                HStack(alignment: .top, spacing: 24) {
                     VStack(alignment: .leading, spacing: 0) {
-                        Text("OPPORTUNITIES · 企业官网直招").font(V3.sans(12, weight: .medium)).foregroundStyle(V3.fnt).frame(height: 18)
-                        Text("岗位广场").font(V3.serif(28)).foregroundStyle(V3.txt).frame(height: 36).padding(.top, 8)
+                        Text("OPPORTUNITIES · 企业官网直招").font(V3.sans(12)).foregroundStyle(V3.sub).frame(height: 14)
+                        Text("岗位广场").font(V3.serif(28)).foregroundStyle(V3.txt).frame(height: 40).padding(.top, 14)
                     }
                     Spacer(minLength: 0)
-                    if let total = data?["total"] {
-                        PoolStats(count: total["open_count"]?.integer ?? 0, today: total["today_new"]?.integer ?? 0, extra: "收录 \(total["company_count"]?.integer ?? 0) 家公司")
+                    if let summary = data?["summary"] {
+                        PoolStats(count: summary["open_count"]?.integer ?? 0, today: summary["today_new"]?.integer ?? 0, extra: "收录 \(summary["company_count"]?.integer ?? 0) 家公司")
+                            .padding(.top, 22)
                     }
                 }
-                HStack(alignment: .top, spacing: 16) {
-                    PoolChips(items: chipItems, selection: industry, label: "按行业筛选") { industry = $0 }
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 2)
-                    V3SearchField(text: $text, placeholder: "搜索公司", width: 280, height: 34).accessibilityLabel("搜索公司")
-                }.padding(.top, 22)
+                // 行业 ScopeBar（距标题 47）
+                PoolChips(items: chipItems, selection: industry, label: "按行业筛选") { industry = $0; page = 1 }
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 47)
                 content
             }
         }
-        .task(id: revision) { await load() }
+        // 搜索输入防抖 250ms；提交新词时回到第 1 页。
+        .task(id: trimmedText) {
+            let next = trimmedText
+            guard next != appliedText else { return }
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled, next == trimmedText else { return }
+            appliedText = next; page = 1
+        }
+        .task(id: request) { await load(request) }
     }
 
     private var chipItems: [(value: String, label: String, count: Int?)] {
-        let items = data?["items"]?.items ?? []
-        let industries = (data?["industries"]?.items ?? []).compactMap(\.stringValue)
-            .map { name in (value: name, label: name, count: Optional(items.filter { $0.text("industry") == name }.count)) }
-            .filter { ($0.count ?? 0) > 0 }
-        return [(value: "", label: "全部", count: data == nil ? nil : items.count)] + industries
+        // 行业计数描述整份目录，与当前筛选和页码无关（`industries` 只含有公司的行业）。
+        let industries = (data?["industries"]?.items ?? []).map { (value: $0.text("name"), label: $0.text("name"), count: Optional($0["count"]?.integer ?? 0)) }
+        return [(value: "", label: "全部", count: data?["summary"]?["company_count"]?.integer)] + industries
+    }
+
+    /// 结果栏（距 ScopeBar 35）：左「共 N 家公司」，右排序 PopUpButton 与搜索框。
+    private var resultBar: some View {
+        HStack(spacing: 12) {
+            Text(failed ? "公司目录暂时无法加载" : busy ? "正在查询公司…" : "共 \(total) 家公司")
+                .font(V3.sans(12.5)).foregroundStyle(V3.fnt)
+            Spacer(minLength: 0)
+            PoolSelect(label: "排序", value: sort, options: JobPool.sorts.map { ($0.value, $0.label) }) { sort = $0; page = 1 }
+            V3SearchField(text: $text, placeholder: "搜索公司名称或别名", width: 260).accessibilityLabel("搜索公司")
+        }.frame(height: 28).padding(.top, 33)
     }
 
     @ViewBuilder private var content: some View {
+        resultBar
         if failed {
-            PoolError(title: "公司目录暂时无法加载", message: "网络不稳定或服务暂时不可用，稍后重试即可。") { revision += 1 }
-        } else if data == nil {
+            PoolError(title: "公司目录暂时无法加载", message: "网络不稳定或服务暂时不可用，筛选条件已保留。") { revision += 1 }
+        } else if busy {
             grid { ForEach(0..<9, id: \.self) { _ in skeletonCard } }.accessibilityLabel("正在加载公司目录…")
-        } else if companies.isEmpty {
-            let filtered = !industry.isEmpty || !text.trimmingCharacters(in: .whitespaces).isEmpty
-            let summary = [industry, text.trimmingCharacters(in: .whitespaces)].filter { !$0.isEmpty }.joined(separator: " · ")
+        } else if items.isEmpty {
+            let filtered = !industry.isEmpty || !appliedText.isEmpty
+            let summary = [industry, appliedText].filter { !$0.isEmpty }.joined(separator: " · ")
             PoolState(title: filtered ? "没有找到这家公司" : "暂时还没有收录公司",
                       message: filtered ? "换个公司名称，或切换到全部行业试试。" : "企业官网的岗位同步后会出现在这里，稍后再来看看。",
                       art: { PoolEmptyArt(summary: filtered ? summary : "企业官网直招") }) {
-                if filtered { Button("清除筛选") { text = ""; industry = "" }.buttonStyle(V3ButtonStyle(kind: .dark)) }
+                if filtered {
+                    Button { text = ""; appliedText = ""; industry = ""; page = 1 } label: { Image(systemName: "line.3.horizontal.decrease").font(.system(size: 10)); Text("清除筛选") }
+                        .buttonStyle(V3ButtonStyle(kind: .ghost))
+                }
             }
         } else {
-            HStack {
-                Text("共 \(companies.count) 家公司").font(V3.sans(12.5)).foregroundStyle(V3.fnt)
-                Spacer()
-                PoolSelect(label: "排序", value: sort, options: JobPool.sorts.map { ($0.value, $0.label) }) { sort = $0 }
-            }.frame(minHeight: 44).padding(.top, 14)
-            grid { ForEach(companies, id: \.self) { card($0) } }
+            grid { ForEach(items, id: \.self) { company in CompanyCard(company: company) { open(company.text("id")) } } }
+            if pageCount > 1 {
+                V3Pagination(page: min(page, pageCount), total: total, pageSize: Self.pageSize) { page = $0 }
+                    .padding(.horizontal, 20).padding(.top, 16)
+            }
         }
     }
 
+    /// 82:4227：三列 → 两列 → 单列，卡片高 112、间距 12。
     private func grid<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 16, alignment: .top), count: 3), spacing: 16, content: content)
-            .padding(.top, 12).padding(.bottom, 40)
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 12, alignment: .top)], spacing: 12, content: content)
+            .padding(.top, 14)
     }
 
     private var skeletonCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
-                PoolSkeleton(width: 40, height: 40, radius: 9)
-                VStack(alignment: .leading, spacing: 3) { PoolSkeleton(width: 96, height: 14); PoolSkeleton(width: 56, height: 10) }
-            }
-            GeometryReader { box in PoolSkeleton(width: box.size.width * 0.45, height: 26) }.frame(height: 26)
-            PoolSkeleton(width: nil, height: 12)
+                PoolSkeleton(width: 32, height: 32, radius: 8)
+                VStack(alignment: .leading, spacing: 5) { PoolSkeleton(width: 96, height: 13); PoolSkeleton(width: 56, height: 10) }
+            }.frame(height: 40)
+            HStack { PoolSkeleton(width: 80, height: 18); Spacer(); PoolSkeleton(width: 120, height: 12) }.frame(height: 27).padding(.top, 16)
         }
-        .padding(.horizontal, 18).padding(.top, 18).padding(.bottom, 16)
-        .background(.white, in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(V3.line))
+        .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 12).frame(height: 112)
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(V3.cl))
     }
 
-    private func card(_ company: JSONValue) -> some View {
-        CompanyCard(company: company) { open(company.text("id")) }
-    }
-
-    private func load() async {
-        failed = false
-        do { data = try await session.api.careerRequest(path: "/api/job-pool/companies", method: "GET", query: [:], body: nil) }
+    private func load(_ key: DirectoryRequest) async {
+        guard !pendingSearch else { return }
+        failedKey = nil
+        var query = ["page": "\(key.page)", "page_size": "\(Self.pageSize)", "sort": key.sort]
+        if !key.q.isEmpty { query["q"] = key.q }
+        if !key.industry.isEmpty { query["industry"] = String(key.industry.prefix(100)) }
+        do {
+            let value = try await session.api.careerRequest(path: "/api/job-pool/companies/page", method: "GET", query: query, body: nil)
+            guard !Task.isCancelled, key == request else { return }
+            // 目录在两次翻页之间变短：当前页已越界时退到最后一页重新请求。
+            let last = max(1, ((value["total"]?.integer ?? 0) + Self.pageSize - 1) / Self.pageSize)
+            if (value["items"]?.items ?? []).isEmpty, last < key.page { page = last; return }
+            data = value; loadedKey = key
+        }
         catch is CancellationError {}
-        catch APIError.unauthorized { session.reportAuthenticationFailure(); failed = true }
-        catch { failed = true }
+        catch APIError.unauthorized { if key == request { session.reportAuthenticationFailure(); failedKey = key } }
+        catch { if !Task.isCancelled, key == request { failedKey = key } }
     }
 }
 
+/// 82:4975 紧凑公司卡片（112 高）：Logo 32 + 公司名 13 / 行业 11，右上仅有新增时显示蓝字「今日 +N」；
+/// 下行左侧在招总数，右侧校招 / 实习分项（为零直接写 0）。悬停公司名变蓝，不加底色与阴影。
 private struct CompanyCard: View {
     let company: JSONValue
     let open: () -> Void
@@ -528,59 +540,37 @@ private struct CompanyCard: View {
     var body: some View {
         let today = company["today_new"]?.integer ?? 0
         Button(action: open) {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 12) {
-                    PoolLogo(name: company.text("name"), url: company.text("logo_url"), size: 40)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(company.text("name")).font(V3.sans(15, weight: .medium)).foregroundStyle(hover ? V3.blue : V3.txt).lineLimit(1)
-                        Text(company.text("industry")).font(V3.sans(12)).foregroundStyle(V3.fnt)
+                    PoolLogo(name: company.text("name"), url: company.text("logo_url"), size: 32, filled: true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(company.text("name")).font(V3.sans(13, weight: .medium)).foregroundStyle(hover ? V3.blue : V3.txt).lineLimit(1).frame(height: 17)
+                        Text(company.text("industry")).font(V3.sans(11)).foregroundStyle(V3.fnt).lineLimit(1).frame(height: 14)
                     }.frame(maxWidth: .infinity, alignment: .leading)
-                    if today > 0 { PoolBadge(text: "今日 +\(today)") }
-                    else { Text("今日无新增").font(V3.sans(11.5)).foregroundStyle(V3.fnt2).fixedSize() }
-                }
-                HStack(alignment: .bottom, spacing: 16) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(grouped(company["open_count"]?.integer ?? 0)).font(V3.number(26)).foregroundStyle(V3.txt)
-                        Text("个在招岗位").font(V3.sans(12)).foregroundStyle(V3.fnt)
+                    if today > 0 { Text("今日 +\(grouped(today))").font(V3.sans(11.5)).foregroundStyle(V3.blue).fixedSize() }
+                }.frame(height: 40)
+                HStack(alignment: .firstTextBaseline, spacing: 0) {
+                    Text(grouped(company["open_count"]?.integer ?? 0)).font(.system(size: 20)).monospacedDigit().foregroundStyle(V3.txt)
+                    Text("在招").font(V3.sans(11.5)).foregroundStyle(V3.fnt).padding(.leading, 5)
+                    Spacer(minLength: 8)
+                    HStack(alignment: .firstTextBaseline, spacing: 13) {
+                        ForEach(JobPool.types, id: \.value) { type in
+                            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                                Text(type.label).font(V3.sans(11.5)).foregroundStyle(V3.fnt)
+                                Text(grouped(company["counts"]?[type.value]?.integer ?? 0)).font(.system(size: 12.5)).monospacedDigit().foregroundStyle(V3.sub)
+                            }
+                        }
                     }
-                    Spacer(minLength: 0)
-                    trend((company["daily_new"]?.items ?? []).map(\.integer))
-                }.frame(height: 37, alignment: .bottom)
-                HStack(spacing: 0) {
-                    ForEach(JobPool.types, id: \.value) { type in
-                        let count = company["counts"]?[type.value]?.integer ?? 0
-                        HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text(type.label).font(V3.sans(12)).foregroundStyle(V3.fnt)
-                            if count > 0 { Text(grouped(count)).font(V3.number(13, weight: .medium)).foregroundStyle(V3.txt) }
-                            else { Text("暂无").font(V3.sans(12)).foregroundStyle(V3.fnt2) }
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                .frame(height: 22).padding(.top, 13).overlay(alignment: .top) { Rectangle().fill(V3.line).frame(height: 1) }
+                }.frame(height: 27).padding(.top, 16)
             }
-            .padding(.horizontal, 18).padding(.top, 18).padding(.bottom, 16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.white, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(hover ? V3.cl : V3.line))
-            .shadow(color: .black.opacity(hover ? 0.04 : 0), radius: 8, y: 4)
-            .offset(y: hover ? -1 : 0)
-            .contentShape(RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 12)
+            .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
+            .background(.white, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(V3.cl))
+            .contentShape(RoundedRectangle(cornerRadius: 10))
         }
-        .buttonStyle(.plain).onHover { hover = $0 }.animation(.easeOut(duration: 0.16), value: hover)
+        .buttonStyle(.plain).onHover { hover = $0 }.animation(.easeOut(duration: 0.12), value: hover)
         .accessibilityLabel(company.text("name"))
-    }
-
-    /// `.pool-trend`：近 7 天新增的小柱图，今天为蓝色。
-    private func trend(_ values: [Int]) -> some View {
-        let top = max(1, values.max() ?? 1)
-        return HStack(alignment: .bottom, spacing: 4) {
-            ForEach(Array(values.enumerated()), id: \.offset) { index, value in
-                RoundedRectangle(cornerRadius: 2).fill(index == values.count - 1 ? V3.blue : V3.hl)
-                    .frame(maxWidth: .infinity).frame(height: 28 * CGFloat(max(12, Int((Double(value) / Double(top) * 100).rounded()))) / 100)
-            }
-        }
-        .frame(width: 84, height: 28, alignment: .bottom)
-        .accessibilityElement().accessibilityLabel("近 7 天新增：" + values.map(String.init).joined(separator: "、"))
     }
 }
 
@@ -612,7 +602,7 @@ private struct JobPoolCompany: View {
     var body: some View {
         Group {
             if companyState == "missing" {
-                V3Page {
+                V3Page(top: 38) {
                     VStack(alignment: .leading, spacing: 0) {
                         PoolCrumbs(back: root, current: "公司不存在")
                         PoolState(title: "没有找到这家公司", message: "公司可能已不再收录，或链接不完整。", width: 314, stage: 96,
@@ -631,14 +621,31 @@ private struct JobPoolCompany: View {
 
     private var name: String { company?.text("name") ?? "" }
 
+    /// 公司头城市标签：已加载岗位里出现最多的工作城市。
+    private var mainCity: String? {
+        var counts: [String: Int] = [:]
+        for job in jobs { for city in JobPool.cities(job) { counts[city, default: 0] += 1 } }
+        return counts.max { ($0.value, $1.key) < ($1.value, $0.key) }?.key
+    }
+
+    /// 公司头「HH:mm 同步」：岗位所属官网来源最近一次完整同步时间（`source.last_complete_at`）。
+    private var syncedAt: String? {
+        jobs.compactMap { $0["source"]?.text("last_complete_at").nonEmptyValue }.max().flatMap(PoolSync.text)
+    }
+
+    /// 02 · B 公司页（82:22740）：面包屑距顶 40 → 公司头（Logo 56）→ 方向 ScopeBar 与本公司搜索 → 分隔线 → 类型分段与城市 → 岗位列表。
     private var page: some View {
-        V3Page {
+        V3Page(top: 38) {
             VStack(alignment: .leading, spacing: 0) {
                 PoolCrumbs(back: root, current: name.isEmpty ? "公司" : name)
-                head
-                PoolChips(items: [(value: "", label: "全部方向", count: nil)] + (company?["categories"]?.items ?? []).map { (value: $0.text("name"), label: $0.text("name"), count: Optional($0["count"]?.integer ?? 0)) },
-                          selection: query.category, label: "按方向筛选") { query.category = $0 }
-                    .padding(.top, 22)
+                head.padding(.top, 18)
+                HStack(alignment: .center, spacing: 16) {
+                    PoolChips(items: [(value: "", label: "全部", count: company?["open_count"]?.integer)] + (company?["categories"]?.items ?? []).map { (value: $0.text("name"), label: $0.text("name"), count: Optional($0["count"]?.integer ?? 0)) },
+                              selection: query.category, label: "按方向筛选") { query.category = $0 }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    companySearch
+                }.padding(.top, 37)
+                Rectangle().fill(V3.line).frame(height: 1).padding(.top, 20)
                 resultBar
                 if keywordError { PoolNote(text: JobPool.keywordError).padding(.top, 12) }
                 list
@@ -647,37 +654,35 @@ private struct JobPoolCompany: View {
     }
 
     @ViewBuilder private var head: some View {
-        HStack(alignment: .bottom, spacing: 24) {
+        HStack(alignment: .top, spacing: 24) {
             if let company {
-                HStack(spacing: 14) {
-                    PoolLogo(name: company.text("name"), url: company.text("logo_url"), size: 48)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(company.text("name")).font(V3.serif(28)).foregroundStyle(V3.txt).frame(height: 36)
-                        HStack(spacing: 10) {
-                            Text(company.text("industry")).font(V3.sans(12)).foregroundStyle(V3.sub).padding(.horizontal, 7).frame(height: 20)
-                                .background(V3.field, in: RoundedRectangle(cornerRadius: 4))
+                HStack(alignment: .top, spacing: 18) {
+                    PoolLogo(name: company.text("name"), url: company.text("logo_url"), size: 56)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(company.text("name")).font(.system(size: 24, weight: .semibold)).foregroundStyle(V3.txt).lineLimit(1).frame(height: 31)
+                        HStack(spacing: 8) {
+                            if let industry = company.text("industry").nonEmptyValue { V3Chip(label: industry, height: 18, size: 11.5) }
+                            if let city = mainCity { V3Chip(label: city, height: 18, size: 11.5) }
                             if let careers = company.text("careers_url").nonEmptyValue, let url = URL(string: careers) {
-                                Link(destination: url) {
-                                    HStack(spacing: 4) { Text(JobPool.host(careers)); Image(systemName: "arrow.up.right.square").font(.system(size: 10)) }
-                                }.font(V3.sans(12.5)).foregroundStyle(V3.fnt)
+                                Link(destination: url) { Text(JobPool.host(careers) + " ↗") }.font(V3.sans(11.5)).foregroundStyle(V3.sub)
                             }
-                        }
-                    }
+                        }.padding(.top, 7)
+                    }.padding(.top, -2)
                 }
                 Spacer(minLength: 0)
-                PoolStats(count: company["open_count"]?.integer ?? 0, today: company["today_new"]?.integer ?? 0)
+                PoolStats(count: company["open_count"]?.integer ?? 0, today: company["today_new"]?.integer ?? 0, extra: syncedAt.map { "\($0) 同步" }).padding(.top, 3)
             } else if companyState == "error" {
                 PoolNote(text: "公司信息暂时无法加载。") {
                     Button("重试") { revision += 1 }.buttonStyle(.plain).font(V3.sans(12.5, weight: .medium)).foregroundStyle(V3.sub)
                 }
             } else {
-                HStack(spacing: 14) {
-                    PoolSkeleton(width: 48, height: 48, radius: 10)
-                    VStack(alignment: .leading, spacing: 8) { PoolSkeleton(width: 140, height: 24); PoolSkeleton(width: 90, height: 12) }
+                HStack(spacing: 18) {
+                    PoolSkeleton(width: 56, height: 56, radius: 12)
+                    VStack(alignment: .leading, spacing: 10) { PoolSkeleton(width: 140, height: 24); PoolSkeleton(width: 90, height: 12) }
                 }.accessibilityHidden(true)
                 Spacer(minLength: 0)
             }
-        }
+        }.frame(minHeight: 56, alignment: .top)
     }
 
     private var tabs: [(value: String, label: String, count: Int?)] {
@@ -688,51 +693,54 @@ private struct JobPoolCompany: View {
         return items
     }
 
+    /// 类型分段（82:22740 的 Segmented：#F4F4F2 槽、选中白底）与右侧清除筛选、城市 PopUpButton；距分隔线 13。
     private var resultBar: some View {
-        HStack(alignment: .bottom, spacing: 16) {
-            HStack(spacing: 26) {
-                ForEach(tabs, id: \.value) { tab in
+        HStack(spacing: 10) {
+            HStack(spacing: 0) {
+                ForEach(Array(tabs.enumerated()), id: \.element.value) { index, tab in
                     let active = query.type == tab.value
+                    let nextActive = index + 1 < tabs.count && query.type == tabs[index + 1].value
                     Button { query.type = tab.value } label: {
                         HStack(spacing: 5) {
-                            Text(tab.label).font(V3.sans(14, weight: active ? .medium : .regular)).foregroundStyle(active ? V3.txt : V3.sub)
-                            if let count = tab.count { Text(grouped(count)).font(V3.number(12, weight: .regular)).foregroundStyle(V3.fnt) }
+                            Text(tab.label).foregroundStyle(V3.txt)
+                            if let count = tab.count { Text(grouped(count)).monospacedDigit().foregroundStyle(active ? V3.sub : V3.fnt) }
                         }
-                        .frame(height: 36)
-                        .overlay(alignment: .bottom) { if active { RoundedRectangle(cornerRadius: 1).fill(V3.txt).frame(height: 2) } }
+                        .font(V3.sans(12.5, weight: active ? .medium : .regular))
+                        .padding(.horizontal, 10).frame(height: 22)
+                        .background(active ? Color.white : .clear, in: RoundedRectangle(cornerRadius: 5))
+                        .shadow(color: .black.opacity(active ? 0.12 : 0), radius: 0.5, y: 0.5)
                         .contentShape(Rectangle())
                     }.buttonStyle(.plain).accessibilityAddTraits(active ? .isSelected : [])
+                    if index + 1 < tabs.count {
+                        Rectangle().fill(active || nextActive ? .clear : V3.sk2).frame(width: 1, height: 12)
+                    }
                 }
             }
-            .padding(.bottom, -7)
+            .padding(2).background(V3.field, in: RoundedRectangle(cornerRadius: 7))
             .accessibilityElement(children: .contain).accessibilityLabel("招聘类型")
             Spacer(minLength: 0)
-            // Web 的城市选择比搜索框低 4px，「清除筛选」顶端比搜索框低 6px，三者并非居中对齐。
-            HStack(alignment: .top, spacing: 8) {
-                if query.filtered {
-                    Button("清除筛选", action: clear).buttonStyle(.plain).font(V3.sans(12, weight: .medium)).foregroundStyle(V3.sub)
-                        .frame(height: 20).padding(.top, 6).padding(.trailing, 6)
-                }
-                companySearch
-                PoolSelect(label: "城市", value: query.city.isEmpty ? "" : query.city,
-                           options: [("all", "全部城市")] + (company?["cities"]?.items ?? []).compactMap(\.stringValue).map { ($0, $0) },
-                           placeholder: "城市") { query.city = $0 == "all" ? "" : $0 }
-                    .padding(.top, 4)
+            if query.filtered {
+                Button("清除筛选", action: clear).buttonStyle(.plain).font(V3.sans(12, weight: .medium)).foregroundStyle(V3.sub).padding(.trailing, 4)
             }
+            PoolSelect(label: "城市", value: query.city.isEmpty ? "" : query.city,
+                       options: [("all", "全部城市")] + (company?["cities"]?.items ?? []).compactMap(\.stringValue).map { ($0, $0) },
+                       placeholder: "城市") { query.city = $0 == "all" ? "" : $0 }
+            // 82:22740：城市右侧的排序 PopUpButton（`GET /api/job-pool?sort=published|collected`）
+            PoolSelect(label: "排序", value: query.sort, options: [("published", "最新发布"), ("collected", "最新收录")]) { query.sort = $0 }
         }
-        .frame(minHeight: 44, alignment: .bottom).padding(.bottom, 6).padding(.top, 14)
-        .overlay(alignment: .bottom) { Rectangle().fill(V3.cl).frame(height: 1) }
+        .frame(height: 26).padding(.top, 13)
     }
 
+    /// 本公司搜索（macOS SearchField 观感，回车提交）。
     private var companySearch: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(V3.fnt)
             TextField("", text: $keyword, prompt: Text(name.isEmpty ? "搜索本公司岗位" : "搜索\(name)的岗位").foregroundStyle(V3.fnt))
-                .textFieldStyle(.plain).font(V3.sans(14)).foregroundStyle(V3.txt)
+                .textFieldStyle(.plain).font(V3.sans(13)).foregroundStyle(V3.txt)
                 .onSubmit(submit).onChange(of: keyword) { keywordError = false }
         }
-        .padding(.horizontal, 10).frame(width: 220, height: 32)
-        .background(.white, in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(V3.cl))
+        .padding(.horizontal, 8).frame(width: 220, height: 28)
+        .background(Color.black.opacity(0.05), in: RoundedRectangle(cornerRadius: 7))
         .accessibilityLabel("搜索本公司岗位")
     }
 
@@ -747,23 +755,26 @@ private struct JobPoolCompany: View {
                             PoolSkeleton(width: box.size.width * 0.38, height: 16); PoolSkeleton(width: box.size.width * 0.3, height: 12)
                             PoolSkeleton(width: box.size.width * 0.92, height: 12); PoolSkeleton(width: box.size.width * 0.7, height: 12)
                         }
-                    }.frame(height: 92).padding(.horizontal, 16).padding(.vertical, 20)
+                    }.frame(height: 92).padding(.horizontal, 20).padding(.vertical, 22)
                 }
-            }.padding(.top, 8).padding(.horizontal, -16).accessibilityLabel("正在加载岗位…")
+            }.padding(.top, 10).padding(.horizontal, -20).accessibilityLabel("正在加载岗位…")
         } else if jobs.isEmpty {
             let summary = [query.keyword, query.category, JobPool.types.first { $0.value == query.type }?.label ?? "", query.city].filter { !$0.isEmpty }.joined(separator: " · ")
             PoolState(title: query.filtered ? "没有符合条件的岗位" : "这家公司暂时没有在招岗位",
                       message: query.filtered ? "换个关键词，或减少方向、类型、城市的筛选条件试试。" : "官网的岗位同步后会出现在这里，稍后再来看看。",
                       art: { PoolEmptyArt(summary: summary.isEmpty ? name : summary) }) {
-                if query.filtered { Button("清除筛选", action: clear).buttonStyle(V3ButtonStyle(kind: .dark)) }
+                if query.filtered {
+                    Button(action: clear) { Image(systemName: "line.3.horizontal.decrease").font(.system(size: 10)); Text("清除筛选") }
+                        .buttonStyle(V3ButtonStyle(kind: .ghost))
+                }
             }
         } else {
-            VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
                 ForEach(jobs, id: \.self) { job in
                     PoolJobRow(job: job, joining: join.joiningID, open: { openJob(job.text("id")) },
                                openApplication: openApplication, join: { Task { await joinJob(job) } })
                 }
-            }.padding(.top, 8).padding(.horizontal, -16)
+            }.padding(.top, 10).padding(.horizontal, -20)
             Group {
                 if moreFailed {
                     HStack(spacing: 0) {
@@ -778,7 +789,7 @@ private struct JobPoolCompany: View {
         }
     }
 
-    private func clear() { keyword = ""; keywordError = false; query = JobPoolView.Query() }
+    private func clear() { keyword = ""; keywordError = false; let sort = query.sort; query = JobPoolView.Query(); query.sort = sort }
 
     private func submit() {
         let text = keyword.trimmingCharacters(in: .whitespaces)
@@ -788,7 +799,7 @@ private struct JobPoolCompany: View {
     }
 
     private func params(cursor: String? = nil) -> [String: String] {
-        var result = ["company_ids": companyID]
+        var result = ["company_ids": companyID, "sort": query.sort]
         if !query.keyword.isEmpty { result["keyword"] = query.keyword }
         if !query.city.isEmpty { result["city"] = query.city }
         if !query.category.isEmpty { result["job_category"] = query.category }
@@ -841,6 +852,9 @@ private struct JobPoolCompany: View {
     }
 }
 
+/// 82:1919 岗位条目：标题「岗位名 - 团队」16 中粗 + 今日新增；细竖线分隔的属性行；灰色简介最多两行。
+/// 列表无分隔线、靠留白区分；悬停整条浮起为白底圆角 12 卡片，右侧出现「官网 ↗」与唯一黑色胶囊「加入求职进程」；
+/// 已加入的条目右侧常显灰色「✓ 已加入求职进程」。
 private struct PoolJobRow: View {
     let job: JSONValue
     let joining: String?
@@ -852,56 +866,65 @@ private struct PoolJobRow: View {
     var body: some View {
         let closed = job.text("availability_status") == "closed"
         let joined = job.text("joined_application_id").nonEmptyValue
+        let meta = JobPool.meta(job)
+        let fresh = JobPool.isToday(job.text("published_at"))
         Button(action: open) {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 10) {
                     (Text(job.text("title")) + Text(job.text("department").nonEmptyValue.map { " - " + $0 } ?? ""))
                         .font(V3.sans(16, weight: .medium)).foregroundStyle(closed ? V3.fnt : hover ? V3.blue : V3.txt).lineLimit(1).frame(height: 22)
                     if JobPool.isToday(job.text("new_at")) { PoolBadge(text: "今日新增") }
                     if job.text("availability_status") == "missing" { PoolBadge(text: "本轮未发现", warn: true) }
-                }.padding(.trailing, 220).frame(maxWidth: .infinity, alignment: .leading)
+                }
                 HStack(spacing: 0) {
-                    ForEach(Array(JobPool.meta(job).enumerated()), id: \.offset) { index, part in
+                    ForEach(Array(meta.enumerated()), id: \.offset) { index, part in
                         if index > 0 { Rectangle().fill(V3.cl).frame(width: 1, height: 11).padding(.horizontal, 10) }
-                        Text(part)
+                        // 发布时间是今天时用蓝字点睛
+                        Text(part).foregroundStyle(fresh && index == meta.count - 1 ? V3.blue : V3.sub)
                     }
-                }.font(V3.sans(13)).foregroundStyle(V3.sub).lineLimit(1).frame(height: 22)
+                }.font(V3.sans(13)).lineLimit(1).frame(height: 16).padding(.top, 14)
                 if let summary = job.text("summary").nonEmptyValue {
-                    // 两行 × 22 行高（`-webkit-line-clamp: 2`）
-                    Text(summary).font(V3.sans(13)).foregroundStyle(V3.fnt).lineSpacing(22 - 13 * 1.2).lineLimit(2)
-                        .frame(height: 44, alignment: .center).frame(maxWidth: .infinity, alignment: .leading)
+                    // 最多两行（行高 19），超出以省略号截断
+                    Text(summary).font(V3.sans(12.5)).foregroundStyle(V3.fnt).lineSpacing(19 - 12.5 * 1.2).lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true).padding(.top, 17)
                 }
             }
-            .padding(.horizontal, 16).padding(.vertical, 18).frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.trailing, 230)
+            .padding(.horizontal, 20).padding(.vertical, 22).frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(hover ? Color.white : .clear, in: RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(hover ? 0.06 : 0), radius: 7, y: 2)
-        .overlay(alignment: .topTrailing) {
-            HStack(spacing: 14) {
+        .background {
+            if hover {
+                RoundedRectangle(cornerRadius: 12).fill(.white)
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(V3.line))
+                    .shadow(color: .black.opacity(0.06), radius: 8, y: 3)
+            }
+        }
+        .overlay(alignment: .trailing) {
+            HStack(spacing: 9) {
                 if let joined {
                     Button { openApplication(joined) } label: {
-                        HStack(spacing: 4) { Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)); Text("已加入求职进程") }
-                            .font(V3.sans(12, weight: .medium)).foregroundStyle(Color(hex: 0x2E7D50))
-                            .padding(.horizontal, 10).padding(.vertical, 3).background(V3.greenSoft, in: Capsule())
-                    }.buttonStyle(.plain)
-                } else {
+                        Text("✓ 已加入求职进程").font(V3.sans(11.5)).foregroundStyle(V3.fnt)
+                            .padding(.horizontal, 10).frame(height: 24).background(V3.field, in: Capsule()).overlay(Capsule().stroke(V3.cl))
+                    }.buttonStyle(.plain).accessibilityLabel("已加入求职进程，打开求职记录")
+                } else if hover {
                     if let url = URL(string: job.text("source_url")) {
                         Link(destination: url) {
-                            HStack(spacing: 3) { Text("官网"); Image(systemName: "arrow.up.right.square").font(.system(size: 10)) }
-                        }.font(V3.sans(12.5, weight: .medium)).foregroundStyle(V3.sub)
+                            Text("官网 ↗").font(V3.sans(12.5, weight: .medium)).foregroundStyle(V3.txt)
+                                .padding(.horizontal, 14).frame(height: 31).background(.white, in: Capsule()).overlay(Capsule().stroke(V3.cl))
+                        }.buttonStyle(.plain)
                     }
                     if !closed {
-                        Button(joining == job.text("id") ? "正在加入…" : "加入求职进程", action: join)
-                            .buttonStyle(V3ButtonStyle(kind: .dark, height: 28)).font(V3.sans(12)).disabled(joining != nil)
+                        Button(action: join) {
+                            Text(joining == job.text("id") ? "正在加入…" : "加入求职进程").font(V3.sans(12.5, weight: .medium)).foregroundStyle(.white)
+                                .padding(.horizontal, 16).frame(height: 32).background(V3.txt, in: Capsule())
+                        }.buttonStyle(.plain).disabled(joining != nil).opacity(joining != nil && joining != job.text("id") ? 0.5 : 1)
                     }
                 }
-            }
-            .padding(.top, 14).padding(.trailing, 16)
-            .opacity(hover || joined != nil ? 1 : 0)
+            }.padding(.trailing, 20)
         }
-        .onHover { hover = $0 }.animation(.easeOut(duration: 0.16), value: hover)
+        .onHover { hover = $0 }.animation(.easeOut(duration: 0.14), value: hover)
         .accessibilityElement(children: .contain)
     }
 }
@@ -925,17 +948,18 @@ private struct JobPoolJob: View {
     @State private var join = PoolJoin()
 
     var body: some View {
-        V3Page(bottom: 48) {
+        // 02 · C 岗位详情（82:22736）：左正文 680、右侧吸附操作栏 326，间距 41。
+        V3Page(top: 38, bottom: 48) {
             VStack(alignment: .leading, spacing: 0) {
                 switch state {
                 case "missing":
-                    PoolCrumbs(back: root, current: "岗位不存在")
+                    PoolCrumbs(back: root, current: "岗位不存在").padding(.bottom, 12)
                     PoolState(title: "没有找到这个岗位", message: "岗位可能已被移除，或链接不完整。", width: 314, stage: 96,
                               art: { PoolUnavailableArt(tag: "链接已失效") }) {
                         Button("返回岗位广场", action: root).buttonStyle(.plain).font(V3.sans(14, weight: .medium)).foregroundStyle(V3.link)
                     }
                 case "error":
-                    PoolCrumbs(back: root, current: "岗位详情")
+                    PoolCrumbs(back: root, current: "岗位详情").padding(.bottom, 12)
                     PoolError(title: "岗位详情暂时无法加载", message: "网络不稳定或服务暂时不可用，稍后重试即可。") { revision += 1 }
                 default:
                     if let job { detail(job) } else { skeleton }
@@ -961,9 +985,10 @@ private struct JobPoolJob: View {
         let companyName = job["company"]?.text("name") ?? ""
         return VStack(alignment: .leading, spacing: 0) {
             PoolCrumbs(back: root, trail: [(companyName, { openCompany(companyID, JobPoolView.Query()) })], current: job.text("title"))
-            HStack(alignment: .top, spacing: 40) {
-                main(job, companyID: companyID, companyName: companyName).frame(maxWidth: 700, alignment: .leading).frame(maxWidth: .infinity, alignment: .leading)
-                side(job, companyID: companyID, companyName: companyName).frame(width: 320)
+            HStack(alignment: .top, spacing: 41) {
+                main(job, companyID: companyID, companyName: companyName).frame(maxWidth: 680, alignment: .leading).frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 24)
+                side(job, companyID: companyID, companyName: companyName).frame(width: 326).padding(.top, 18)
             }
         }
     }
@@ -972,7 +997,7 @@ private struct JobPoolJob: View {
         [("工作城市", JobPool.cities(job).joined(separator: "、")), ("招聘类型", JobPool.jobType(job)), ("岗位方向", job.text("category")),
          ("招聘项目", JobPool.attribute(job, "batch") ?? ""), ("毕业届别", JobPool.attribute(job, "graduation_year") ?? ""),
          ("学历要求", JobPool.attribute(job, "education_requirement") ?? ""), ("经验要求", JobPool.attribute(job, "experience_requirement") ?? ""),
-         ("薪资", job.text("salary_text")), ("投递截止", JobPool.attribute(job, "deadline") ?? "")].filter { !$0.1.isEmpty }
+         ("薪资", job.text("salary_text")), ("投递截止", JobPool.attribute(job, "deadline").map { PoolSync.deadline($0)?.date ?? $0 } ?? "")].filter { !$0.1.isEmpty }
     }
 
     private func main(_ job: JSONValue, companyID: String, companyName: String) -> some View {
@@ -984,17 +1009,20 @@ private struct JobPoolJob: View {
         return VStack(alignment: .leading, spacing: 0) {
             Button { openCompany(companyID, JobPoolView.Query()) } label: {
                 HStack(spacing: 8) {
-                    PoolLogo(name: companyName, url: job["company"]?.text("logo_url") ?? "", size: 24)
-                    Text(companyName).font(V3.sans(13)).foregroundStyle(V3.sub)
+                    PoolLogo(name: companyName, url: job["company"]?.text("logo_url") ?? "", size: 20)
+                    Text(companyName).font(V3.sans(12.5)).foregroundStyle(V3.sub)
                 }
             }.buttonStyle(.plain)
             (Text(job.text("title")) + Text(job.text("department").nonEmptyValue.map { " - " + $0 } ?? ""))
                 .font(.system(size: 26, weight: .semibold)).foregroundStyle(V3.txt).lineHeight(26, 37.7)
-                .fixedSize(horizontal: false, vertical: true).padding(.top, 18)
+                .fixedSize(horizontal: false, vertical: true).padding(.top, 12)
             HStack(spacing: 12) {
                 if JobPool.isToday(job.text("new_at")) && !closed { PoolBadge(text: "今日新增") }
                 HStack(spacing: 6) { Circle().fill(status.0).frame(width: 6, height: 6); Text(status.1).font(V3.sans(12.5, weight: .medium)) }.foregroundStyle(status.0)
                 if let published { Text(published).font(V3.sans(12.5)).foregroundStyle(V3.fnt) }
+                if let synced = job["source"]?.text("last_complete_at").nonEmptyValue.flatMap(PoolSync.text) {
+                    Text("· 官网 \(synced) 同步").font(V3.sans(12.5)).foregroundStyle(V3.fnt)
+                }
             }.frame(height: 22).padding(.top, 10)
             if !closed && missing {
                 PoolNote(text: "本轮同步未发现该岗位，暂时保留；请到官网确认招聘状态。", icon: true).padding(.top, 16)
@@ -1089,16 +1117,22 @@ private struct JobPoolJob: View {
                     statusBlock("岗位已从官网下线", check: false)
                     hint("以下为收录时的内容，无法再加入求职进程。", link: ("查看\(companyName)的其他岗位 →", { openCompany(companyID, JobPoolView.Query()) }))
                 } else {
+                    // 82:1541 操作卡 · 未加入：整宽 40 高墨黑主按钮（圆角 8）
                     Button { Task { await joinJob(job) } } label: {
-                        if join.joiningID == job.text("id") { Text("正在加入…").frame(maxWidth: .infinity) }
-                        else { HStack(spacing: 6) { Image(systemName: "plus").font(.system(size: 11, weight: .semibold)); Text("加入求职进程") }.frame(maxWidth: .infinity) }
-                    }.buttonStyle(V3ButtonStyle(kind: .dark, height: 36, width: 280)).disabled(join.joiningID != nil)
+                        Text(join.joiningID == job.text("id") ? "正在加入…" : "加入求职进程").font(V3.sans(13.5, weight: .medium)).foregroundStyle(.white)
+                            .frame(maxWidth: .infinity).frame(height: 40).background(V3.txt, in: RoundedRectangle(cornerRadius: 8))
+                            .contentShape(RoundedRectangle(cornerRadius: 8))
+                    }.buttonStyle(.plain).disabled(join.joiningID != nil).opacity(join.joiningID != nil ? 0.6 : 1)
                     if let source { officialButton(source) }
                     hint("加入后在投递看板跟进投递进度、安排面试。", link: nil)
                 }
                 if deadline != nil || sourceID != nil {
                     VStack(alignment: .leading, spacing: 10) {
-                        if let deadline { row("投递截止") { Text(deadline) } }
+                        if let deadline {
+                            // 截止日「11月30日 · 还剩 N 天」；无法解析或已过期只写日期
+                            let parsed = PoolSync.deadline(deadline)
+                            row("投递截止") { Text([parsed?.date ?? deadline, parsed?.left].compactMap { $0 }.joined(separator: " · ")) }
+                        }
                         if let sourceID {
                             row("职位 ID") {
                                 Text(sourceID).font(V3.number(12.5, weight: .medium)).lineLimit(1).truncationMode(.tail)
@@ -1128,9 +1162,9 @@ private struct JobPoolJob: View {
 
     private func officialButton(_ url: URL) -> some View {
         Link(destination: url) {
-            HStack(spacing: 6) { Text("去官网投递"); Image(systemName: "arrow.up.right.square").font(.system(size: 11)) }
-                .font(V3.sans(14, weight: .medium)).foregroundStyle(V3.txt).frame(maxWidth: .infinity).frame(height: 36)
-                .background(.white, in: Capsule()).overlay(Capsule().stroke(V3.cl)).contentShape(Capsule())
+            Text("去官网投递 ↗").font(V3.sans(13.5, weight: .medium)).foregroundStyle(V3.txt).frame(maxWidth: .infinity).frame(height: 40)
+                .background(.white, in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(V3.cl))
+                .contentShape(RoundedRectangle(cornerRadius: 8))
         }.buttonStyle(.plain)
     }
 
@@ -1222,5 +1256,26 @@ private struct JobPoolJob: View {
         await join.join(value, api: session.api, open: openApplication,
             joined: { _, application in job = job?.with("joined_application_id", .string(application)) },
             closed: { _ in job = job?.with("availability_status", .string("closed")) })
+    }
+}
+
+
+/// 06 · 岗位广场：同步时间与投递截止的展示。
+enum PoolSync {
+    /// 今天只写「HH:mm」，其余写「今天/昨天/日期 HH:mm」（`JobPool.date`）。
+    static func text(_ value: String) -> String? {
+        guard let date = CareerApplication.date(value) else { return nil }
+        return Beijing.calendar.isDateInToday(date) ? CareerDeckFormat.clock(date) : JobPool.date(value)
+    }
+
+    /// `deadline` 为 YYYY-MM-DD：返回「11月30日」与「还剩 N 天 / 今天截止」，已过期时 left 为 nil。
+    static func deadline(_ value: String, now: Date = Date()) -> (date: String, left: String?)? {
+        let parts = value.prefix(10).split(separator: "-").compactMap { Int($0) }
+        let calendar = Beijing.calendar
+        guard parts.count == 3, let day = calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2])) else { return nil }
+        let left = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: day).day ?? 0
+        let thisYear = parts[0] == calendar.component(.year, from: now)
+        let text = (thisYear ? "" : "\(parts[0])年") + "\(parts[1])月\(parts[2])日"
+        return (text, left > 0 ? "还剩 \(left) 天" : left == 0 ? "今天截止" : nil)
     }
 }

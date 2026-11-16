@@ -22,7 +22,7 @@ for (const path of ['apps/mac/Sources/DrawOfferApp/Resources/Branding/wordmark.p
   assert.deepEqual(readFileSync(resolve(root, path)), readFileSync(resolve(root, 'apps/web/src/assets/drawoffer-wordmark.png')), `stale brand: ${path}`);
 }
 const fixtures = readFileSync(resolve(root, 'apps/native/shared/fixtures/resume-templates.json'), 'utf8');
-for (const path of ['apps/mac/Sources/DrawOfferCore/Resources/resume-templates.json', 'apps/windows/src/DrawOffer.Core/Resources/resume-templates.json']) {
+for (const path of ['apps/windows/src/DrawOffer.Core/Resources/resume-templates.json']) {
   assert.equal(readFileSync(resolve(root, path), 'utf8'), fixtures, `stale fixture: ${path}`);
 }
 const { templates } = JSON.parse(fixtures);

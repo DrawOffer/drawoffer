@@ -41,7 +41,7 @@ struct CareerStageDetailView: View {
             VStack(alignment: .leading, spacing: 24) {
                 if session.text("id").isEmpty {
                     CareerBreadcrumb(back: "← 求职进度", current: "阶段记录", action: back)
-                    if loading { ProgressView("正在加载记录…").font(LibraryTypography.sans(12)) }
+                    if loading { V3Loading("正在加载记录…").font(LibraryTypography.sans(12)) }
                     if let error { HStack { Text(error).foregroundStyle(CareerPalette.red); Button("重试") { refreshed = UUID() }.buttonStyle(CareerActionStyle()) } }
                 } else {
                     header
@@ -75,8 +75,8 @@ struct CareerStageDetailView: View {
                 await load(quiet: true)
             }
         }
-        .sheet(item: $sheet) { kind in sheetView(kind) }
-        .confirmationDialog("删除这场\(isWritten ? "笔试" : "面试")的文字记录？", isPresented: $deleteText, titleVisibility: .visible) {
+        .centeredSheet(item: $sheet) { kind in sheetView(kind) }
+        .centeredConfirmation("删除这场\(isWritten ? "笔试" : "面试")的文字记录？", isPresented: $deleteText) {
             Button("删除", role: .destructive) { Task { await update(["questions_markdown": .null]) } }
             Button("取消", role: .cancel) {}
         } message: { Text("录音与已生成的报告会保留，删除后可以重新添加。") }
@@ -351,7 +351,7 @@ struct CareerStageDetailView: View {
         case .importQuestions:
             CareerWrittenImportSheet(detail: detail, api: api, close: close, saved: { count in sheet = nil; notice = "已导入 \(count) 道题。"; refreshed = UUID() })
         case .reschedule:
-            CareerRescheduleSheet(session: session, api: api, close: close, saved: done)
+            CareerScheduleSheet(target: .edit(session), api: api, close: close, saved: { message in done(); if let message { notice = message } })
         case .plan:
             CareerPlanSheet(session: session, api: api, close: close, saved: done)
         }

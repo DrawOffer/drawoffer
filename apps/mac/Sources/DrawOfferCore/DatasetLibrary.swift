@@ -47,6 +47,8 @@ public struct DatasetUpload: Sendable, Identifiable {
     public let limit: Int64
     /// Upload straight to an interview session (`POST /api/interview-sessions/{id}/assets`) instead of a folder.
     public var session: String? = nil
+    /// 直接传进场次时：`false` 表示只当资料保存，录音不自动转文字（multipart `transcribe=false`）。
+    public var transcribe = true
     public static func snapshot(_ source: URL, session: String, limit: Int64) throws -> DatasetUpload {
         guard DatasetRequest.id(session) else { throw APIError.invalidResponse }
         var upload = try snapshot(source, folder: "1", limit: limit)
@@ -67,7 +69,7 @@ public struct DatasetUpload: Sendable, Identifiable {
             return DatasetUpload(id:UUID().uuidString.lowercased(),file:file,directory:directory,folder:folder,name:source.lastPathComponent,replacing:nil,revision:nil,limit:limit)
         } catch { try? FileManager.default.removeItem(at:directory); throw error }
     }
-    public func rekey() -> DatasetUpload { DatasetUpload(id:UUID().uuidString.lowercased(),file:file,directory:directory,folder:folder,name:name,replacing:replacing,revision:revision,limit:limit,session:session) }
+    public func rekey() -> DatasetUpload { DatasetUpload(id:UUID().uuidString.lowercased(),file:file,directory:directory,folder:folder,name:name,replacing:replacing,revision:revision,limit:limit,session:session,transcribe:transcribe) }
     public func discard() { try? FileManager.default.removeItem(at:directory) }
     public static func privateDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("DrawOfferLibrary-" + UUID().uuidString)

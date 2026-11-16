@@ -12,8 +12,11 @@ struct TemplateSwitchSheet: View {
     var disabled = false
     let apply: (ResumeTemplate) async -> String?
     let close: () -> Void
+    /// 07.2 悬停预览：鼠标在一套上停 150ms 交给编辑器在纸面临时换成这套；移出整列传 nil 恢复。当前那套不预览。
+    var preview: (ResumeTemplate?) -> Void = { _ in }
 
     @State private var templates: [ResumeTemplate] = []
+    @State private var hovered: String?
     @State private var loading = true
     @State private var failed = false
     @State private var applying: String?
@@ -29,20 +32,33 @@ struct TemplateSwitchSheet: View {
 
     static func key(_ template: ResumeTemplate) -> String { template.style["template_key"]?.stringValue ?? template.key }
 
+    /// 一次显示几套（07.1：先 20 套，滚到底再加 20 套）。
+    @State private var shown = 20
+
+    /// Figma 03 页 07.1：贴编辑器左边一整列（356 宽、白底、右侧细线）。标题「换模板」14/500 + 一句说明，
+    /// 下面一行「场景 全部 / 风格 全部」下拉和总数；两列缩略图（名称 12，当前那套黑框 +「当前」），底部一行已显示几套。
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            WorkbenchPanelHeader(title: "简历模板", subtitle: "点击模板即可应用到当前简历", closeLabel: "关闭简历模板面板", close: close)
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 9) {
+                    Text("换模板").font(V3.sans(14, weight: .medium)).foregroundStyle(V3.txt)
+                    Text("鼠标停在哪套，右边就先看哪套；点一下才换上").font(V3.sans(12)).foregroundStyle(Color(hex: 0x8F8F8A))
+                }
+                Spacer()
+                Button(action: close) { Image(systemName: "xmark").font(.system(size: 11, weight: .medium)).frame(width: 24, height: 24).contentShape(Rectangle()) }
+                    .buttonStyle(.plain).foregroundStyle(V3.fnt).accessibilityLabel("收起模板栏").padding(.top, -3)
+            }.padding(.horizontal, 36).padding(.top, 54)
             let ready = !loading && !failed && !templates.isEmpty
             if ready {
-                // `.workbench-template-filters`：56 高、左右 24；数量 11.5px fnt，筛选钮 28 高
-                HStack {
-                    Text("\(filtered.count) 套模板").font(V3.sans(11.5)).foregroundStyle(V3.fnt)
+                HStack(spacing: 18) {
+                    filterMenu("场景", TemplateFilter.useOptions, $uses)
+                    filterMenu("风格", TemplateFilter.styleOptions, $styles)
                     Spacer()
-                    TemplateFilter(styles: $styles, uses: $uses, height: 28)
-                }.padding(.horizontal, 24).frame(height: 56)
+                    Text("\(filtered.count) 套").font(V3.sans(11.5)).foregroundStyle(Color(hex: 0x96968F))
+                }.padding(.leading, 46).padding(.trailing, 36).frame(height: 30).padding(.top, 20)
             }
-            if let error { Text(error).font(V3.sans(12)).foregroundStyle(V3.red).padding(.horizontal, 24).padding(.bottom, 8) }
-            if loading { ProgressView("正在加载简历模板…").font(V3.sans(12)).frame(maxWidth: .infinity, maxHeight: .infinity) }
+            if let error { Text(error).font(V3.sans(12)).foregroundStyle(V3.red).padding(.horizontal, 36).padding(.top, 8) }
+            if loading { V3Loading("正在加载简历模板…").font(V3.sans(12)).frame(maxWidth: .infinity, maxHeight: .infinity) }
             else if failed {
                 state("模板暂时无法加载", "请检查网络后重试，当前简历不会受到影响。") {
                     Button { Task { await load() } } label: { Label("重新加载", systemImage: "arrow.clockwise") }.buttonStyle(V3ButtonStyle(kind: .ghost, height: 30))
@@ -54,20 +70,64 @@ struct TemplateSwitchSheet: View {
                     Button("清除筛选") { styles = []; uses = [] }.buttonStyle(V3ButtonStyle(kind: .ghost, height: 30))
                 }
             } else {
+                let visible = Array(filtered.prefix(shown))
                 ScrollViewReader { proxy in
                     ScrollView {
-                        // `.workbench-template-grid`：两列，行距 20、列距 12；body 内边距 1/24/24
-                        LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 20) {
-                            ForEach(filtered) { template in card(template).id(template.id) }
-                        }.frame(width: 332).padding(.top, 1).padding(.bottom, 24).frame(maxWidth: .infinity)
+                        LazyVGrid(columns: [GridItem(.fixed(132), spacing: 18), GridItem(.fixed(132), spacing: 18)], alignment: .leading, spacing: 18) {
+                            ForEach(visible) { template in
+                                card(template).id(template.id)
+                                    .onAppear { if template.id == visible.last?.id, shown < filtered.count { shown += 20 } }
+                            }
+                        }.padding(.horizontal, 36).padding(.top, 14).padding(.bottom, 16)
+                        Text(visible.count < filtered.count ? "已显示 \(visible.count) / \(filtered.count) 套 · 滚到底自动加载下 20 套" : "共 \(filtered.count) 套")
+                            .font(V3.sans(12)).foregroundStyle(Color(hex: 0x8F8F8A)).frame(maxWidth: .infinity).padding(.bottom, 24)
                     }.scrollIndicators(.never)
-                    // Web 打开时把当前模板滚到可视区中间
-                    .onAppear { if let current = filtered.first(where: { Self.key($0) == currentKey }) { proxy.scrollTo(current.id, anchor: .center) } }
+                    // 打开时把当前模板滚到可视区中间
+                    .onAppear {
+                        if let index = filtered.firstIndex(where: { Self.key($0) == currentKey }) {
+                            shown = max(shown, index + 1)
+                            proxy.scrollTo(filtered[index].id, anchor: .center)
+                        }
+                    }
                 }
+                .onChange(of: styles) { shown = 20 }
+                .onChange(of: uses) { shown = 20 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .contentShape(Rectangle())
+        // 移出整列才恢复原纸面；在两张卡之间移动不闪回
+        .onHover { inside in if !inside { hovered = nil; preview(nil) } }
         .task { await load() }
+    }
+
+    private func hover(_ template: ResumeTemplate, _ inside: Bool) {
+        guard inside else { if hovered == template.id { hovered = nil }; return }
+        hovered = template.id
+        Task {
+            try? await Task.sleep(for: .milliseconds(150))
+            guard hovered == template.id, applying == nil, !disabled else { return }
+            preview(Self.key(template) == currentKey ? nil : template)
+        }
+    }
+
+    /// 07.1 筛选：「场景 全部」「风格 全部」两个无边框下拉，单选；灰字标签 + 墨黑当前值。
+    private func filterMenu(_ title: String, _ options: [String], _ values: Binding<[String]>) -> some View {
+        Menu {
+            Button("全部") { values.wrappedValue = [] }
+            Divider()
+            ForEach(options, id: \.self) { option in
+                Button { values.wrappedValue = [option] } label: {
+                    if values.wrappedValue == [option] { Label(option, systemImage: "checkmark") } else { Text(option) }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(title).foregroundStyle(Color(hex: 0x96968F))
+                Text(values.wrappedValue.first ?? "全部").fontWeight(.medium).foregroundStyle(V3.txt)
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(V3.fnt)
+            }.font(V3.sans(11.5)).contentShape(Rectangle())
+        }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel(title)
     }
 
     /// `.workbench-template-state`：最少 190 高、居中；标题 13/500 txt，说明 12px fnt，间距 8。
@@ -79,24 +139,22 @@ struct TemplateSwitchSheet: View {
         }.frame(maxWidth: .infinity, minHeight: 190).padding(.horizontal, 24).padding(.top, 16)
     }
 
-    /// `.workbench-template-card`：纸面 210:297、圆角 6、#d3d3ce 描边（悬停 #b9b9b3，选中蓝色 2 层）；名称 12px（选中 500）、间距 10；
-    /// 选中右上 18 黑底白勾；应用中纸面上盖 70% 白与转圈。
+    /// 07.1 模板卡：132 宽 A4 缩略图（当前那套 1.5 墨黑框），下方名称 12（当前 500）与灰字「当前」；应用中盖 70% 白与转圈。
     private func card(_ template: ResumeTemplate) -> some View {
         let current = Self.key(template) == currentKey
         return Button { Task { await choose(template) } } label: {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
                 TemplateThumbnail(template: template, guest: false)
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(current ? V3.blue : .clear, lineWidth: 2))
-                    .overlay(alignment: .topTrailing) {
-                        if current {
-                            Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
-                                .frame(width: 18, height: 18).background(V3.txt, in: Circle()).padding(8).accessibilityHidden(true)
-                        }
-                    }
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(current ? V3.txt : hovered == template.id ? Color(hex: 0xB9B9B2) : .clear,
+                                                                       lineWidth: current ? 1.5 : 1))
                     .overlay { if applying == template.id { ZStack { Color.white.opacity(0.7); ProgressView().controlSize(.small) }.clipShape(RoundedRectangle(cornerRadius: 6)) } }
-                Text(template.name).font(V3.sans(12, weight: current ? .medium : .regular)).foregroundStyle(V3.txt).lineLimit(1).frame(height: 22)
-            }.contentShape(Rectangle())
+                HStack(spacing: 6) {
+                    Text(template.name).font(V3.sans(12, weight: current ? .medium : .regular)).foregroundStyle(current ? V3.txt : V3.sub).lineLimit(1)
+                    if current { Text("当前").font(V3.sans(10.5)).foregroundStyle(Color(hex: 0x96968F)) }
+                }.frame(height: 16)
+            }.frame(width: 132).contentShape(Rectangle())
         }.buttonStyle(.plain).disabled(disabled || applying != nil)
+            .onHover { hover(template, $0) }
             .accessibilityLabel(current ? "\(template.name)（当前模板）" : "应用模板：\(template.name)")
             .accessibilityAddTraits(current ? .isSelected : [])
     }
@@ -138,7 +196,7 @@ struct TypeSettingsPanel: View {
                 option("左右排列", symbol: "rectangle.split.2x1", on: !settings.smartOnePage && arrangement == "horizontal") {
                     if settings.smartOnePage { settings.smartOnePage = false }; arrangement = "horizontal"
                 }
-                option("智能一页", symbol: "sparkles", on: settings.smartOnePage) { settings.smartOnePage.toggle() }
+                option("智能一页", symbol: "doc.text", on: settings.smartOnePage) { settings.smartOnePage.toggle() }
                     .accessibilityAddTraits(.isToggle)
             }
             Text("排列只影响编辑时的浏览方向。").font(V3.sans(11)).foregroundStyle(V3.fnt).frame(height: 22).padding(.top, 10)
@@ -232,7 +290,15 @@ struct SectionOrderSheet: View {
     let columns: [String: String]
     let apply: ([JSONValue]) -> Void
     let close: () -> Void
+    /// 重命名 / 删除整个模块（Web 排版卡片“模块顺序”每行的 ⋯ 菜单）：立即改在纸上，可 ⌘Z 撤销。
+    var rename: (String, String) -> Void = { _, _ in }
+    var remove: (String) -> Void = { _ in }
     @State private var order: [JSONValue] = []
+    /// 改过名的模块：列表里先显示新名字（纸面回报后正文同步）。
+    @State private var titles: [String: String] = [:]
+    @State private var renaming: String?
+    @State private var renameText = ""
+    @FocusState private var renameFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -271,13 +337,42 @@ struct SectionOrderSheet: View {
 
     private func row(_ section: JSONValue) -> some View {
         let kind = ResumeDocument.sectionKinds.first { $0.key == section.text("semantic_kind") }?.label ?? "模块"
-        let title = ResumeDocument.value(section["title"])
+        let key = section.nodeKey
+        let title = titles[key] ?? ResumeDocument.value(section["title"])
+        let shown = title.isEmpty ? kind : title
         return HStack {
             Image(systemName: "line.3.horizontal").foregroundStyle(V3.fnt)
-            Text(title.isEmpty ? kind : title).font(V3.sans(13))
+            if renaming == key {
+                TextField("模块名称", text: $renameText).textFieldStyle(.plain).font(V3.sans(13)).focused($renameFocused)
+                    .onSubmit { commitRename(key) }
+                    .onExitCommand { renaming = nil }
+                    .onAppear { renameFocused = true }
+                    .onChange(of: renameFocused) { _, focused in if !focused && renaming == key { commitRename(key) } }
+            } else {
+                Text(shown).font(V3.sans(13))
+            }
             Spacer()
-            if !title.isEmpty && title != kind { Text(kind).font(V3.sans(11)).foregroundStyle(V3.fnt) }
+            if !title.isEmpty && title != kind && renaming != key { Text(kind).font(V3.sans(11)).foregroundStyle(V3.fnt) }
+            Menu {
+                Button { renameText = shown; renaming = key } label: { Label("重命名", systemImage: "pencil") }
+                Button(role: .destructive) {
+                    order.removeAll { $0.nodeKey == key }
+                    remove(key)
+                } label: { Label("删除模块", systemImage: "trash") }
+                Text("连同内容一起删除，可 ⌘Z 撤销")
+            } label: {
+                Image(systemName: "ellipsis").font(.system(size: 12, weight: .medium)).foregroundStyle(V3.fnt).frame(width: 22, height: 22).contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("「\(shown)」更多操作")
         }
+    }
+
+    private func commitRename(_ key: String) {
+        let value = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        renaming = nil
+        guard !value.isEmpty else { return }
+        titles[key] = value
+        rename(key, value)
     }
 
     /// 只在同一栏内移动：把该栏的新顺序写回它原来占据的位置。
@@ -512,138 +607,5 @@ private struct ColumnGlyph: View {
         RoundedRectangle(cornerRadius: 2).stroke(V3.fnt, lineWidth: 1.5).frame(width: 12, height: 10)
             .overlay(alignment: left ? .leading : .trailing) { Rectangle().fill(V3.fnt).frame(width: 4, height: 10) }
             .clipShape(RoundedRectangle(cornerRadius: 2)).accessibilityHidden(true)
-    }
-}
-
-/// 聚焦这段（Web `sectionFocus/FocusSheet.tsx` 的主要流程）：可写一句想怎么改，AI 按写作标准逐条给出建议；
-/// 每条建议可选一个改写采用（写回对应行，留在编辑器里由自动保存提交）或跳过，结果记在服务端的分析记录里。
-struct SectionFocusSheet: View {
-    @Environment(SessionStore.self) private var session
-    let resumeID: String
-    let unit: SectionFocus.Unit
-    let adopt: (String, String) -> Bool
-    let close: () -> Void
-    @State private var intent: String
-
-    init(resumeID: String, unit: SectionFocus.Unit, intent: String = "", adopt: @escaping (String, String) -> Bool, close: @escaping () -> Void) {
-        self.resumeID = resumeID; self.unit = unit; self.adopt = adopt; self.close = close
-        _intent = State(initialValue: String(intent.prefix(300)))
-    }
-    @State private var loading = false
-    @State private var error: String?
-    @State private var result: JSONValue?
-    @State private var handled: [String: String] = [:]
-
-    private var notes: [JSONValue] { result?["notes"]?.items ?? [] }
-    private var items: [JSONValue] { result?["review"]?["items"]?.items ?? [] }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("聚焦这段").font(V3.serif(20))
-                    Text(unit.heading.isEmpty ? "\(unit.lines.count) 行内容" : unit.heading).font(V3.sans(12)).foregroundStyle(V3.fnt).lineLimit(1)
-                }
-                Spacer()
-                Button("关闭", action: close).keyboardShortcut(.cancelAction)
-            }
-            if result == nil {
-                Text("AI 会按写作标准逐行检查这段内容，给出可直接采用的改写；不会自动改你的简历。").font(V3.sans(12.5)).foregroundStyle(V3.sub)
-                TextField("可选：想怎么改？比如“突出数据结果”“更简洁”", text: $intent).textFieldStyle(.roundedBorder)
-                    .onChange(of: intent) { if intent.count > 300 { intent = String(intent.prefix(300)) } }
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(unit.lines, id: \.id) { Text("· " + $0.text).font(V3.sans(12)).foregroundStyle(V3.sub).lineLimit(2) }
-                }.padding(10).frame(maxWidth: .infinity, alignment: .leading).background(V3.stage, in: RoundedRectangle(cornerRadius: 8))
-                HStack {
-                    if let error { Text(error).font(V3.sans(12)).foregroundStyle(V3.red) }
-                    Spacer()
-                    Button(loading ? "正在分析…" : "开始分析") { Task { await analyze() } }.buttonStyle(V3ButtonStyle(kind: .dark)).disabled(loading)
-                }
-            } else {
-                if result?["too_thin"]?.bool == true {
-                    Text("这段内容太少，先补几句做了什么、结果如何，再来分析会更准。").font(V3.sans(12.5)).foregroundStyle(V3.orange)
-                }
-                if notes.isEmpty { Text("这段写得不错，没有需要修改的地方。").font(V3.sans(13)).foregroundStyle(V3.sub) }
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(notes, id: \.self) { note in noteCard(note) }
-                    }
-                }.frame(maxHeight: 460)
-                HStack {
-                    if let error { Text(error).font(V3.sans(12)).foregroundStyle(V3.red) }
-                    Spacer()
-                    Button("重新分析") { result = nil; handled = [:] }.buttonStyle(V3ButtonStyle(kind: .ghost))
-                    Button("完成", action: close).buttonStyle(V3ButtonStyle(kind: .dark))
-                }
-            }
-        }.padding(22).frame(width: 600)
-    }
-
-    private func noteCard(_ note: JSONValue) -> some View {
-        let id = note.text("id")
-        let variants = note["variants"]?.items ?? []
-        let state = handled[id]
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(note.text("title")).font(V3.sans(13, weight: .semibold))
-                Spacer()
-                if let state { Text(state == "done" ? "已采用" : "已跳过").font(V3.sans(11.5)).foregroundStyle(state == "done" ? V3.green : V3.fnt) }
-            }
-            if !note.text("quote").isEmpty { Text("原文：" + note.text("quote")).font(V3.sans(12)).foregroundStyle(V3.fnt).strikethrough(state == "done") }
-            if !note.text("detail").isEmpty { Text(note.text("detail")).font(V3.sans(12)).foregroundStyle(V3.sub).fixedSize(horizontal: false, vertical: true) }
-            if let demo = note["demo"], case .object = demo {
-                Text("补全示范：" + demo.text("text")).font(V3.sans(12)).foregroundStyle(V3.blue).fixedSize(horizontal: false, vertical: true)
-                Text("〔〕里是只有你知道的数据，请在编辑器里补上。").font(V3.sans(11)).foregroundStyle(V3.fnt)
-            }
-            if state == nil {
-                ForEach(variants, id: \.self) { variant in
-                    HStack(alignment: .top, spacing: 8) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            if !variant.text("label").isEmpty { Text(variant.text("label")).font(V3.sans(11)).foregroundStyle(V3.fnt) }
-                            Text(variant.text("text")).font(V3.sans(12.5)).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-                            let risky = (variant["risky_terms"]?.items ?? []).compactMap(\.stringValue)
-                            if !risky.isEmpty { Text("「\(risky.joined(separator: "、"))」原句没有，请确认属实").font(V3.sans(11)).foregroundStyle(V3.orange) }
-                        }
-                        Spacer()
-                        Button("采用") { Task { await decide(note, variant: variant) } }.buttonStyle(V3ButtonStyle(kind: .ghost)).disabled(note.text("line_id").isEmpty)
-                    }.padding(8).background(V3.field, in: RoundedRectangle(cornerRadius: 7))
-                }
-                HStack { Spacer(); Button("跳过") { Task { await decide(note, variant: nil) } }.buttonStyle(.link).font(V3.sans(12)) }
-            }
-        }.padding(12).background(.white, in: RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(V3.cl))
-    }
-
-    private func analyze() async {
-        loading = true; error = nil
-        defer { loading = false }
-        var body: [String: JSONValue] = ["section": unit.payload, "reference": .object(["kind": .string("general")])]
-        let text = intent.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !text.isEmpty { body["intent"] = .string(text) }
-        do {
-            result = try await session.api.careerRequest(path: "/api/resumes/\(resumeID)/section-review:analyze", method: "POST", query: [:], body: .object(body))
-        } catch {
-            if case APIError.unauthorized = error { session.reportAuthenticationFailure() }
-            self.error = SectionFocus.errorMessage(error)
-        }
-    }
-
-    /// 采用：写回这一行并把服务端的建议项标为 done（附改写前后）；跳过：标为 skipped。
-    private func decide(_ note: JSONValue, variant: JSONValue?) async {
-        let noteID = note.text("id"), lineID = note.text("line_id")
-        if let variant {
-            let before = unit.lines.first { $0.id == lineID }?.text ?? note.text("quote")
-            guard adopt(lineID, variant.text("text")) else { error = "这一行已经不在简历里，没能采用。"; return }
-            handled[noteID] = "done"
-            await patch(noteID, ["status": .string("done"), "edit": .object(["line_id": .string(lineID), "before": .string(before), "after": .string(variant.text("text"))])])
-        } else {
-            handled[noteID] = "skipped"
-            await patch(noteID, ["status": .string("skipped")])
-        }
-    }
-
-    private func patch(_ noteID: String, _ body: [String: JSONValue]) async {
-        guard let reviewID = result?["review"]?.text("id"), let item = items.first(where: { $0.text("note_id") == noteID }) else { return }
-        do { _ = try await session.api.careerRequest(path: "/api/resumes/\(resumeID)/section-reviews/\(reviewID)/items/\(item.text("id"))", method: "PATCH", query: [:], body: .object(body)) }
-        catch { self.error = SectionFocus.errorMessage(error) }
     }
 }

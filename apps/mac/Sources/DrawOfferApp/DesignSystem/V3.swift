@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Web `v3/v3.css` page tokens and base controls shared by the board, schedule, library and mock pages.
@@ -56,7 +57,8 @@ struct V3PageHead<Actions: View>: View {
     }
 }
 
-/// `.v3-btn`: pill buttons. Dark is the single primary action on a page.
+/// macOS 稿（Figma 00 页 Button/Prominent · Bordered）：圆角 6 的原生按钮尺寸，常规高 28、大号高 32；
+/// 配色保留品牌——主按钮墨黑、次按钮白底 10% 黑描边。一页只有一个墨黑主按钮。
 struct V3ButtonStyle: ButtonStyle {
     enum Kind { case dark, ghost, text, danger }
     var kind: Kind = .ghost
@@ -69,81 +71,110 @@ struct V3ButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var enabled
     func makeBody(configuration: Configuration) -> some View {
         let pressed = configuration.isPressed
+        let large = height >= 36
+        let shape = RoundedRectangle(cornerRadius: 6)
         return HStack(spacing: 6) { configuration.label }
-            .font(V3.sans(kind == .text ? 13 : small ? 12 : 14, weight: .medium)).lineLimit(1).fixedSize(horizontal: !fill, vertical: false)
+            .font(V3.sans(kind == .text ? 13 : small ? 12 : 13, weight: .medium)).lineLimit(1).fixedSize(horizontal: !fill, vertical: false)
             .frame(maxWidth: fill ? .infinity : nil)
             .foregroundStyle(kind == .dark || kind == .danger ? Color.white : kind == .text ? (pressed ? V3.txt : V3.sub) : V3.txt)
-            .padding(.horizontal, kind == .text ? 0 : height >= 36 ? 18 : 14)
-            .frame(width: width, height: kind == .text ? nil : height)
+            .padding(.horizontal, kind == .text ? 0 : large ? 14 : 12)
+            .frame(width: width, height: kind == .text ? nil : large ? 32 : 28)
             .background {
                 switch kind {
-                case .dark: Capsule().fill(pressed ? Color(hex: 0x0E0E0D) : V3.txt)
-                case .danger: Capsule().fill(pressed ? Color(hex: 0xC33B3B) : V3.red)
-                case .ghost: Capsule().fill(pressed ? V3.field : .white).overlay(Capsule().stroke(V3.cl))
+                case .dark: shape.fill(pressed ? Color(hex: 0x0E0E0D) : V3.txt)
+                case .danger: shape.fill(pressed ? Color(hex: 0xC33B3B) : V3.red)
+                case .ghost: shape.fill(pressed ? V3.field : .white).overlay(shape.stroke(.black.opacity(0.1)))
+                        .shadow(color: .black.opacity(0.05), radius: 0.5, y: 0.5)
                 case .text: Color.clear
                 }
             }
             .opacity(enabled ? 1 : 0.38)
-            .contentShape(Capsule())
+            .contentShape(shape)
     }
 }
 
-/// Full-width 44pt dark submit (`.mi-new-submit`).
+/// 整行宽的墨黑提交按钮（macOS 大号 32 高、圆角 6）。
 struct V3PrimaryBlockStyle: ButtonStyle {
     @Environment(\.isEnabled) private var enabled
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(V3.sans(13.5, weight: .medium)).foregroundStyle(.white)
-            .frame(maxWidth: .infinity).frame(height: 44)
-            .background(configuration.isPressed ? Color(hex: 0x0E0E0D) : V3.txt, in: Capsule())
-            .opacity(enabled ? 1 : 0.45).contentShape(Capsule())
+        configuration.label.font(V3.sans(13, weight: .medium)).foregroundStyle(.white)
+            .frame(maxWidth: .infinity).frame(height: 32)
+            .background(configuration.isPressed ? Color(hex: 0x0E0E0D) : V3.txt, in: RoundedRectangle(cornerRadius: 6))
+            .opacity(enabled ? 1 : 0.45).contentShape(RoundedRectangle(cornerRadius: 6))
     }
 }
 
-/// `.v3-search`.
+/// macOS 稿 SearchField（NSSearchField 观感）：5% 黑底、圆角 7、28 高，聚焦时 accent 聚焦环。
 struct V3SearchField: View {
     @Binding var text: String
     var placeholder: String
     var width: CGFloat? = 180
-    var height: CGFloat = 32
+    var height: CGFloat = 28
     @FocusState private var focused: Bool
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(V3.fnt)
             TextField("", text: $text, prompt: Text(placeholder).foregroundStyle(V3.fnt)).textFieldStyle(.plain)
-                .font(V3.sans(14)).foregroundStyle(V3.txt).focused($focused)
+                .font(V3.sans(13)).foregroundStyle(V3.txt).focused($focused)
             if !text.isEmpty {
                 Button { text = "" } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 11)).foregroundStyle(V3.fnt2) }
                     .buttonStyle(.plain).accessibilityLabel("清除搜索")
             }
         }
-        .padding(.horizontal, 10).frame(width: width, height: height)
-        .background(focused ? Color.white : V3.field, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(focused ? V3.sk2 : .clear))
+        .padding(.horizontal, 8).frame(width: width, height: min(height, 28))
+        .background(focused ? Color.white : Color.black.opacity(0.05), in: RoundedRectangle(cornerRadius: 7))
+        .overlay(RoundedRectangle(cornerRadius: 7).stroke(focused ? Color.accentColor.opacity(0.5) : .clear, lineWidth: 3).padding(-1.5))
     }
 }
 
-/// `.v3-seg`: grey track with a white pressed segment.
+/// 分段控件：直接用原生 NSSegmentedControl（SwiftUI `.pickerStyle(.segmented)`）。
+/// `segmentWidth` / `height` / `fontSize` 保留给旧调用，原生控件按系统尺寸绘制。
 struct V3Segmented<Value: Hashable>: View {
     let options: [(Value, String)]
     @Binding var selection: Value
     var segmentWidth: CGFloat? = nil
     var height: CGFloat = 30
     var fontSize: CGFloat = 14
+    /// 与 Web `.v3-seg` / 稿一致：浅灰底槽，选中项白底细阴影、墨色字；不用系统分段控件的蓝色选中态。
     var body: some View {
         HStack(spacing: 0) {
             ForEach(Array(options.enumerated()), id: \.offset) { _, option in
-                let chosen = option.0 == selection
+                let selected = option.0 == selection
                 Button { selection = option.0 } label: {
-                    Text(option.1).font(V3.sans(fontSize, weight: .medium)).foregroundStyle(chosen ? V3.txt : V3.sub)
-                        .padding(.horizontal, segmentWidth == nil ? 12 : 0)
-                        .frame(width: segmentWidth, height: height - 6)
+                    Text(option.1).font(V3.sans(min(fontSize, 13), weight: selected ? .medium : .regular))
+                        .foregroundStyle(selected ? V3.txt : V3.sub).lineLimit(1).fixedSize()
+                        .padding(.horizontal, segmentWidth == nil ? 14 : 0)
+                        .frame(width: segmentWidth).frame(height: height - 6)
                         .background {
-                            if chosen { RoundedRectangle(cornerRadius: 6).fill(.white).shadow(color: .black.opacity(0.08), radius: 1.5, y: 1) }
-                        }.contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityAddTraits(chosen ? .isSelected : [])
+                            if selected {
+                                RoundedRectangle(cornerRadius: 6).fill(.white).shadow(color: .black.opacity(0.08), radius: 1, y: 1)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
-        .padding(3).frame(height: height).background(V3.field, in: RoundedRectangle(cornerRadius: 8))
+        .padding(3).frame(height: height)
+        .background(Color(hex: 0xF0F0EE), in: RoundedRectangle(cornerRadius: 8))
+        .fixedSize()
+    }
+}
+
+/// macOS 稿 ScopeButton（Finder 搜索范围栏 / `.accessoryBar` 观感）：筛选标签无描边，选中 10% 黑底。
+struct V3ScopeButton: View {
+    let label: String
+    let selected: Bool
+    let action: () -> Void
+    @State private var hover = false
+    var body: some View {
+        Button(action: action) {
+            Text(label).font(V3.sans(12, weight: selected ? .medium : .regular)).lineLimit(1).fixedSize()
+                .foregroundStyle(selected || hover ? V3.txt : V3.sub)
+                .padding(.horizontal, 10).frame(height: 24)
+                .background(selected ? Color.black.opacity(0.1) : hover ? Color.black.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 6))
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain).onHover { hover = $0 }.accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -227,8 +258,8 @@ struct V3MenuRow: View {
                 if checked { Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)) }
             }
             .foregroundStyle(danger ? V3.red : V3.txt)
-            .padding(.horizontal, 10).frame(height: 34)
-            .background(hover ? (danger ? V3.redSoft : V3.field) : .clear, in: RoundedRectangle(cornerRadius: 6))
+            .padding(.horizontal, 10).frame(height: 26)
+            .background(hover ? (danger ? V3.redSoft : Color.black.opacity(0.06)) : .clear, in: RoundedRectangle(cornerRadius: 5))
             .contentShape(Rectangle())
         }.buttonStyle(.plain).onHover { hover = $0 }
     }
@@ -287,7 +318,7 @@ struct V3Pagination: View {
         HStack(spacing: 12) {
             Text("共 \(total) 条 · 每页 \(pageSize) 条")
             Spacer(minLength: 0)
-            HStack(spacing: 6) {
+            HStack(spacing: 2) {
                 cell("上一页", enabled: page > 1) { change(page - 1) }
                 ForEach(Array(Self.numbers(page, count).enumerated()), id: \.offset) { _, value in
                     if let value {
@@ -300,19 +331,25 @@ struct V3Pagination: View {
     }
 
     private func cell(_ title: String, current: Bool = false, enabled: Bool, action: @escaping () -> Void) -> some View {
+        // macOS 稿 Pagination：无边框页码，当前页 10% 黑底；上一页 / 下一页用 ‹ ›。
         Button(action: action) {
-            Text(title).padding(.horizontal, 10).frame(minWidth: 32, minHeight: 32)
-                .foregroundStyle(current ? .white : V3.sub)
-                .background(current ? V3.blue : .clear, in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(current ? V3.blue : Color(hex: 0xE4E4E0)))
-                .contentShape(Rectangle())
-        }.buttonStyle(.plain).disabled(loading || !enabled).opacity(loading || !enabled ? 0.45 : 1)
+            Group {
+                if title == "上一页" { Image(systemName: "chevron.left").font(.system(size: 11, weight: .medium)) }
+                else if title == "下一页" { Image(systemName: "chevron.right").font(.system(size: 11, weight: .medium)) }
+                else { Text(title) }
+            }
+            .padding(.horizontal, 6).frame(minWidth: 24, minHeight: 24)
+            .foregroundStyle(current ? V3.txt : V3.sub).fontWeight(current ? .medium : .regular)
+            .background(current ? Color.black.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 6))
+            .contentShape(Rectangle())
+        }.buttonStyle(.plain).disabled(loading || !enabled).opacity(loading || !enabled ? 0.35 : 1)
+            .accessibilityLabel(title)
             .accessibilityAddTraits(current ? .isSelected : [])
     }
 }
 
 
-/// `.v3-dialog`：正文 28/32/24 内边距，右上 28×28 关闭（距边 26），底部 88 高、顶线分隔的按钮区（左侧可放说明）。
+/// Sheet 内容（macOS 稿：去掉右上角 ×，Esc 关闭；底部 20 内边距、顶线分隔的按钮行，左侧可放说明）。
 struct V3Dialog<Body: View, Foot: View, Left: View>: View {
     var width: CGFloat = 440
     var closable = true
@@ -344,18 +381,15 @@ struct V3Dialog<Body: View, Foot: View, Left: View>: View {
                     HStack(spacing: 10) {
                         HStack(spacing: 20) { left() }.frame(maxWidth: .infinity, alignment: .leading)
                         foot()
-                    }.padding(.horizontal, 32).frame(minHeight: 88)
+                    }.padding(.horizontal, 24).padding(.vertical, 16).frame(minHeight: 60)
                 }
             }
             .overlay(alignment: .top) { Rectangle().fill(V3.line).frame(height: 1) }
         }
         .frame(width: width)
-        .overlay(alignment: .topTrailing) {
-            if closable {
-                Button(action: close) { Image(systemName: "xmark").font(.system(size: 12, weight: .medium)).frame(width: 28, height: 28).contentShape(Rectangle()) }
-                    .buttonStyle(.plain).foregroundStyle(V3.fnt).keyboardShortcut(.cancelAction).accessibilityLabel("关闭")
-                    .padding(.top, narrow ? 20 : 26).padding(.trailing, narrow ? 16 : 26)
-            }
+        .background {
+            // 不画 ×：Esc（取消操作）关闭，底部按钮行里的「取消」负责可见的关闭入口。
+            if closable { Button("", action: close).keyboardShortcut(.cancelAction).opacity(0).accessibilityHidden(true) }
         }
     }
 }
@@ -375,8 +409,8 @@ struct V3DialogHead: View {
     var subTop: CGFloat = 8
     var subLine: CGFloat = 22
     var body: some View {
-        Text(title).font(.system(size: 20, weight: .semibold)).foregroundStyle(V3.txt).frame(height: 28).padding(.trailing, 28)
-        if let sub { Text(sub).font(V3.sans(14)).foregroundStyle(V3.sub).lineHeight(14, subLine).fixedSize(horizontal: false, vertical: true).padding(.top, subTop) }
+        Text(title).font(.system(size: 17, weight: .semibold)).foregroundStyle(V3.txt).frame(height: 24)
+        if let sub { Text(sub).font(V3.sans(13)).foregroundStyle(V3.sub).lineHeight(13, subLine - 2).fixedSize(horizontal: false, vertical: true).padding(.top, subTop) }
     }
 }
 
@@ -393,16 +427,154 @@ struct V3TextInput: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(label).font(V3.sans(14, weight: .medium)).foregroundStyle(V3.sub).frame(height: 20)
+            Text(label).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.sub).frame(height: 18)
+            // macOS 稿 TextField：28 高、圆角 6、10% 黑描边，聚焦时 accent 聚焦环。
             TextField("", text: $text, prompt: Text(placeholder).foregroundStyle(V3.fnt2))
-                .textFieldStyle(.plain).font(V3.sans(14)).foregroundStyle(V3.txt).focused($focused)
-                .padding(.horizontal, 14).frame(height: 40)
-                .background(.white, in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(error != nil ? V3.red : focused ? V3.txt : V3.cl))
+                .textFieldStyle(.plain).font(V3.sans(13)).foregroundStyle(V3.txt).focused($focused)
+                .padding(.horizontal, 8).frame(height: 28)
+                .background(.white, in: RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(error != nil ? V3.red : .black.opacity(0.12)))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(focused && error == nil ? Color.accentColor.opacity(0.5) : .clear, lineWidth: 3).padding(-1.5))
                 .disabled(disabled).onSubmit(submit).accessibilityLabel(label)
                 .onAppear { focused = true }
                 .onChange(of: text) { if text.count > maxLength { text = String(text.prefix(maxLength)) } }
-            if let error { Text(error).font(V3.sans(14)).foregroundStyle(V3.red).lineHeight(14, 22).fixedSize(horizontal: false, vertical: true) }
+            if let error { Text(error).font(V3.sans(12)).foregroundStyle(V3.red).lineHeight(12, 18).fixedSize(horizontal: false, vertical: true) }
         }
+    }
+}
+
+/// 统一加载（macOS 稿第 15 页 · 04「二级页面统一加载」93:3090）：内容区正中一朵山茶花逐瓣绽放（与 Web `ThinkingMark`
+/// 同一动画）+ 一行 12.5 灰字；180ms 内返回不出现；超过 8 秒补一行慢加载提示（15 页 01 · B），有重试动作时附蓝色「重新加载」。
+struct V3Loading: View {
+    let label: String
+    var retry: (() -> Void)? = nil
+    @State private var shown = false
+    init(_ label: String, retry: (() -> Void)? = nil) { self.label = label; self.retry = retry }
+    var body: some View {
+        VStack(spacing: 8) {
+            V3ThinkingMark(size: 40).frame(width: 56, height: 48)
+            Text(label).font(V3.sans(12.5)).foregroundStyle(V3Skeleton.faint).multilineTextAlignment(.center)
+            V3SlowLoadHint(retry: retry).padding(.top, 4)
+        }
+        .opacity(shown ? 1 : 0)
+        .accessibilityElement(children: .contain).accessibilityLabel(label)
+        .task {
+            try? await Task.sleep(for: .milliseconds(180))
+            if !Task.isCancelled { withAnimation(.easeOut(duration: 0.1)) { shown = true } }
+        }
+    }
+}
+
+/// 品牌山茶花五片花瓣（Resources/Library/loading-petal-1…5，两片黄瓣在下、三片红瓣在上）依次绽放、停留后收拢，3 秒一轮；
+/// 「减少动态效果」时静止显示完整花朵。
+struct V3ThinkingMark: View {
+    var size: CGFloat = 40
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private static let petals: [NSImage] = (1...5).compactMap { index in
+        Bundle.module.url(forResource: "loading-petal-\(index)", withExtension: "png", subdirectory: "Library").flatMap(NSImage.init(contentsOf:))
+    }
+    var body: some View {
+        TimelineView(.animation(paused: reduceMotion)) { context in
+            let time = context.date.timeIntervalSinceReferenceDate
+            ZStack {
+                ForEach(Array(Self.petals.enumerated()), id: \.offset) { index, image in
+                    let pose = reduceMotion ? (scale: 1.0, angle: 0.0) : Self.pose(time - Double(index) * 0.15)
+                    Image(nsImage: image).resizable().interpolation(.high).frame(width: size, height: size)
+                        .scaleEffect(pose.scale, anchor: UnitPoint(x: 0.5, y: 0.547))
+                        .rotationEffect(.degrees(pose.angle), anchor: UnitPoint(x: 0.5, y: 0.547))
+                }
+            }
+        }
+        .frame(width: size, height: size).accessibilityHidden(true)
+    }
+    /// Web `assistant-thinking-petal` 关键帧：0% 缩 0 转 -30° → 20% 放大 1.05 转 3° → 28%–72% 停住 → 94% 收回。
+    private static func pose(_ time: Double) -> (scale: Double, angle: Double) {
+        let p = (time.truncatingRemainder(dividingBy: 3) + 3).truncatingRemainder(dividingBy: 3) / 3
+        func ease(_ x: Double) -> Double { let t = min(max(x, 0), 1); return t * t * (3 - 2 * t) }
+        switch p {
+        case ..<0.2: let t = ease(p / 0.2); return (1.05 * t, -30 + 33 * t)
+        case ..<0.28: let t = ease((p - 0.2) / 0.08); return (1.05 - 0.05 * t, 3 - 3 * t)
+        case ..<0.72: return (1, 0)
+        case ..<0.94: let t = ease((p - 0.72) / 0.22); return (1 - t, -30 * t)
+        default: return (0, -30)
+        }
+    }
+}
+
+/// 慢加载提示（15 页 01 · B）：加载超过 8 秒才出现，「比平时慢一些，还在加载。」+ 蓝色「重新加载」。
+struct V3SlowLoadHint: View {
+    var retry: (() -> Void)? = nil
+    @State private var slow = false
+    var body: some View {
+        Group {
+            if slow {
+                HStack(spacing: 6) {
+                    Text("比平时慢一些，还在加载。").foregroundStyle(V3.fnt)
+                    if let retry {
+                        Button("重新加载", action: retry).buttonStyle(.plain).fontWeight(.medium).foregroundStyle(V3.blue).pointingHandCursor()
+                    }
+                }.font(V3.sans(12.5)).accessibilityElement(children: .combine).transition(.opacity)
+            }
+        }
+        .task {
+            try? await Task.sleep(for: .seconds(8))
+            if !Task.isCancelled { withAnimation(.easeOut(duration: 0.2)) { slow = true } }
+        }
+    }
+}
+
+/// 加载失败（15 页 01 · D）：骨架换成一行灰字 + 蓝色「重新加载」，不弹窗、不放插图。
+struct V3LoadFailed: View {
+    var message = "没有加载出来。"
+    let retry: () -> Void
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(message).foregroundStyle(V3.fnt)
+            Button("重新加载", action: retry).buttonStyle(.plain).fontWeight(.medium).foregroundStyle(V3.blue).pointingHandCursor()
+        }.font(V3.sans(13))
+    }
+}
+
+/// 骨架占位块（Web `.v3-sk`）：#ECECEA 底 + 一道从左往右扫过的高光（1.5 秒一轮）；150ms 后淡入，快的请求不闪骨架。
+/// `light` 是卡片舞台里的白色纸张占位。「减少动态效果」时改为缓慢明暗。
+struct V3Skeleton: View {
+    static let fill = Color(hex: 0xECECEA)
+    /// 稿里的提示灰 #96968F（说明、计数、骨架页的辅助字）。
+    static let faint = Color(hex: 0x96968F)
+    var width: CGFloat? = nil
+    var height: CGFloat = 12
+    var radius: CGFloat = 4
+    var color: Color = V3Skeleton.fill
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var shown = false
+    var body: some View {
+        RoundedRectangle(cornerRadius: radius).fill(color)
+            .overlay {
+                if !reduceMotion {
+                    TimelineView(.animation) { context in
+                        GeometryReader { box in
+                            let p = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.5) / 1.5
+                            let travel = min(1, p / 0.7)
+                            LinearGradient(colors: [.white.opacity(0), .white.opacity(0.7), .white.opacity(0)], startPoint: .leading, endPoint: .trailing)
+                                .frame(width: box.size.width / 2).offset(x: -box.size.width / 2 + travel * box.size.width * 1.5)
+                        }
+                    }
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: radius))
+            .frame(width: width, height: height)
+            .opacity(shown ? (reduceMotion ? 0.8 : 1) : 0)
+            .task {
+                try? await Task.sleep(for: .milliseconds(150))
+                if !Task.isCancelled { withAnimation(.easeOut(duration: 0.16)) { shown = true } }
+            }
+            .accessibilityHidden(true)
+    }
+}
+
+extension View {
+    /// 文字链（蓝色「重新加载」等）悬停时显示手形光标。
+    func pointingHandCursor() -> some View {
+        onHover { inside in if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() } }
     }
 }
