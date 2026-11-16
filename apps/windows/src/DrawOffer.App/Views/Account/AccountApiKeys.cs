@@ -32,7 +32,7 @@ sealed record AccountApiKey(string Id, string Name, string Scope, string Prefix)
 /// </summary>
 sealed class AccountApiKeySection : UserControl
 {
-    const string GuideUrl = "https://github.com/ql-link/drawoffer-mcp";
+    const string GuideUrl = "https://github.com/DrawOffer/drawoffer-mcp";
     readonly StackPanel _list = new();
     readonly V3Button _create;
     List<AccountApiKey> _keys = [];

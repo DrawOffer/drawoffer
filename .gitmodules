@@ -1,3 +1,3 @@
 [submodule "upstream"]
 	path = upstream
-	url = https://github.com/ql-link/LinkCV.git
+	url = https://github.com/DrawOffer/LinkCV.git

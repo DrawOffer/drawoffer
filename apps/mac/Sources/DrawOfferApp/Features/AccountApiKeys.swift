@@ -17,7 +17,7 @@ struct AccountApiKeySection: View {
     @State private var deleting: AccountApiKeyItem?
     @State private var removing = false
 
-    private static let guideURL = URL(string: "https://github.com/ql-link/drawoffer-mcp")
+    private static let guideURL = URL(string: "https://github.com/DrawOffer/drawoffer-mcp")
     private var account: String { if case .signedIn(let user) = session.phase { return user.id }; return "" }
     private var full: Bool { (keys?.count ?? 0) >= AccountApiKeyItem.limit }
 

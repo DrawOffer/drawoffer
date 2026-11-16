@@ -2,7 +2,7 @@
 
 本仓库是 DrawOffer（职绘）的桌面客户端：`apps/mac`（SwiftUI）、`apps/windows`（WinUI 3）、`apps/desktop`（Electron 壳，已被原生客户端取代，仅保留）以及两端共用的 `apps/native`（简历纸面渲染器、共享素材与检查脚本）。`AGENTS.md` 链接到本文件，只改这一份。
 
-后端（FastAPI）和 Web 端在私有主仓库 `ql-link/LinkCV`，以只读子模块挂在 `upstream/`。**客户端永远跟随 Web：Web 先做完，客户端再按同步清单对齐。**
+后端（FastAPI）和 Web 端在私有主仓库 `DrawOffer/LinkCV`，以只读子模块挂在 `upstream/`。**客户端永远跟随 Web：Web 先做完，客户端再按同步清单对齐。**
 
 ## 1. 通用原则
 

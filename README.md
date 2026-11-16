@@ -41,7 +41,7 @@ upstream/      后端与 Web 主仓库（私有子模块，仅团队成员可拉
 ## 构建（团队成员）
 
 ```bash
-git clone --recurse-submodules https://github.com/ql-link/drawoffer.git
+git clone --recurse-submodules https://github.com/DrawOffer/drawoffer.git
 cd drawoffer/apps/mac && swift build      # macOS
 apps/windows/scripts/typecheck.sh         # Windows 类型检查
 ```
