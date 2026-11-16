@@ -1,102 +1,125 @@
+<a name="readme-top"></a>
+
 <div align="center">
 
-<img src="docs/images/logo.png" width="96" alt="DrawOffer logo">
+<a href="https://www.drawoffer.com"><img src="docs/images/logo.png" width="120" alt="DrawOffer logo"></a>
 
-# DrawOffer
+<h1>DrawOffer</h1>
 
-**The job-search partner that knows your story**
+<p><b>The job-search partner that knows your story</b></p>
 
-Resume edits, application tracking, interview reviews and mock follow-up questions — all based on your real experience, not a generic template.<br>
-This repository hosts the **native macOS and Windows desktop clients** of DrawOffer.
+<p>Resume edits, application tracking, interview reviews and mock follow-up questions —<br>all based on your real experience, not a generic template.</p>
 
-[Website](https://www.drawoffer.com) · [Use online](https://www.drawoffer.com/assistant) · [中文](README.md) · [Issues](https://github.com/DrawOffer/drawoffer/issues)
+<p>
+<a href="https://www.drawoffer.com">Website</a> ·
+<a href="https://www.drawoffer.com/assistant">Use online</a> ·
+<a href="#-download">Download</a> ·
+<a href="https://github.com/DrawOffer/drawoffer/issues">Issues</a> ·
+<a href="README.md">简体中文</a>
+</p>
 
-![macOS](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white)
-![Windows](https://img.shields.io/badge/Windows-10%201809%2B-0078D4?logo=windows&logoColor=white)
-![SwiftUI](https://img.shields.io/badge/SwiftUI-native-F05138?logo=swift&logoColor=white)
-![WinUI 3](https://img.shields.io/badge/WinUI%203-native-5C2D91?logo=dotnet&logoColor=white)
+[![macOS](https://img.shields.io/badge/macOS-14+-000000?style=flat-square&logo=apple&logoColor=white)](#-platforms)
+[![Windows](https://img.shields.io/badge/Windows-10+-0078D4?style=flat-square&logo=windows&logoColor=white)](#-platforms)
+[![SwiftUI](https://img.shields.io/badge/SwiftUI-native-F05138?style=flat-square&logo=swift&logoColor=white)](apps/mac)
+[![WinUI 3](https://img.shields.io/badge/WinUI_3-native-512BD4?style=flat-square&logo=dotnet&logoColor=white)](apps/windows)
+[![Stars](https://img.shields.io/github/stars/DrawOffer/drawoffer?style=flat-square&color=ffcb47&label=stars)](https://github.com/DrawOffer/drawoffer/stargazers)
 
 <img src="docs/images/hero.png" alt="DrawOffer — the job-search partner that knows your story" width="100%">
 
 </div>
 
-## Why DrawOffer
+DrawOffer is an AI job-search partner for students and job seekers. It keeps your resumes, applications, practice sessions and every real interview in a **long-term memory**: when it edits your resume it knows the role you are applying for, when it writes questions it knows where you got stuck last time, and each interview picks up where the last one left off.
 
-Most resume tools only care about one resume, and most mock interview tools only care about one interview. A job search lasts months: which roles you applied to, which interview question tripped you up, which project is your strongest story. That context is scattered, so every AI tool has to learn about you from scratch.
+This repository hosts the **native macOS and Windows desktop clients**. They share the same account and data with the web app and the WeChat mini program. The product is currently in Chinese.
 
-DrawOffer keeps your resumes, applications, interview schedule and reviews as a **long-term memory of your job search**. When the AI edits your resume it knows the role you are targeting; when it writes interview questions it knows where you struggled last time.
-
-The desktop apps rebuild the main features of the web app with native system controls, and share the same account and data with the web app and the WeChat mini program.
-
-## Features
-
-<div align="center"><img src="docs/images/memory-map.png" alt="Resumes, jobs, mock and real interviews connected into one memory" width="100%"></div>
-
-### 🧠 Knowledge graph that remembers every interview
-
-Every topic you are asked in mock and real interviews goes into your knowledge graph, linked to your resume highlights and target roles. See at a glance what is still shaky and what you have mastered; focus on one company or role to see only what it will test.
+**[🚀 Start free](https://www.drawoffer.com/assistant)** · **[📦 Download](#-download)** · **[⭐ Star us](https://github.com/DrawOffer/drawoffer/stargazers)**
 
 <table>
 <tr>
-<td width="50%"><img src="docs/images/knowledge-graph.png" alt="Full knowledge graph"></td>
+<td width="50%" valign="top"><b>🧠 No need to start over</b><br>Tonight continues from last night, the next interview from this one. No re-pasting your resume or re-telling the last interview.</td>
+<td width="50%" valign="top"><b>🎯 One resume, one role</b><br>Rewrite every section against the job description using only what you actually did. You approve every change.</td>
+</tr>
+<tr>
+<td width="50%" valign="top"><b>🔍 Written vs. answered</b><br>What your resume says is your claim; what you answer in interviews is what counts. If it has never been asked, DrawOffer says it does not know yet.</td>
+<td width="50%" valign="top"><b>🔒 You decide</b><br>You review every edit. Every memory shows its source and can be edited or deleted.</td>
+</tr>
+</table>
+
+## 📅 From a job posting to an offer
+
+### `Sep 12` Save the right job as you browse
+
+Save postings from job sites. Requirements are organized for you, and DrawOffer tells you which role fits your experience best.
+
+<img src="docs/images/story-collect-jobs.png" alt="Save a job posting into DrawOffer" width="100%">
+
+### `Sep 14` One resume for one role
+
+Tailor each section to the job description with only what you really did. 60+ Chinese templates filtered by role; the page you see is exactly the PDF you send.
+
+<img src="docs/images/templates.png" alt="60+ Chinese resume templates by role" width="100%">
+
+### `Sep 18` Every application accounted for
+
+Screening, assessments, written tests, interviews: where each company stands and what comes next, on one board and one calendar.
+
+### `Sep 23` Interview tomorrow — practice tonight
+
+Questions based on this role and your resume, answered by text or voice. You will know which parts you still cannot explain clearly.
+
+### `Sep 24` The night after, see what went wrong
+
+Upload the recording and review it question by question. Every topic you were asked goes into your knowledge graph.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/knowledge-graph.png" alt="Knowledge graph of every topic from resumes, practice and interviews"></td>
 <td width="50%"><img src="docs/images/knowledge-graph-focus.png" alt="Knowledge graph focused on one role"></td>
 </tr>
 </table>
 
-### 🏠 Home: what you practiced, what to do next
+### `Sep 30` Answer the hard question again
 
-<img src="docs/images/home.png" alt="DrawOffer home" width="100%">
+Mock interviews start where you got stuck. Try the same question again and see if it is clear this time.
 
-### 📝 Resume templates and editor
+<img src="docs/images/home.png" alt="Home: four topics from this interview were added to your graph" width="100%">
 
-<img src="docs/images/templates.png" alt="Resume templates by role" width="100%">
+### `Oct 20` Got offers — now choose well
 
-60+ Chinese resume templates filtered by role and style; a WYSIWYG resume page rendered by the same engine as the web app and PDF export; import Markdown / Word / PDF, switch templates, export PDF and share links.
+Compare offers side by side. Your records stay, so your next job search continues from here.
 
-### 💼 Save the right jobs as you browse
+<div align="center"><img src="docs/images/memory-map.png" alt="Resumes, jobs, mock and real interviews connected into one memory" width="100%"></div>
 
-<img src="docs/images/story-collect-jobs.png" alt="Save jobs from job sites" width="100%">
+## 🖥 Platforms
 
-Save postings from job sites with requirements organized for you, let AI tell you which roles fit your experience best, and track every application and interview on a board and calendar.
-
-### 🎙 AI mock interviews and reviews
-
-Questions based on the target role and your own experience; answer by text or voice; pauses and filler words are tracked and a review report is generated. On macOS 26+ speech is transcribed on device.
-
-### 📚 Library and AI chat
-
-Upload interview notes and project documents for the AI to reference, and chat with an assistant that knows your job-search history.
-
-## Platform support
-
-| Feature | macOS | Windows |
+| | macOS | Windows |
 | --- | :---: | :---: |
 | Home & knowledge graph | ✅ | ✅ |
-| Resume editor | ✅ | Read-only preview |
 | Resume templates | ✅ | ✅ |
-| Job board & interview schedule | ✅ | ✅ |
+| Resume editor | ✅ | Read-only preview |
+| Job board & interview calendar | ✅ | ✅ |
 | AI mock interview (text / voice) | ✅ | ✅ |
 | On-device speech recognition | ✅ macOS 26+ | — |
-| Library | ✅ | ✅ |
-| AI chat | ✅ | ✅ |
+| Library & AI chat | ✅ | ✅ |
+| Minimum OS | macOS 14 Sonoma | Windows 10 1809 |
 
-Minimum OS: macOS 14 Sonoma, Windows 10 1809.
+## 📦 Download
 
-## Download
+Installers are on the way and will be published under [Releases](https://github.com/DrawOffer/drawoffer/releases). Meanwhile, **[use the web app](https://www.drawoffer.com/assistant)** — your account and data work across both.
 
-Installers are on the way and will be published under [Releases](https://github.com/DrawOffer/drawoffer/releases). Meanwhile you can use the web app at [www.drawoffer.com](https://www.drawoffer.com); your account and data work across both.
+## 🛠 Development
 
-## Development
+This repository contains only the desktop clients. The backend and web app live in a private repository referenced as the `upstream/` submodule, so you can read the client source but a full build requires team access. See [CLAUDE.md](CLAUDE.md).
 
-This repository contains only the desktop clients. The backend and web app live in a private repository referenced as the `upstream/` submodule, so outside contributors can read the client source but cannot build it end to end. See [CLAUDE.md](CLAUDE.md) for the layout and the web-to-desktop sync workflow.
+## 🧩 Ecosystem
 
-## Related projects
-
-- [drawoffer-mcp](https://github.com/DrawOffer/drawoffer-mcp) — let Claude, Cursor and other AI tools read and update your DrawOffer data
+- [drawoffer-mcp](https://github.com/DrawOffer/drawoffer-mcp) — let Claude, Cursor and other AI tools read and update your job-search data
 - [drawoffer-skills](https://github.com/DrawOffer/drawoffer-skills) — resume and job-search Agent Skills
 - [drawoffer-prompts](https://github.com/DrawOffer/drawoffer-prompts) — job-search prompt library
 - [drawoffer-chinese-resume-templates](https://github.com/DrawOffer/drawoffer-chinese-resume-templates) — Chinese resume templates
 
+<div align="right"><a href="#readme-top">⬆ Back to top</a></div>
+
 ---
 
-© DrawOffer. All rights reserved.
+<div align="center"><sub>© DrawOffer · All rights reserved</sub></div>

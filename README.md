@@ -1,109 +1,149 @@
+<a name="readme-top"></a>
+
 <div align="center">
 
-<a href="https://www.drawoffer.com"><img src="docs/images/logo.png" width="112" alt="DrawOffer logo"></a>
+<a href="https://www.drawoffer.com"><img src="docs/images/logo.png" width="120" alt="DrawOffer logo"></a>
 
 <h1>DrawOffer 职绘</h1>
 
-**懂你经历的求职搭档**
+<p><b>懂你经历的求职搭档</b></p>
 
-改简历、跟进投递、复盘面试、模拟追问，都基于你自己的真实经历，而不是一份通用模板。<br>
-本仓库是 DrawOffer 的 **macOS / Windows 原生桌面客户端**。
+<p>改简历、跟进投递、复盘面试、模拟追问，<br>都基于你自己的真实经历，而不是一份通用模板。</p>
 
-[官网](https://www.drawoffer.com) · [在线使用](https://www.drawoffer.com/assistant) · [问题反馈](https://github.com/DrawOffer/drawoffer/issues) · [English](README.en.md)
+<p>
+<a href="https://www.drawoffer.com">官网</a> ·
+<a href="https://www.drawoffer.com/assistant">在线使用</a> ·
+<a href="#-下载">下载桌面版</a> ·
+<a href="https://github.com/DrawOffer/drawoffer/issues">问题反馈</a> ·
+<a href="README.en.md">English</a>
+</p>
 
-[![macOS](https://img.shields.io/badge/macOS-14%2B-000000?style=flat-square&logo=apple&logoColor=white)](#-平台支持)
-[![Windows](https://img.shields.io/badge/Windows-10%201809%2B-0078D4?style=flat-square&logo=windows&logoColor=white)](#-平台支持)
+[![macOS](https://img.shields.io/badge/macOS-14+-000000?style=flat-square&logo=apple&logoColor=white)](#-平台支持)
+[![Windows](https://img.shields.io/badge/Windows-10+-0078D4?style=flat-square&logo=windows&logoColor=white)](#-平台支持)
 [![SwiftUI](https://img.shields.io/badge/SwiftUI-native-F05138?style=flat-square&logo=swift&logoColor=white)](apps/mac)
-[![WinUI 3](https://img.shields.io/badge/WinUI%203-native-512BD4?style=flat-square&logo=dotnet&logoColor=white)](apps/windows)
-[![Website](https://img.shields.io/badge/website-drawoffer.com-F4743B?style=flat-square)](https://www.drawoffer.com)
-[![GitHub stars](https://img.shields.io/github/stars/DrawOffer/drawoffer?style=flat-square&color=ffcb47)](https://github.com/DrawOffer/drawoffer/stargazers)
-[![Last commit](https://img.shields.io/github/last-commit/DrawOffer/drawoffer?style=flat-square)](https://github.com/DrawOffer/drawoffer/commits/master)
+[![WinUI 3](https://img.shields.io/badge/WinUI_3-native-512BD4?style=flat-square&logo=dotnet&logoColor=white)](apps/windows)<br>
+[![Website](https://img.shields.io/badge/官网-drawoffer.com-F4743B?style=flat-square)](https://www.drawoffer.com)
+[![Stars](https://img.shields.io/github/stars/DrawOffer/drawoffer?style=flat-square&color=ffcb47&label=stars)](https://github.com/DrawOffer/drawoffer/stargazers)
+[![Last commit](https://img.shields.io/github/last-commit/DrawOffer/drawoffer?style=flat-square&color=5b8def)](https://github.com/DrawOffer/drawoffer/commits/master)
 
 <img src="docs/images/hero.png" alt="DrawOffer 职绘：懂你经历的求职搭档" width="100%">
 
 </div>
 
-<details>
-<summary><b>目录</b></summary>
+DrawOffer 是面向应届生和求职者的 AI 求职搭档。它把你的简历、投递、练习和面过的每一场都存进**长期记忆**：改简历时知道你投的是哪个岗位，出题时知道你上次卡在哪里，下一场面试接着上一场往前走。
 
-- [👋 DrawOffer 是什么](#-drawoffer-是什么)
-- [✨ 功能亮点](#-功能亮点)
-- [🖥 平台支持](#-平台支持)
-- [📦 下载](#-下载)
-- [🗺 路线图](#-路线图)
-- [❓ 常见问题](#-常见问题)
-- [🧩 生态](#-生态)
-- [🛠 开发](#-开发)
-- [🤝 反馈与贡献](#-反馈与贡献)
+本仓库是 DrawOffer 的 **macOS / Windows 原生桌面客户端**，与网页版、微信小程序共用同一个账号和数据。
 
-</details>
-
-## 👋 DrawOffer 是什么
-
-大多数简历工具只管“这一份简历”，模拟面试工具只管“这一场面试”。可求职是一段持续几个月的过程：投了哪些岗位、哪轮面试被问住了、哪段经历最能打，这些信息散落在各处，每用一次 AI 都要从零讲一遍自己。
-
-DrawOffer 把简历、岗位、面试和复盘串成一张属于你的**求职长期记忆**。AI 改简历时知道你投的是什么岗位，出面试题时知道你上次在哪里卡住，复盘时能对照你全部的经历给建议。
-
-<div align="center">
-<img src="docs/images/memory-map.png" alt="简历、岗位、模拟面试与真实面试串成一张求职记忆" width="100%">
-</div>
-
-桌面客户端用系统原生控件实现了网页版的主要功能，和网页版、微信小程序共用同一个账号与数据。
-
-## ✨ 功能亮点
-
-### 🧠 求职知识图谱：每一场面试都记得
-
-每次模拟面试和真实面试被问到的知识点，都会记进你的知识图谱，并和简历亮点、目标岗位连在一起。哪些还不牢、哪些刚练稳，一眼就能看到；点开任意一个岗位或公司，只看它牵出的考点，直接“聊一聊”或“再练一场”。
+**[🚀 免费开始](https://www.drawoffer.com/assistant)** · **[📦 下载桌面版](#-下载)** · **[⭐ 给个 Star](https://github.com/DrawOffer/drawoffer/stargazers)**
 
 <table>
 <tr>
-<td width="50%"><img src="docs/images/knowledge-graph.png" alt="完整的求职知识图谱"></td>
-<td width="50%"><img src="docs/images/knowledge-graph-focus.png" alt="聚焦某个岗位的知识点"></td>
+<td width="50%" valign="top">
+<b>🧠 你不用从头说起</b><br>
+今晚接着昨晚，下一场接着这一场。不用再贴一遍简历，也不用再讲一遍上次面了什么。
+</td>
+<td width="50%" valign="top">
+<b>🎯 一份简历，对上一个岗位</b><br>
+对着 JD 改写每一段，只用你真实做过的事。每处修改都由你确认。
+</td>
 </tr>
 <tr>
-<td align="center"><sub>全部知识点：来自简历、练习和真实面试</sub></td>
-<td align="center"><sub>聚焦一个岗位：只看它要考的内容</sub></td>
+<td width="50%" valign="top">
+<b>🔍 写过和答过，它分得清</b><br>
+简历上写的是你的说法，面试里答出来的才算数。没问过的，它会说还不知道。
+</td>
+<td width="50%" valign="top">
+<b>🔒 最后由你决定</b><br>
+每处修改你先看。每条记忆都能查来源，也能改、能删，数据存放在境内。
+</td>
 </tr>
 </table>
 
-### 🏠 首页：上一场练了什么，下一步做什么
+## 📅 从看到岗位，到拿到 Offer
 
-<img src="docs/images/home.png" alt="DrawOffer 工作区首页" width="100%">
+> 一位同学的求职季，DrawOffer 陪着走完每一步。
 
-- 最近一场面试问到了哪些点、哪些已经练到熟练，按时间排开
-- 面试日程、模拟面试次数、简历、收藏岗位、资料库一屏看全，点击直达
+### `9月12日` 看到合适的岗位，顺手收下
 
-### 📝 简历模板与编辑器
+在招聘网站看到就存下来。岗位要求帮你整理好，再告诉你哪个和你的经历最对得上。
 
-<img src="docs/images/templates.png" alt="按岗位分类的简历模板库" width="100%">
+<img src="docs/images/story-collect-jobs.png" alt="在招聘网站看到岗位，顺手存进 DrawOffer" width="100%">
 
-- 60+ 套中文简历模板，按岗位方向和风格筛选
-- 所见即所得的简历纸面，与网页版和 PDF 导出使用同一个渲染器，排版一致
-- 导入已有简历（Markdown / Word / PDF），一键换模板、导出 PDF、生成分享链接
+### `9月14日` 一份简历，对上一个岗位
 
-### 💼 看到合适的岗位，顺手收下
+对着 JD 改写每一段，只用你真实做过的事，每处修改都由你确认。60+ 套中文模板按岗位方向筛选，换模板不用重新排版；纸面与 PDF 导出用同一个渲染器，看到的就是投出去的。
 
-<img src="docs/images/story-collect-jobs.png" alt="在招聘网站看到岗位就存下来" width="100%">
+<img src="docs/images/templates.png" alt="按岗位分类的 60+ 套中文简历模板" width="100%">
 
-- 在招聘网站看到就存下来，岗位要求自动整理好
-- AI 告诉你哪个岗位和你的经历最对得上；投递看板记录每个岗位走到了哪一步
-- 面试日程按日历排开，笔试、面试不撞车
+### `9月18日` 投出去的，每一家都有着落
 
-### 🎙 AI 模拟面试与复盘
+筛选、测评、笔试、面试，每家走到哪一步、下一步做什么，都在投递看板和面试日程里。
 
-- 按目标岗位和你的个人经历出题，项目追问、专业基础、自我介绍都会练到
-- 文字或语音作答；语音会记录停顿和口头禅，结束后生成复盘报告
-- macOS 26 起，语音作答可以在本机离线转写，不经过云端识别
+### `9月23日` 明天一面，先练一遍
 
-### 📚 资料库与 AI 对话
+按这个岗位和你的简历出题，文字或语音作答。练完就知道，哪里还讲不清。
 
-- 上传面经、笔记、项目文档，AI 出题和改简历时都会参考
-- 直接问：“这段项目经历怎么写更好？”“明天字节一面该怎么准备？”
+### `9月24日` 面完当晚，知道哪里没答好
+
+传上录音，一题一题看：哪里讲清楚了，哪里被追问住了，为什么。被问到的知识点自动记进你的图谱。
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/knowledge-graph.png" alt="知识图谱：简历、练习和面试里出现过的全部知识点"></td>
+<td width="50%"><img src="docs/images/knowledge-graph-focus.png" alt="聚焦一个岗位，只看它要考的知识点"></td>
+</tr>
+<tr>
+<td align="center"><sub>全部知识点：来自简历、练习和真实面试，还不牢的一眼可见</sub></td>
+<td align="center"><sub>点开一个岗位：只看它牵出的考点，直接“聊一聊”</sub></td>
+</tr>
+</table>
+
+### `9月30日` 被问住的题，再答一次
+
+模拟面试从你卡住的地方开始。同一道题再来一遍，看这次有没有讲清。
+
+<img src="docs/images/home.png" alt="首页：这一场问到 4 处，都记进了图谱" width="100%">
+
+### `10月8日` 明天二面，今晚只补这一处
+
+一面被追问的地方，上次练习也卡在这里。今晚先把它讲清楚，其他的都准备好了。
+
+### `10月20日` 拿到 Offer，也帮你看清怎么选
+
+几个 Offer 放在一起比。求职季的记录都留着，下一次求职，接着往前走。
+
+<div align="center">
+<img src="docs/images/memory-map.png" alt="简历、岗位、模拟面试和每一场真实面试，串成一张求职记忆" width="100%">
+<p><sub>用得越久，它越清楚你差在哪一步</sub></p>
+</div>
+
+<div align="right"><a href="#readme-top">⬆ 回到顶部</a></div>
+
+## ✨ 功能一览
+
+**简历**
+- 📝 原生简历编辑器，所见即所得，与网页版、PDF 导出排版一致
+- 🎨 60+ 套中文模板，按岗位方向与风格筛选，一键切换
+- 📥 导入 Markdown / Word / PDF 简历，导出 PDF、生成分享链接
+
+**岗位与投递**
+- 📌 投递看板记录每个岗位的阶段：投递、测评、笔试、面试、Offer
+- 🎯 岗位匹配度：哪个岗位和你的经历最对得上
+- 🗓 面试日程按日历排开，笔试面试不撞车
+
+**面试**
+- 🎙 AI 模拟面试：按岗位和简历出题，项目追问、专业基础、自我介绍都会练到
+- 🗣 语音作答记录停顿和口头禅，结束后生成复盘报告
+- 💻 macOS 26 起语音作答在本机离线转写，不经过云端识别
+
+**长期记忆**
+- 🧠 知识图谱：每一场练习和面试问到的点都记下来，标出还不牢和刚练稳的
+- 📚 资料库：上传面经、笔记、项目文档，出题和改简历时都会参考
+- 💬 AI 对话：基于你的求职记录直接问，“明天二面今晚该补什么？”
 
 ## 🖥 平台支持
 
-| 功能 | macOS | Windows |
+| | macOS | Windows |
 | --- | :---: | :---: |
 | 首页与知识图谱 | ✅ | ✅ |
 | 简历模板 | ✅ | ✅ |
@@ -111,17 +151,15 @@ DrawOffer 把简历、岗位、面试和复盘串成一张属于你的**求职�
 | 投递看板与面试日程 | ✅ | ✅ |
 | AI 模拟面试（文字 / 语音） | ✅ | ✅ |
 | 本机语音识别 | ✅ macOS 26+ | — |
-| 资料库 | ✅ | ✅ |
-| AI 对话 | ✅ | ✅ |
-
-最低系统要求：**macOS 14 Sonoma** / **Windows 10 1809**。
+| 资料库与 AI 对话 | ✅ | ✅ |
+| 最低系统 | macOS 14 Sonoma | Windows 10 1809 |
 
 ## 📦 下载
 
-安装包正在准备中，发布后会出现在 [Releases](https://github.com/DrawOffer/drawoffer/releases)。现在可以先在 [www.drawoffer.com](https://www.drawoffer.com) 使用网页版，账号与数据和客户端互通。
+安装包正在准备中，发布后会出现在 [Releases](https://github.com/DrawOffer/drawoffer/releases)。现在可以先 **[在线使用网页版](https://www.drawoffer.com/assistant)**，账号和数据与桌面版互通。
 
 > [!TIP]
-> 点击右上角 **Watch → Custom → Releases**，客户端发布时第一时间收到通知。
+> 点击右上角 **Watch → Custom → Releases**，桌面版发布时第一时间收到通知。
 
 ## 🗺 路线图
 
@@ -134,33 +172,27 @@ DrawOffer 把简历、岗位、面试和复盘串成一张属于你的**求职�
 ## ❓ 常见问题
 
 <details>
-<summary><b>DrawOffer 是什么？</b></summary>
-
-DrawOffer（职绘）是一款面向应届生和求职者的 AI 求职助手，覆盖写简历、管理投递、准备面试和面试复盘。它把你的求职过程记成长期记忆，AI 的每条建议都基于你自己的经历。
+<summary><b>DrawOffer 和普通的 AI 简历工具有什么不同？</b></summary>
+<br>
+普通工具每次只看眼前这一份简历。DrawOffer 记得你投过的岗位、练过和面过的题、简历里的亮点，并把它们连成知识图谱。所以它改简历只用你真实做过的事，出题从你上次卡住的地方开始，也能告诉你哪些知识点还不牢。
 </details>
 
 <details>
-<summary><b>和普通的 AI 简历工具有什么不同？</b></summary>
-
-普通工具每次只看当前这一份简历。DrawOffer 会记住你投过的岗位、练过和面过的题、简历里的亮点，并把它们连成知识图谱，所以改简历和出题都更贴近你的实际情况，也能告诉你哪些知识点还不牢。
+<summary><b>桌面版和网页版有什么区别？</b></summary>
+<br>
+主要功能相同，账号和数据互通。桌面版使用系统原生界面；macOS 版从 macOS 26 起支持本机语音转写。Windows 版部分功能仍在补齐。
 </details>
 
 <details>
-<summary><b>桌面客户端和网页版有什么区别？</b></summary>
-
-主要功能相同，数据互通。客户端使用系统原生界面；macOS 版从 macOS 26 起支持本机语音转写。Windows 版部分功能仍在补齐。
-</details>
-
-<details>
-<summary><b>我的简历和面试录音安全吗？</b></summary>
-
-客户端通过 HTTPS 访问 DrawOffer 服务，登录凭据保存在系统钥匙串（macOS Keychain / Windows Credential Locker）。使用本机语音识别时，转写在你的电脑上完成。
+<summary><b>我的简历、面试录音和记忆安全吗？</b></summary>
+<br>
+客户端通过 HTTPS 访问 DrawOffer 服务，登录凭据保存在系统钥匙串（macOS Keychain / Windows Credential Locker）。每条记忆都能查来源、修改和删除，数据存放在境内。使用本机语音识别时，转写在你的电脑上完成。
 </details>
 
 <details>
 <summary><b>怎么收费？</b></summary>
-
-AI 功能按积分计费，套餐与价格以官网为准。
+<br>
+可以免费开始使用，AI 功能按积分计费，套餐与价格以官网为准。
 </details>
 
 ## 🧩 生态
@@ -168,17 +200,15 @@ AI 功能按积分计费，套餐与价格以官网为准。
 | 项目 | 说明 |
 | --- | --- |
 | [DrawOffer 网页版](https://www.drawoffer.com) | 完整功能的在线版本 |
-| [drawoffer-mcp](https://github.com/DrawOffer/drawoffer-mcp) | 让 Claude、Cursor 等 AI 工具读写你的 DrawOffer 求职数据 |
+| [drawoffer-mcp](https://github.com/DrawOffer/drawoffer-mcp) | 让 Claude、Cursor 等 AI 工具读写你的求职数据 |
 | [drawoffer-skills](https://github.com/DrawOffer/drawoffer-skills) | 简历与求职 Agent Skills |
 | [drawoffer-prompts](https://github.com/DrawOffer/drawoffer-prompts) | 简历诊断、JD 匹配、STAR 改写等求职提示词 |
 | [drawoffer-chinese-resume-templates](https://github.com/DrawOffer/drawoffer-chinese-resume-templates) | 中文简历模板库 |
 
 ## 🛠 开发
 
-本仓库只包含桌面客户端。后端与 Web 端位于私有仓库，以子模块 `upstream/` 引用：你可以阅读和学习客户端源码，但需要团队权限才能完整构建。
-
 ```text
-apps/mac       macOS 客户端（Swift Package：Core / Render / App 三层）
+apps/mac       macOS 客户端（SwiftUI，Swift Package：Core / Render / App）
 apps/windows   Windows 客户端（WinUI 3，.NET）
 apps/native    两端共用：简历纸面渲染器、共享素材、检查脚本
 apps/desktop   早期 Electron 壳（已被原生客户端取代）
@@ -190,26 +220,21 @@ cd drawoffer/apps/mac && swift build      # macOS
 apps/windows/scripts/typecheck.sh         # Windows 类型检查
 ```
 
-客户端跟随 Web 端迭代，同步流程见 [CLAUDE.md](CLAUDE.md) 与 [SYNC.md](SYNC.md)。
+后端与 Web 端位于私有仓库，以子模块 `upstream/` 引用：可以阅读客户端源码，完整构建需要团队权限。客户端跟随 Web 端迭代，流程见 [CLAUDE.md](CLAUDE.md)。
 
-## 🤝 反馈与贡献
+## 🤝 反馈
 
-- 🐛 遇到问题或有建议：[提交 Issue](https://github.com/DrawOffer/drawoffer/issues)
-- 🌐 了解更多：[www.drawoffer.com](https://www.drawoffer.com)
-
-如果 DrawOffer 对你的求职有帮助，欢迎点一个 ⭐ Star，让更多同学看到。
+遇到问题或有想法，欢迎[提交 Issue](https://github.com/DrawOffer/drawoffer/issues)。如果 DrawOffer 帮到了你的求职，点一个 ⭐ Star，让更多同学看到它。
 
 <a href="https://star-history.com/#DrawOffer/drawoffer&Date">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=DrawOffer/drawoffer&type=Date&theme=dark">
-    <img src="https://api.star-history.com/svg?repos=DrawOffer/drawoffer&type=Date" alt="Star History Chart" width="100%">
+    <img src="https://api.star-history.com/svg?repos=DrawOffer/drawoffer&type=Date" alt="Star History" width="100%">
   </picture>
 </a>
 
+<div align="right"><a href="#readme-top">⬆ 回到顶部</a></div>
+
 ---
 
-<div align="center">
-
-© DrawOffer · All rights reserved
-
-</div>
+<div align="center"><sub>© DrawOffer · All rights reserved</sub></div>
