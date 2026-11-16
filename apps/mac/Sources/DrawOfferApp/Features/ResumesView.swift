@@ -53,17 +53,17 @@ struct ResumesView: View {
     }
 
     private var listPage: some View {
-        // `.hv3-page`：顶部 51（内容卡自带 1px 描边，合起来是画板的 52）
-        V3Page(top: 51) {
+        // Figma 03 页 02.1：内容区距顶 64（眉题），标题 28 衬线，说明 13；右上「导入简历」+ 墨黑「新建简历」。
+        V3Page(top: 64) {
             VStack(alignment: .leading, spacing: 0) {
-                V3PageHead(eyebrow: ["RESUMES", account.isEmpty ? "游客预览" : loaded ? "\(resumes.count) 份" : "个人工作区"],
-                           title: "我的简历", subtitle: "每份简历独立编辑，需要时复制一份按岗位修改。", compact: true) {
-                    // Web 空列表时不显示头部按钮（空态里有同样的两个入口）
-                    if !account.isEmpty && !(loaded && resumes.isEmpty && imports.isEmpty) {
+                ResumesHead(count: account.isEmpty ? "游客预览" : loaded ? "\(resumes.count) 份" : "个人工作区",
+                            subtitle: atLimit ? "已达到 \(ResumeRequest.maximumPerUser) 份上限。删除不用的简历后，才能新建、导入或复制。" : "每份简历独立编辑，需要时复制一份按岗位修改。",
+                            warn: atLimit) {
+                    if !account.isEmpty {
                         Button { importSheet = true } label: { Label(importing ? "正在上传…" : "导入简历", systemImage: "square.and.arrow.up") }
-                            .buttonStyle(V3ButtonStyle(kind: .ghost)).disabled(importing)
+                            .buttonStyle(ResumesPillStyle(dark: false)).disabled(importing || atLimit)
                         Button(action: checkCapacityThenBrowse) { Label("新建简历", systemImage: "plus") }
-                            .buttonStyle(V3ButtonStyle(kind: .dark))
+                            .buttonStyle(ResumesPillStyle(dark: true))
                     }
                 }
                 if account.isEmpty { GuestResumesEmpty(browse: browse, login: login) }
@@ -84,7 +84,7 @@ struct ResumesView: View {
         .task(id: "\(account)|\(reload)") { await load() }
         .task(id: importPoll) { if importPoll != nil { await pollImports() } }
         .task(id: importRequest) { if importRequest != nil, !account.isEmpty { importSheet = true } }
-        .sheet(isPresented: $importSheet) {
+        .centeredSheet(isPresented: $importSheet) {
             ResumeImportSheet(close: { importSheet = false }, accepted: { title in
                 importSheet = false
                 notice = ("已开始导入「\(title)」，解析完成后会出现在列表中。", false)
@@ -95,61 +95,63 @@ struct ResumesView: View {
             // 退出或切换账号：清理上一账号的列表、预览与提示
             resumes = []; loadedAccount = nil; preview = nil; exportingID = nil; notice = nil; query = ""; loadError = false; imports = []
         }
-        .sheet(item: $preview) { resume in
+        .centeredSheet(item: $preview) { resume in
             ResumePreviewSheet(resume: resume, exporting: exportingID == resume.id,
                                export: { Task { await exportPDF(resume) } },
                                share: { preview = nil; sharing = resume }, edit: { preview = nil; editResumeID = resume.id }, close: { preview = nil })
                 .frame(width: 960, height: 720)
         }
-        .sheet(item: $renaming) { resume in
+        .centeredSheet(item: $renaming) { resume in
             ResumeTitleSheet(mode: .rename, resume: resume, close: { renaming = nil }, done: { title in
                 renaming = nil; notice = ("已将简历重命名为「\(title)」", false); reload = UUID()
-            })
+            }, copy: { renaming = nil; checkCapacity { copying = resume } })
         }
-        .sheet(item: $copying) { resume in
+        .centeredSheet(item: $copying) { resume in
             ResumeTitleSheet(mode: .copy, resume: resume, close: { copying = nil }, done: { title in
                 copying = nil; notice = ("已复制为「\(title)」", false); reload = UUID()
             })
         }
-        .sheet(isPresented: $creating) {
+        .centeredSheet(isPresented: $creating) {
             ResumeCreateSheet(close: { creating = false }, created: { id in
                 creating = false; reload = UUID()
                 if !id.isEmpty { editResumeID = id }
             })
         }
-        .sheet(item: $sharing) { resume in
+        .centeredSheet(item: $sharing) { resume in
             ResumeShareSheet(resume: resume, close: { sharing = nil })
         }
-        .alert("删除这份简历？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 && !deleteBusy { deleting = nil } }), presenting: deleting) { resume in
-            Button("取消", role: .cancel) { deleting = nil }
-            Button(deleteBusy ? "正在删除…" : "删除", role: .destructive) { Task { await delete(resume) } }
-        } message: { resume in
-            Text("「\(resume.title)」删除后无法恢复：公开分享链接会立即失效，关联的求职记录会解除关联，其他简历不受影响。")
+        .centeredSheet(item: $deleting) { resume in
+            ResumeDeleteSheet(resume: resume, busy: deleteBusy, delete: { Task { await delete(resume) } },
+                              cancel: { if !deleteBusy { deleting = nil } })
         }
     }
 
     private var list: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // `.hv3-toolbar`：距头部 26、高 30；标题 16px 半粗，数字 11px；搜索 220×30、圆角 7、输入 12px
+            // 02.1 工具行：距头部 32、高 30；「全部简历」13/500，数字 11 灰；搜索 220×30、圆角 7、#f4f4f2 底
             HStack {
-                (Text("全部简历 ").font(.system(size: 16, weight: .semibold)).foregroundStyle(V3.txt)
-                 + Text("\(resumes.count)").font(V3.number(11, weight: .medium)).foregroundStyle(V3.fnt))
+                (Text("全部简历  ").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
+                 + Text("\(resumes.count)").font(V3.number(11, weight: .medium)).foregroundStyle(resumesHint))
                 Spacer()
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(V3.fnt)
                     TextField("搜索简历…", text: $query).textFieldStyle(.plain).font(V3.sans(12)).accessibilityLabel("搜索简历")
                 }.padding(.horizontal, 12).frame(width: 220, height: 30)
                     .background(V3.field, in: RoundedRectangle(cornerRadius: 7))
-            }.frame(height: 30).padding(.top, 26)
+            }.frame(height: 30).padding(.top, 32)
             Rectangle().fill(V3.line).frame(height: 1).padding(.top, 2)
             if visible.isEmpty {
-                // Web `.hv3-empty.is-search`
-                VStack(spacing: 8) {
-                    Text("没有找到「\(query.trimmingCharacters(in: .whitespaces))」").font(V3.serif(18)).foregroundStyle(V3.txt)
-                    Text("试试更短的关键词，比如公司名或岗位名；也可以回到「全部」查看所有简历。").font(V3.sans(13)).foregroundStyle(V3.sub)
-                    Button { query = "" } label: { Label("清除搜索", systemImage: "magnifyingglass") }
-                        .buttonStyle(V3ButtonStyle(kind: .ghost)).padding(.top, 8)
-                }.frame(maxWidth: .infinity, minHeight: 200)
+                // 02.1 ③ 搜索没有结果：三张小纸 + 放大镜，标题 17/500，说明 13，「清除搜索」胶囊
+                VStack(spacing: 0) {
+                    ResumesSearchArt()
+                    Text("没有找到「\(query.trimmingCharacters(in: .whitespaces))」").font(V3.sans(17, weight: .medium)).foregroundStyle(V3.txt).padding(.top, 42)
+                    Text("试试更短的关键词，比如公司名或岗位名；也可以回到「全部」查看所有简历。").font(V3.sans(13)).foregroundStyle(V3.sub).padding(.top, 13)
+                    Button { query = "" } label: {
+                        HStack(spacing: 6) { Image(systemName: "magnifyingglass").font(.system(size: 10)); Text("清除搜索").font(V3.sans(13)) }
+                            .foregroundStyle(V3.txt).padding(.horizontal, 16).frame(height: 31)
+                            .background(.white, in: Capsule()).overlay(Capsule().stroke(V3.cl)).contentShape(Capsule())
+                    }.buttonStyle(.plain).padding(.top, 27)
+                }.frame(maxWidth: .infinity).padding(.top, 160)
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 199), spacing: 20)], alignment: .leading, spacing: 37) {
                     if query.isEmpty {
@@ -164,17 +166,18 @@ struct ResumesView: View {
                                    share: { sharing = resume }, delete: { deleting = resume })
                     }
                     if query.isEmpty {
+                        // 02.1 ② 达到上限时这一格变成「已达 10 份上限」，不能点
                         Button(action: checkCapacityThenBrowse) {
-                            VStack(spacing: 10) {
-                                Image(systemName: "plus").font(.system(size: 20))
-                                Text("新建空白简历").font(V3.sans(12))
-                            }.foregroundStyle(V3.fnt).frame(maxWidth: .infinity).aspectRatio(210.0 / 297, contentMode: .fit)
+                            VStack(spacing: 12) {
+                                Image(systemName: "plus").font(.system(size: 14, weight: .light))
+                                Text(atLimit ? "已达 \(ResumeRequest.maximumPerUser) 份上限" : "新建空白简历").font(V3.sans(12))
+                            }.foregroundStyle(atLimit ? resumesHint.opacity(0.7) : resumesHint).frame(maxWidth: .infinity).aspectRatio(210.0 / 297, contentMode: .fit)
                                 .background(.white, in: RoundedRectangle(cornerRadius: 6))
                                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(hex: 0xC9C9C3), style: StrokeStyle(lineWidth: 1, dash: [4])))
                                 .contentShape(Rectangle())
-                        }.buttonStyle(.plain).accessibilityLabel("新建空白简历")
+                        }.buttonStyle(.plain).disabled(atLimit).accessibilityLabel(atLimit ? "已达简历上限" : "新建空白简历")
                     }
-                }.padding(.top, 27)
+                }.padding(.top, 18)
             }
         }
     }
@@ -207,21 +210,17 @@ struct ResumesView: View {
         }.accessibilityElement(children: .contain)
     }
 
-    /// `.hv3-empty.is-list`：分隔线距头部 24，下方 53 处 520 宽的卡片，236 高点阵舞台，120×36 的深色「新建简历 →」与文字链「导入简历」。
+    /// 02.1 空列表：分隔线下居中一张小纸（两侧「教育经历」「项目经历」小模块），标题 17/500「还没有简历」，两行 13 号说明；
+    /// 入口就是右上角两个按钮，不在空态里重复。
     private var emptyList: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(spacing: 0) {
             Rectangle().fill(V3.line).frame(height: 1).padding(.top, 24)
-            V3EmptyCard(title: "从第一份简历开始", message: "新建时选一套模板、起个名字；已有简历文件可以用「导入简历」。",
-                        stageHeight: 236, inset: 8, messageTop: 8, actionsTop: 32) {
-                EmptyResumeArt().frame(width: 504, height: 236)
-            } actions: {
-                Button(action: checkCapacityThenBrowse) { Text("新建简历"); Image(systemName: "arrow.right").font(.system(size: 10, weight: .semibold)) }
-                    .buttonStyle(V3ButtonStyle(kind: .dark, height: 36, width: 120))
-                Button { importSheet = true } label: {
-                    HStack(spacing: 5) { Image(systemName: "square.and.arrow.up").font(.system(size: 11)); Text("导入简历") }
-                        .font(V3.sans(14, weight: .medium)).foregroundStyle(V3.sub).contentShape(Rectangle())
-                }.buttonStyle(.plain).disabled(importing)
-            }.padding(.top, 53).frame(maxWidth: .infinity)
+            VStack(spacing: 0) {
+                ResumesBlankArt()
+                Text("还没有简历").font(V3.sans(17, weight: .medium)).foregroundStyle(V3.txt).padding(.top, 36)
+                Text("用右上角「新建简历」选一套模板开始，每份简历都能复制一份按岗位修改。\n已有简历文件，可以用「导入简历」直接读进来。")
+                    .font(V3.sans(13)).foregroundStyle(V3.sub).multilineTextAlignment(.center).lineSpacing(5).padding(.top, 13)
+            }.frame(maxWidth: .infinity).padding(.top, 222)
         }.accessibilityElement(children: .contain)
     }
 
@@ -302,22 +301,32 @@ struct ResumesView: View {
         }
     }
 
+    /// 02.1c 导入任务卡：#f4f4f2 圆角底里一张白纸，中间一个白色状态签（解析中带转圈）；失败时淡红底、红边、红字，右下「移除记录」。
     private func importCard(_ task: JSONValue) -> some View {
         let failed = task.text("upload_status") == "failed" || task.text("parse_status") == "failed"
         let stage = task.text("upload_status") == "uploading" ? "正在上传" : "正在解析"
-        return VStack(alignment: .leading, spacing: 10) {
-            VStack(spacing: 10) {
-                if failed { Image(systemName: "exclamationmark.triangle").font(.system(size: 24)).foregroundStyle(V3.red) }
-                else { ProgressView().controlSize(.small) }
-                Text(failed ? (task.text("upload_status") == "failed" ? "上传失败" : "解析失败") : stage + "…").font(V3.sans(12)).foregroundStyle(failed ? V3.red : V3.sub)
-            }.frame(maxWidth: .infinity).aspectRatio(210.0 / 297, contentMode: .fit)
-                .background(failed ? V3.redSoft : V3.stage, in: RoundedRectangle(cornerRadius: 6))
-            Text(task.text("source_filename")).font(V3.sans(13, weight: .medium)).lineLimit(1)
+        let label = failed ? (task.text("upload_status") == "failed" ? "上传失败" : "解析失败") : (task.text("upload_status") == "uploading" ? "上传中" : "解析中")
+        let failLine = Color(hex: 0xF3D6D6)
+        return VStack(alignment: .leading, spacing: 6) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 3.5).fill(.white).overlay(RoundedRectangle(cornerRadius: 3.5).stroke(V3.cl))
+                    .padding(.horizontal, 23).padding(.vertical, 19)
+                HStack(spacing: 6) {
+                    if !failed { ProgressView().controlSize(.mini) }
+                    Text(label).font(V3.sans(11.5, weight: .medium)).foregroundStyle(failed ? V3.red : V3.txt)
+                }
+                .padding(.horizontal, 14).frame(height: failed ? 28 : 32)
+                .background(.white, in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(failed ? failLine : V3.cl))
+            }
+            .frame(maxWidth: .infinity).aspectRatio(210.0 / 297, contentMode: .fit)
+            .background(failed ? Color(hex: 0xFDF5F5) : V3.field, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(failed ? failLine : .clear))
+            Text(task.text("source_filename")).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1).frame(height: 16).padding(.top, 4)
             HStack {
-                Text(failed ? "可以删除记录后重新导入" : "\(stage) · 请稍候").font(V3.sans(11)).foregroundStyle(failed ? V3.red : V3.fnt)
-                Spacer()
+                Text(failed ? "\(label) · 可以移除后重新导入" : "\(stage) · 请稍候").font(V3.sans(11)).foregroundStyle(failed ? V3.red : resumesHint).lineLimit(1)
+                Spacer(minLength: 4)
                 if failed {
-                    Button("删除记录") { Task { await deleteImport(task) } }.buttonStyle(.link).font(V3.sans(11))
+                    Button("移除记录") { Task { await deleteImport(task) } }.buttonStyle(V3ButtonStyle(kind: .ghost, height: 25, small: true))
                 }
             }
         }
@@ -538,7 +547,7 @@ private struct ResumePreviewSheet: View {
                 if let paper {
                     ResumePaperView(request: paper, onRendered: { height = max(1123, $0) }, onError: { error = $0 })
                         .frame(width: 794, height: height).padding(24)
-                } else if error == nil { ProgressView("加载预览…").padding(40) }
+                } else if error == nil { V3Loading("加载预览…").padding(40) }
             }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Tokens.Color.stage)
         }.task(id: "\(resume.id)|\(resume.lockVersion)") {
             paper = nil; error = nil; missingImages = 0; height = 1123
@@ -586,5 +595,94 @@ enum WebBridge {
     static func openEditor(_ resumeID: String, api: any APIClient) {
         guard resumeID.allSatisfy({ $0.isASCII && $0.isNumber }) else { return }
         open("/resumes/\(resumeID)/edit", api: api)
+    }
+}
+
+/// 02.1 页头：眉题 11 灰「RESUMES · N 份」，标题 28 衬线，说明 13（到上限时橙色）；按钮距顶 32。
+private struct ResumesHead<Actions: View>: View {
+    let count: String
+    let subtitle: String
+    var warn = false
+    @ViewBuilder var actions: () -> Actions
+    var body: some View {
+        HStack(alignment: .top, spacing: 24) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("RESUMES · \(count)").font(V3.sans(11)).foregroundStyle(resumesHint).frame(height: 13)
+                Text("我的简历").font(V3.serif(28)).foregroundStyle(V3.txt).frame(height: 40).padding(.top, 13)
+                Text(subtitle).font(V3.sans(13)).foregroundStyle(warn ? V3.orange : V3.sub).lineLimit(1).frame(height: 16).padding(.top, 2)
+            }
+            Spacer(minLength: 0)
+            HStack(spacing: 10) { actions() }.padding(.top, 32)
+        }
+    }
+}
+
+/// 稿中眉题、数量与时间的浅灰字 #96968F。
+private let resumesHint = Color(hex: 0x96968F)
+
+/// 02.1 空列表插图：64×88 白纸（标题条 + 三个虚线模块位），左「教育经历」、右「项目经历」两个小模块签。
+private struct ResumesBlankArt: View {
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            VStack(alignment: .leading, spacing: 0) {
+                RoundedRectangle(cornerRadius: 1).fill(V3.txt).frame(width: 26, height: 4).padding(.top, 10)
+                RoundedRectangle(cornerRadius: 1).fill(Color(hex: 0xD9D9D4)).frame(width: 38, height: 2).padding(.top, 4)
+                ForEach(0..<3, id: \.self) { _ in
+                    RoundedRectangle(cornerRadius: 2.5).stroke(Color(hex: 0xD6D6D1), style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+                        .frame(width: 47, height: 12).padding(.top, 6)
+                }
+            }
+            .padding(.leading, 8).frame(width: 64, height: 88, alignment: .topLeading)
+            .background(.white, in: RoundedRectangle(cornerRadius: 4)).overlay(RoundedRectangle(cornerRadius: 4).stroke(V3.cl))
+            .offset(x: 70)
+            tag("教育经历").offset(x: 0, y: 18)
+            tag("项目经历").offset(x: 140, y: 48)
+        }.frame(width: 200, height: 88, alignment: .topLeading).accessibilityHidden(true)
+    }
+    private func tag(_ text: String) -> some View {
+        Text(text).font(V3.sans(10.5, weight: .medium)).foregroundStyle(V3.sub).frame(width: 60, height: 24)
+            .background(.white, in: RoundedRectangle(cornerRadius: 6)).overlay(RoundedRectangle(cornerRadius: 6).stroke(V3.cl))
+    }
+}
+
+/// 02.1 ③ 搜索没有结果插图：两侧两张小纸、中间一张稍大的纸，右下压一个放大镜。
+private struct ResumesSearchArt: View {
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            paper(32, 43).offset(x: 0, y: 3)
+            paper(32, 43).offset(x: 49, y: 3)
+            paper(35, 47).offset(x: 23, y: 0)
+            Image(systemName: "magnifyingglass").font(.system(size: 13, weight: .medium)).foregroundStyle(V3.sub)
+                .frame(width: 17, height: 17).background(.white, in: Circle()).offset(x: 48, y: 25)
+        }.frame(width: 81, height: 47, alignment: .topLeading).accessibilityHidden(true)
+    }
+    private func paper(_ width: CGFloat, _ height: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            RoundedRectangle(cornerRadius: 0.5).fill(V3.txt).frame(width: width * 0.4, height: 2)
+            ForEach(0..<3, id: \.self) { _ in RoundedRectangle(cornerRadius: 0.5).fill(V3.line).frame(width: width * 0.6, height: 1.5) }
+        }
+        .padding(5).frame(width: width, height: height, alignment: .topLeading)
+        .background(.white, in: RoundedRectangle(cornerRadius: 1.6)).overlay(RoundedRectangle(cornerRadius: 1.6).stroke(V3.cl))
+    }
+}
+
+/// 02.1 页头按钮：胶囊。「导入简历」31 高白底 #e4e4e0 细边，「新建简历」32 高墨黑；12/500 字、图标 9。
+private struct ResumesPillStyle: ButtonStyle {
+    let dark: Bool
+    @Environment(\.isEnabled) private var enabled
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .labelStyle(ResumesPillLabel())
+            .font(V3.sans(12, weight: .medium)).foregroundStyle(dark ? Color.white : V3.txt)
+            .padding(.horizontal, dark ? 20 : 17).frame(height: dark ? 32 : 31)
+            .background(dark ? (configuration.isPressed ? Color(hex: 0x0E0E0D) : V3.txt) : (configuration.isPressed ? V3.field : .white), in: Capsule())
+            .overlay(Capsule().stroke(dark ? .clear : V3.cl))
+            .opacity(enabled ? 1 : 0.4).contentShape(Capsule())
+    }
+}
+
+private struct ResumesPillLabel: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 7) { configuration.icon.font(.system(size: 9, weight: .semibold)); configuration.title }
     }
 }

@@ -12,6 +12,7 @@ public enum CareerRequest {
         let reads = ["/api/resumes", "/api/job-applications", "/api/interview-overview", "/api/interview-sessions", "/api/job-descriptions"]
         if method == "GET", reads.contains(path) { return true }
         if method == "POST", ["/api/job-descriptions", "/api/job-descriptions/parse-draft", "/api/job-applications"].contains(path) { return true }
+        if path == "/api/plugin-releases/current" { return method == "GET" }
         if path == "/api/job-matches/recommendations" { return method == "GET" }
         if path == "/api/job-matches/recommendations:ensure" { return method == "POST" }
         let parts = path.split(separator: "/").map(String.init)
@@ -38,12 +39,16 @@ public enum CareerRequest {
         if parts.count == 4 {
             switch parts[3] {
             case "assets": return ["GET", "POST"].contains(method)
+            // 笔试题：确认导入（整体替换，带识别出的作答与判分）
+            case "written-questions": return method == "PUT"
             case "review-notes": return method == "PUT"
-            case "written-questions:extract", "review:generate", "prep-items:generate", "record:structure": return method == "POST"
+            case "written-questions:extract", "review:generate", "prep-items:generate", "record:structure", "record-topics": return method == "POST"
             default: return nil
             }
         }
         if parts.count == 5, parts[3] == "review-notes" { return numeric(parts[4]) && method == "DELETE" }
+        // 笔试题逐题标对错
+        if parts.count == 5, parts[3] == "written-questions" { return numeric(parts[4]) && method == "PATCH" }
         if parts.count == 5, parts[3] == "transcriptions" {
             let segment = parts[4].split(separator: ":", omittingEmptySubsequences: false).map(String.init)
             return segment.count == 2 && numeric(segment[0]) && ["retry", "apply"].contains(segment[1]) && method == "POST"

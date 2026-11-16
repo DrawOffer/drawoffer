@@ -345,6 +345,7 @@ final class DesktopTransport: DesktopRequesting {
 public struct DesktopCapabilities: Decodable, Sendable {
     public let wechat_login_enabled: Bool
     public let browser_login_enabled: Bool?
+    public let password_login_enabled: Bool?
     public let session_protocol: Int
 }
 
@@ -386,7 +387,7 @@ public struct HTTPAPIClient: APIClient {
     public func completeBrowserLogin(callback: URL) async throws -> User { try await coordinator.completeBrowserLogin(callback: callback) }
     public func currentUser() async throws -> User? { try await coordinator.restore() }
     public func signIn(email: String, password: String) async throws -> User {
-        throw APIError.server(status: 405, code: "DESKTOP_WECHAT_LOGIN_REQUIRED")
+        try await coordinator.passwordLogin(email: email, password: password, clientVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0")
     }
     public func signOut() async throws { try await coordinator.signOut() }
     public func listResumeTemplates() async throws -> [ResumeTemplate] {

@@ -82,15 +82,15 @@ struct CareerActionStyle: ButtonStyle {
         return Group {
             switch kind {
             case .outline:
-                label.foregroundStyle(CareerPalette.text).padding(.horizontal, large ? 14 : 10).frame(height: large ? 34 : 30)
-                    .background(configuration.isPressed ? CareerPalette.field : .white, in: RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(CareerPalette.border))
+                label.foregroundStyle(CareerPalette.text).padding(.horizontal, large ? 14 : 10).frame(height: large ? 32 : 28)
+                    .background(configuration.isPressed ? CareerPalette.field : .white, in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(.black.opacity(0.1)))
             case .primary:
-                label.foregroundStyle(.white).padding(.horizontal, large ? 14 : 10).frame(height: large ? 34 : 30)
-                    .background(enabled ? (configuration.isPressed ? Color.black : CareerPalette.text) : Color(hex: 0x9E9E99), in: RoundedRectangle(cornerRadius: 8))
+                label.foregroundStyle(.white).padding(.horizontal, large ? 14 : 10).frame(height: large ? 32 : 28)
+                    .background(enabled ? (configuration.isPressed ? Color.black : CareerPalette.text) : Color(hex: 0x9E9E99), in: RoundedRectangle(cornerRadius: 6))
             case .text, .danger:
-                label.foregroundStyle(kind == .danger ? CareerPalette.red : CareerPalette.sub).padding(.horizontal, 10).frame(height: 30)
-                    .background(configuration.isPressed ? CareerPalette.field : .clear, in: RoundedRectangle(cornerRadius: 8))
+                label.foregroundStyle(kind == .danger ? CareerPalette.red : CareerPalette.sub).padding(.horizontal, 10).frame(height: 28)
+                    .background(configuration.isPressed ? CareerPalette.field : .clear, in: RoundedRectangle(cornerRadius: 6))
             case .link:
                 label.foregroundStyle(CareerPalette.blue)
             case .muted:

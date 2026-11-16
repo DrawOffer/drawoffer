@@ -69,6 +69,7 @@ for (const directory of [
 ]) {
   mkdirSync(directory, { recursive: true });
   copyFileSync(resolve(appsRoot, 'web/src/assets/drawoffer-wordmark.png'), resolve(directory, 'wordmark.png'));
+  copyFileSync(resolve(appsRoot, 'web/src/assets/drawoffer-mark.png'), resolve(directory, 'mark.png'));
 }
 
 for (const directory of [resolve(appsRoot, 'mac/Sources/DrawOfferApp/Resources/Home'), resolve(appsRoot, 'windows/src/DrawOffer.App/Assets/Home')]) {
@@ -112,6 +113,8 @@ const editorResult = await build({
       }));
     },
   }],
+  // 模板样式里的站内 /templates/... 图片保持原地址，由原生 scheme 从随包 templates 目录读出
+  external: ["/templates/*"],
   loader: {
     ".png": "dataurl", ".jpg": "dataurl", ".jpeg": "dataurl", ".svg": "dataurl", ".webp": "dataurl",
     ".woff2": "dataurl", ".woff": "dataurl", ".ttf": "dataurl", ".otf": "dataurl",
@@ -144,7 +147,7 @@ for (const directory of editorDirectories) {
   // 模板示例头像：纸面里写的是站内 /templates/... 地址，由原生 scheme 从随包资源读出
   const templateTarget = resolve(directory, "templates");
   mkdirSync(templateTarget, { recursive: true });
-  for (const filename of ["avatar-administrative.png", "avatar-administrative.svg", "avatar-campus.png", "avatar-campus.svg", "avatar-cat.jpg", "avatar-civic.png", "avatar-civic.svg", "avatar-creative.png", "avatar-creative.svg"])
+  for (const filename of ["avatar-administrative.png", "avatar-administrative.svg", "avatar-campus.png", "avatar-campus.svg", "avatar-cat.jpg", "avatar-civic.png", "avatar-civic.svg", "avatar-creative.png", "avatar-creative.svg", "masthead-mountains.png", "bamboo-leaves.png", "deco-village.png", "deco-lake.png"])
     copyFileSync(resolve(appsRoot, "web/public/templates", filename), resolve(templateTarget, filename));
 }
 console.log(`editor.html ${(editorHtml.length / 1024).toFixed(0)} KiB -> ${editorDirectories.length} clients`);

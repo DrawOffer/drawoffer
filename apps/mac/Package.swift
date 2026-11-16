@@ -13,10 +13,7 @@ let package = Package(
         .executable(name: "DrawOffer", targets: ["DrawOfferApp"]),
     ],
     targets: [
-        .target(
-            name: "DrawOfferCore",
-            resources: [.copy("Resources/resume-templates.json")]
-        ),
+        .target(name: "DrawOfferCore"),
         .target(
             name: "DrawOfferRender",
             dependencies: ["DrawOfferCore"],

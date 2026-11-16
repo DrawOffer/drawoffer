@@ -1006,8 +1006,8 @@ private struct HomeMenuRow: ButtonStyle {
 
 struct HomeOutlineButton: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(.system(size: 12.5, weight: .medium)).foregroundStyle(V3.txt).padding(.horizontal, 14).padding(.vertical, 7)
-            .background(.white, in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(V3.txt.opacity(0.55)))
+        configuration.label.font(.system(size: 12.5, weight: .medium)).foregroundStyle(V3.txt).padding(.horizontal, 12).frame(height: 28)
+            .background(.white, in: RoundedRectangle(cornerRadius: 6)).overlay(RoundedRectangle(cornerRadius: 6).stroke(.black.opacity(0.1)))
             .opacity(configuration.isPressed ? 0.7 : 1)
     }
 }

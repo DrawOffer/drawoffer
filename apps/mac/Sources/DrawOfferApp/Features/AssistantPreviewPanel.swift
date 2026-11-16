@@ -62,36 +62,61 @@ struct ChatPreviewPanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 4) {
+            // 页眉（02B·06 · 59:2060）：左侧标签 28 高，右侧 ⋯ / 全屏 / 关闭三个细线图标
+            HStack(spacing: 8) {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 2) { ForEach(tabs, id: \.key) { tab in tabButton(tab) } }
+                    HStack(spacing: 4) { ForEach(tabs, id: \.key) { tab in tabButton(tab) } }
                 }
-                Button { fullscreen.wrappedValue.toggle() } label: {
-                    Image(systemName: fullscreen.wrappedValue ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right").font(.system(size: 11))
-                }.buttonStyle(.plain).padding(.horizontal, 4).help(fullscreen.wrappedValue ? "恢复面板大小" : "全屏查看")
-                    .accessibilityLabel(fullscreen.wrappedValue ? "恢复面板大小" : "全屏查看")
-                Menu {
-                    Button("重新加载") { reload = UUID() }
-                    Button("关闭其他标签") { tabs.filter { $0.key != current?.key }.forEach { closeTab($0.key) } }.disabled(tabs.count < 2)
-                } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("更多操作")
-                Button(action: close) { Image(systemName: "xmark").font(.system(size: 11, weight: .semibold)) }.buttonStyle(.plain).padding(.horizontal, 6)
-                    .keyboardShortcut(.cancelAction).accessibilityLabel("关闭预览")
-            }.padding(.horizontal, 10).frame(height: 44)
-            Divider()
+                HStack(spacing: 4) {
+                    Menu {
+                        Button("重新加载") { reload = UUID() }
+                        Button("关闭其他标签") { tabs.filter { $0.key != current?.key }.forEach { closeTab($0.key) } }.disabled(tabs.count < 2)
+                    } label: { Image(systemName: "ellipsis").font(.system(size: 12)) }
+                        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().frame(width: 26, height: 26).accessibilityLabel("更多操作")
+                    headerIcon(fullscreen.wrappedValue ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                               label: fullscreen.wrappedValue ? "恢复面板大小" : "全屏查看") { fullscreen.wrappedValue.toggle() }
+                    headerIcon("xmark", label: "关闭预览", action: close).keyboardShortcut(.cancelAction)
+                }.foregroundStyle(V3.sub)
+            }.padding(.leading, 11).padding(.trailing, 8).frame(height: 50)
+            Rectangle().fill(V3.line).frame(height: 1)
             Group {
                 if let current {
                     switch current.kind {
                     case .resume: ChatResumePreview(resumeID: current.id, highlights: current.pending, onMissing: { markUnavailable(current.key) })
                     case .image: ChatImagePreview(data: current.imageData, label: current.label)
                     case .dataset: ChatDatasetPreview(datasetID: current.id, onMissing: { markUnavailable(current.key) })
-                    case .generated: ScrollView { NativeMarkdownView(source: current.content).textSelection(.enabled).padding(20).frame(maxWidth: .infinity, alignment: .leading) }
+                    case .generated: ScrollView { NativeMarkdownView(source: current.content, size: 13.5, line: 24).textSelection(.enabled).padding(24).frame(maxWidth: .infinity, alignment: .leading) }
                     }
                 }
             }.id((current?.key ?? "") + reload.uuidString).frame(maxWidth: .infinity, maxHeight: .infinity)
-            Divider()
-            if let current { footer(current).padding(.horizontal, 14).frame(height: 48) }
+            Rectangle().fill(V3.line).frame(height: 1)
+            if let current { footer(current).padding(.leading, 18).padding(.trailing, 14).frame(height: 54) }
         }
         .background(.white)
+    }
+
+    private func headerIcon(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: symbol).font(.system(size: 11)).frame(width: 26, height: 26).contentShape(Rectangle()) }
+            .buttonStyle(.plain).help(label).accessibilityLabel(label)
+    }
+
+    /// 页脚按钮（02B·06）：白底细边、圆角 7.5、29 高，图标 + 12 号字。
+    private func footButton(_ title: String, symbol: String?, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                if let symbol { Image(systemName: symbol).font(.system(size: 10)) }
+                Text(title).font(V3.sans(12, weight: .medium))
+            }.foregroundStyle(V3.txt).padding(.horizontal, 14).frame(height: 29)
+                .background(.white, in: RoundedRectangle(cornerRadius: 7.5)).overlay(RoundedRectangle(cornerRadius: 7.5).stroke(V3.cl))
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain)
+    }
+
+    private func status(_ text: String, dot: Bool = false) -> some View {
+        HStack(spacing: 6) {
+            if dot { Circle().fill(V3.blue).frame(width: 6, height: 6) }
+            Text(text).font(V3.sans(12)).foregroundStyle(V3.sub).lineLimit(1)
+        }
     }
 
     /// 下载资料原文件（Web `downloadDatasetSource`）：先让用户选位置，再经桌面会话下载并移动过去。
@@ -112,44 +137,55 @@ struct ChatPreviewPanel: View {
         }
     }
 
+    /// 标签（02B·06）：当前标签 #F4F4F2 底、圆角 7，显示完整名称；其余只显示图标 + 截断名称，悬停显示全名。
     private func tabButton(_ tab: ChatPreviewTab) -> some View {
         let selected = tab.key == current?.key
-        return HStack(spacing: 5) {
+        let symbol = ["resume": "doc.text", "generated": "doc.richtext", "image": "photo"][tab.kind.rawValue] ?? "doc"
+        return HStack(spacing: 8) {
             Button { activate(tab.key) } label: {
-                Label(tab.label.nilIfEmpty ?? "未命名", systemImage: ["resume": "doc.text", "generated": "sparkles.rectangle.stack", "image": "photo"][tab.kind.rawValue] ?? "doc")
-                    .font(V3.sans(12)).lineLimit(1).frame(maxWidth: 140)
+                HStack(spacing: 8) {
+                    Image(systemName: symbol).font(.system(size: 10)).foregroundStyle(V3.sub)
+                    Text(tab.label.nilIfEmpty ?? "未命名").font(V3.sans(12.5, weight: selected ? .medium : .regular)).lineLimit(1)
+                        .frame(maxWidth: selected ? 200 : 96, alignment: .leading)
+                }.contentShape(Rectangle())
             }.buttonStyle(.plain).foregroundStyle(unavailable.contains(tab.key) ? V3.fnt : V3.txt)
-            Button { closeTab(tab.key) } label: { Image(systemName: "xmark").font(.system(size: 8, weight: .semibold)) }.buttonStyle(.plain)
-                .accessibilityLabel("关闭 \(tab.label)")
-        }.padding(.horizontal, 9).frame(height: 28).background(selected ? V3.field : .clear, in: RoundedRectangle(cornerRadius: 7)).help(tab.label)
+            Button { closeTab(tab.key) } label: { Image(systemName: "xmark").font(.system(size: 7.5, weight: .semibold)).foregroundStyle(V3.fnt).frame(width: 14, height: 14).contentShape(Rectangle()) }
+                .buttonStyle(.plain).accessibilityLabel("关闭 \(tab.label)")
+        }.padding(.leading, 10).padding(.trailing, 6).frame(height: 28)
+            .background(selected ? V3.field : .clear, in: RoundedRectangle(cornerRadius: 7)).help(tab.label)
     }
 
+    /// 页脚（02B·06 / 02B·08）：左边只读或保存状态，右边动作；生成文档的「保存到资料库」是这一页唯一的黑色按钮。
     @ViewBuilder private func footer(_ tab: ChatPreviewTab) -> some View {
         HStack(spacing: 8) {
             switch tab.kind {
             case .resume:
-                Text(tab.pending.isEmpty ? "只读预览 · 编辑请在编辑器中打开" : "\(tab.pending.count) 处待确认修改已在简历中标出").font(V3.sans(11.5)).foregroundStyle(V3.fnt).lineLimit(1)
+                status(tab.pending.isEmpty ? "只读预览" : "只读预览 · AI 本次引用了 \(tab.pending.count) 处内容", dot: !tab.pending.isEmpty)
                 Spacer()
-                Button { router?.jump(.editResume(tab.id)) } label: { Label("在编辑器中打开", systemImage: "arrow.up.forward.square") }.buttonStyle(V3ButtonStyle(kind: .ghost))
+                footButton("在编辑器中打开", symbol: "arrow.up.forward.square") { router?.jump(.editResume(tab.id)) }
                     .disabled(unavailable.contains(tab.key))
             case .dataset:
-                Text("只读预览 · AI 已读取其中的文字内容").font(V3.sans(11.5)).foregroundStyle(V3.fnt).lineLimit(1)
+                status("只读预览")
                 Spacer()
                 if let downloadError { Text(downloadError).font(V3.sans(11)).foregroundStyle(V3.red) }
-                Button { Task { await download(tab) } } label: { Label(downloading ? "正在下载…" : "下载文件", systemImage: "arrow.down.circle") }
-                    .buttonStyle(V3ButtonStyle(kind: .ghost)).disabled(downloading || unavailable.contains(tab.key))
-                Button { router?.jump(.section(.datasets)) } label: { Label("在资料库中打开", systemImage: "arrow.up.forward.square") }.buttonStyle(V3ButtonStyle(kind: .ghost))
+                footButton(downloading ? "正在下载…" : "下载文件", symbol: "arrow.down.circle") { Task { await download(tab) } }
+                    .disabled(downloading || unavailable.contains(tab.key))
+                footButton("在资料库中打开", symbol: "arrow.up.forward.square") { router?.jump(.section(.datasets)) }
             case .image:
-                Text("截图 · 仅在本次对话中可见").font(V3.sans(11.5)).foregroundStyle(V3.fnt).lineLimit(1)
+                status("截图 · 仅在本次对话中可见")
                 Spacer()
             case .generated:
-                Text(tab.saved ? "已保存到资料库" : "未保存 · 仅在本次对话中可见").font(V3.sans(11.5)).foregroundStyle(V3.fnt).lineLimit(1)
+                status(tab.saved ? "已保存到资料库" : "未保存 · 仅在本次对话中可见", dot: tab.saved)
                 Spacer()
-                Button {
+                footButton(copied ? "已复制" : "复制", symbol: "doc.on.doc") {
                     NSPasteboard.general.clearContents(); NSPasteboard.general.setString(tab.content, forType: .string)
                     copied = true; Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
-                } label: { Label(copied ? "已复制" : "复制", systemImage: "doc.on.doc") }.buttonStyle(V3ButtonStyle(kind: .ghost))
-                Button(tab.saved ? "已保存" : "保存到资料库") { save(tab) }.buttonStyle(V3ButtonStyle(kind: .dark)).disabled(tab.saved)
+                }
+                if tab.saved {
+                    footButton("在资料库中打开", symbol: "arrow.up.forward.square") { router?.jump(.section(.datasets)) }
+                } else {
+                    Button("保存到资料库") { save(tab) }.buttonStyle(V3ButtonStyle(kind: .dark))
+                }
             }
         }
     }

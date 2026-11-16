@@ -44,6 +44,8 @@ struct JobsBoardView: View {
     @State private var notice: String?
     @State private var hoveredCard: String?
     @State private var refreshing = UUID()
+    /// 导入岗位成功后，等看板刷新完再打开的新求职进程。
+    @State private var pendingOpen: String?
     private let categories: [(String, String)] = [("internship", "实习"), ("campus", "校招"), ("full_time", "正式"), ("", "未分类")]
     private var account: String { if case .signedIn(let user) = session.phase { return user.id }; return "" }
     private var allColumns: [String] {
@@ -73,7 +75,11 @@ struct JobsBoardView: View {
                 }).id(refreshing)
             } else {
                 VStack(alignment: .leading, spacing: 0) {
-                    V3PageHead(eyebrow: ["JOBS", "本周 " + weekLabel], title: "投递看板", subtitle: subtitle, subtitleHeight: 20) {
+                    // 01 · 岗位看板页头：CAREER · 本周，衬线标题，一行进度；右侧白色「已有面试安排」+ 唯一黑按钮「导入岗位」
+                    V3PageHead(eyebrow: ["CAREER", "本周"], title: "岗位看板", subtitle: subtitle, subtitleHeight: 20) {
+                        Button { open("arranged") } label: {
+                            HStack(spacing: 6) { Image(systemName: "calendar").font(.system(size: 11)); Text("已有面试安排") }
+                        }.buttonStyle(V3ButtonStyle(kind: .ghost)).help("本周 " + weekLabel)
                         Button("导入岗位") { open("import") }.buttonStyle(V3ButtonStyle(kind: .dark, width: 100))
                     }
                     statistics.padding(.top, 29)
@@ -85,7 +91,7 @@ struct JobsBoardView: View {
                         }.padding(.horizontal, 14).frame(height: 36).background(V3.orangeSoft, in: RoundedRectangle(cornerRadius: 8)).padding(.top, 14)
                     }
                     if loading {
-                        ProgressView("正在加载求职数据…").font(V3.sans(13)).frame(maxWidth: .infinity, maxHeight: .infinity)
+                        V3Loading("正在加载求职数据…").font(V3.sans(13)).frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else if let failure {
                         VStack(spacing: 16) {
                             Text(failure).font(V3.sans(13)).foregroundStyle(V3.red)
@@ -108,9 +114,27 @@ struct JobsBoardView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .task(id: account + refreshing.uuidString + (openApplication.wrappedValue ?? "")) { await load() }
-        .sheet(item: $action) { item in
-            CareerForm(action: item, applications: applications, api: session.api, completed: { action = nil; refreshing = UUID() }, close: { action = nil })
-                .frame(width: item.compact ? 480 : 880, height: item.compact ? nil : 780)
+        .centeredSheet(item: $action) { item in
+            if let app = item.application, ["stage", "advance", "advance-offer"].contains(item.kind) {
+                // 11 · 推进流程：从详情打开时按进度预选，从看板拖动 / 推进时带上目标列
+                let preset = item.kind == "stage"
+                CareerAdvanceSheet(application: app.raw, api: session.api,
+                                   initialKind: item.kind == "advance-offer" ? .offer : preset ? Self.advanceKind(item.stage) : nil,
+                                   initialWrittenType: ["written_test", "assessment", "ai_interview"].contains(item.stage) ? item.stage : "written_test",
+                                   initialInterviewLabel: preset && item.stage == "interview" ? item.label : preset && item.stage == "hr" ? "HR 面" : "",
+                                   close: { action = nil },
+                                   completed: { message in action = nil; refreshing = UUID(); if let message { notice = message } })
+            } else if item.kind == "import" {
+                // 03A · 导入岗位：固定 640×600，创建后刷新看板并打开新求职进程
+                CareerJobImportSheet(api: session.api, close: { action = nil },
+                                     installPlugin: { action = JobAction(kind: "plugin", application: nil) },
+                                     created: { id in action = nil; pendingOpen = id; refreshing = UUID() })
+            } else if item.kind == "plugin" {
+                CareerPluginSheet(api: session.api, close: { action = nil })
+            } else {
+                CareerForm(action: item, applications: applications, api: session.api, completed: { action = nil; refreshing = UUID() }, close: { action = nil })
+                    .frame(width: item.compact ? 480 : 880, height: item.compact ? nil : 780)
+            }
         }
         .onChange(of: account) { _, new in
             applications = []; sessions = []; overview = .null; logos = [:]; pendingLogos = []; query = ""; hidden = []; order = []; action = nil; selected = nil; notice = nil
@@ -138,7 +162,7 @@ struct JobsBoardView: View {
     private var pendingOffers: Int { applications.filter { $0.raw.text("current_stage_type") == "offer" && $0.raw.text("offer_status") == "received" && $0.raw.text("status") == "active" }.count }
     private var subtitle: String {
         guard !account.isEmpty, !loading else { return "登录后查看你的求职进程" }
-        return "\(weeklyInterviews) 场面试" + (pendingOffers > 0 ? " · \(pendingOffers) 个 Offer 待回复" : "")
+        return "\(activeCount) 个进行中 · \(weeklyInterviews) 场面试" + (pendingOffers > 0 ? " · \(pendingOffers) 个 Offer 待回复" : "")
     }
     private var statistics: some View {
         // Web `summarizeApplicationFunnel`：已投递为基数；进过面试 / HR / Offer 阶段算进面，到了 Offer 算拿到 Offer
@@ -407,6 +431,16 @@ struct JobsBoardView: View {
         action = JobAction(kind: "stage", application: item, stage: next.stage, label: next.label.isEmpty ? Self.roundLabel(round) : next.label)
     }
     /// `interviewRoundLabel`.
+    /// 看板目标列对应的推进进展。
+    static func advanceKind(_ stage: String) -> CareerAdvanceSheet.Kind? {
+        switch stage {
+        case "written_test", "assessment", "ai_interview": return .written
+        case "interview", "hr": return .interview
+        case "oc": return .oc
+        case "offer": return .offer
+        default: return nil
+        }
+    }
     static func roundLabel(_ round: Int) -> String { round <= 1 ? "一面" : round == 2 ? "二面" : "第 \(round) 轮" }
     private func logo(_ item: CareerApplication) -> some View {
         Group {
@@ -550,6 +584,7 @@ struct JobsBoardView: View {
             try Task.checkCancellation()
             applications = result.map { $0.includingSessions(arrangements) }; sessions = arrangements; overview = metrics
             if let target = openApplication.wrappedValue { selected = applications.first { $0.id == target }; openApplication.wrappedValue = nil }
+            if let target = pendingOpen { pendingOpen = nil; if let app = applications.first(where: { $0.id == target }) { selected = app } }
         } catch is CancellationError { return }
         catch APIError.unauthorized { session.reportAuthenticationFailure(); failure = "登录已失效，请重新登录。" }
         catch { failure = "岗位加载失败，请检查服务连接后重试。" }

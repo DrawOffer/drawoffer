@@ -17,6 +17,7 @@ extension DesktopTransport {
         if let session = upload.session {
             guard DatasetRequest.id(session), upload.replacing == nil else { throw APIError.invalidResponse }
             path = "/api/interview-sessions/" + session + "/assets"; try field("source_type","uploaded")
+            if !upload.transcribe { try field("transcribe","false") }
         } else if let replacing = upload.replacing {
             guard DatasetRequest.id(replacing), let revision = upload.revision, revision.allSatisfy({$0 >= "0" && $0 <= "9"}), !revision.isEmpty else { throw APIError.invalidResponse }
             path += "/" + replacing + "/file"; method = "PUT"; try field("confirm_replace","true")

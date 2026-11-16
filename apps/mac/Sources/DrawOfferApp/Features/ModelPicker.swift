@@ -12,20 +12,21 @@ struct ModelPicker: View {
     /// 首页地平线提示行里的样式：10px、跟随提示行颜色、不显示 ⌄。
     var inline = false
     var compact = false
+    /// 对话页（02B·05）：点触发按钮只通知外层，由外层把 `ModelPickerPanel` 浮在输入框上方（悬浮卡要露在弹层左侧，系统 popover 画不出去）。
+    var externalToggle: (() -> Void)? = nil
     let select: (String) -> Void
 
     @State private var open = false
-    @State private var hoveredID: String?
 
     private var selected: JSONValue? { models.first { $0.text("id") == selectedID } }
     private var label: String { (selected?.text("name")).flatMap { $0.isEmpty ? nil : $0 } ?? "选择模型" }
 
     var body: some View {
-        Button { hoveredID = nil; open.toggle() } label: {
+        Button { if let externalToggle { externalToggle() } else { open.toggle() } } label: {
             HStack(spacing: inline ? 4 : 5) {
                 if let selected { ModelIcon(name: selected.text("name"), size: inline ? 10 : (compact ? 13 : 15)).saturation(inline ? 0 : 1).opacity(inline ? 0.7 : 1) }
                 Text(loading ? "正在读取模型" : label).lineLimit(1).truncationMode(.tail)
-                if !compact && !inline { Image(systemName: "chevron.down").font(.system(size: 9, weight: .medium)).foregroundStyle(V3.sub) }
+                if !compact && !inline { Image(systemName: "chevron.down").font(.system(size: 8, weight: .medium)).foregroundStyle(V3.sub) }
             }
             .font(inline ? .system(size: 10) : .system(size: compact ? 11 : 12.5, weight: compact ? .medium : .regular))
             .foregroundStyle(inline ? Color(hex: 0x9B978C) : (compact ? V3.fnt : Color(hex: 0x33332F)))
@@ -33,7 +34,34 @@ struct ModelPicker: View {
         }
         .buttonStyle(.plain).disabled(loading).help(selected?.text("name") ?? "")
         .accessibilityLabel(label)
-        .popover(isPresented: $open, arrowEdge: .top) { menu }
+        .popover(isPresented: $open, arrowEdge: .top) {
+            ModelPickerPanel(models: models, selectedID: selectedID, loading: loading, disabled: disabled, hoverCard: false) { id in open = false; select(id) }
+        }
+    }
+}
+
+/// 「选择模型」弹层（02B·05 · 59:8267）：248 宽、白底细边圆角 10、阴影 18/6；悬停一行时在左侧 8px 处显示悬浮卡，底边对齐。
+/// 额度不可用的模型仍能悬停查看但不能选。
+struct ModelPickerPanel: View {
+    let models: [JSONValue]
+    let selectedID: String?
+    var loading = false
+    var disabled = false
+    /// 浮在对话页时显示左侧悬浮卡；放进系统 popover 时不显示（画不到弹层外）。
+    var hoverCard = true
+    let select: (String) -> Void
+    @State private var hoveredID: String?
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            if hoverCard {
+                Group {
+                    if let hovered = models.first(where: { $0.text("id") == hoveredID }) { ModelHoverCard(model: hovered) }
+                    else { Color.clear.frame(width: 248, height: 1) }
+                }.allowsHitTesting(false)
+            }
+            menu
+        }
     }
 
     private var menu: some View {
@@ -44,16 +72,14 @@ struct ModelPicker: View {
                 Text(loading ? "正在读取模型" : "当前没有可用模型").font(.system(size: 12)).foregroundStyle(V3.fnt).padding(.horizontal, 10).padding(.vertical, 8)
             } else {
                 ScrollView {
-                    VStack(spacing: 4) { ForEach(models, id: \.self) { row($0) } }.padding(.vertical, 2)
+                    VStack(spacing: 2) { ForEach(models, id: \.self) { row($0) } }.padding(.vertical, 2)
                 }.frame(maxHeight: 200).fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(7).frame(width: 248)
-        .overlay(alignment: .topLeading) {
-            if let hovered = models.first(where: { $0.text("id") == hoveredID }) {
-                ModelHoverCard(model: hovered).offset(x: -248 - 15).allowsHitTesting(false)
-            }
-        }
+        .background(hoverCard ? Color.white : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+        .overlay { if hoverCard { RoundedRectangle(cornerRadius: 10).stroke(Color(hex: 0xE5E7EB)) } }
+        .shadow(color: .black.opacity(hoverCard ? 0.12 : 0), radius: 9, y: 6)
         .onHover { if !$0 { hoveredID = nil } }
         .accessibilityElement(children: .contain).accessibilityLabel("选择模型")
     }
@@ -62,17 +88,16 @@ struct ModelPicker: View {
         let id = model.text("id"), active = id == selectedID, unavailable = model["available"]?.bool == false
         return Button {
             guard !unavailable else { return }
-            open = false
             select(id)
         } label: {
-            HStack(spacing: 8) {
-                ModelIcon(name: model.text("name"), size: 18)
+            HStack(spacing: 9) {
+                ModelIcon(name: model.text("name"), size: 15)
                 Text(model.text("name")).lineLimit(1).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading)
                 if unavailable { Text("当前额度不可用").font(.system(size: 11)).foregroundStyle(V3.sub) }
-                if active { Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)).foregroundStyle(V3.txt) }
+                if active { Image(systemName: "checkmark").font(.system(size: 9, weight: .semibold)).foregroundStyle(V3.txt) }
             }
             .font(.system(size: 12)).foregroundStyle(Color(hex: 0x25292F))
-            .padding(.leading, 10).padding(.trailing, 8).frame(height: 36)
+            .padding(.leading, 12).padding(.trailing, 10).frame(height: 36)
             .background(active || hoveredID == id ? Color(hex: 0xF4F5F7) : .clear, in: RoundedRectangle(cornerRadius: 7))
             .opacity(unavailable ? 0.5 : 1).contentShape(Rectangle())
         }

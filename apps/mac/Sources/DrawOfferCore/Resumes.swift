@@ -31,9 +31,9 @@ public enum ResumeRequest {
         if parts[3] == "copy" || parts[3] == "apply-template" || parts[3] == "assets" { return method == "POST" }
         if parts[3] == "share" { return ["GET", "POST", "PATCH", "DELETE"].contains(method) }
         if parts[3] == "default" { return method == "PUT" }
-        // 写作引导与段落聚焦（与后端 get_current_resume_user 白名单一致）
+        // 写作引导、段落聚焦与检查简历（与后端 get_current_resume_user 白名单一致）
         if parts[3] == "guide" { return ["GET", "PUT", "PATCH"].contains(method) }
-        if ["section-review:analyze", "section-review:rewrite"].contains(parts[3]) { return method == "POST" }
+        if ["section-review:analyze", "section-review:rewrite", "review:check"].contains(parts[3]) { return method == "POST" }
         if parts[3] == "section-reviews" { return method == "GET" }
         return false
     }
