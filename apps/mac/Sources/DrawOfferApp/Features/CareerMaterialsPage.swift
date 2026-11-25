@@ -54,17 +54,17 @@ struct CareerMaterialsPage: View {
                         top
                         HStack(alignment: .center, spacing: 16) {
                             Text([application.text("company_name_snapshot"), application.text("job_title_snapshot")].filter { !$0.isEmpty }.joined(separator: " · "))
-                                .font(V3.serif(34)).foregroundStyle(V3.txt).lineLimit(1).truncationMode(.tail)
+                                .font(V3.serif(36)).foregroundStyle(V3.txt).lineLimit(1).truncationMode(.tail).frame(height: 48)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             upload
-                        }.padding(.top, 36)
+                        }.padding(.top, 26)
                         if let message = failure ?? notice {
                             Text(message).font(V3.sans(12.5)).foregroundStyle(failure == nil ? V3.sub : V3.red).padding(.top, 10)
                         }
                         if rounds.isEmpty {
                             Text("这条投递还没有记录，记下投递后资料会按轮次放在这里。").font(V3.sans(13)).foregroundStyle(V3.fnt).padding(.top, 48)
                         }
-                        VStack(alignment: .leading, spacing: 40) {
+                        VStack(alignment: .leading, spacing: 36) {
                             ForEach(rounds) { station in group(station).id(station.id) }
                         }.padding(.top, 48)
                     }
@@ -143,8 +143,8 @@ struct CareerMaterialsPage: View {
         let count = station.kind == .apply ? applyFiles.count : assets.count
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(station.short).font(V3.sans(14, weight: .medium)).foregroundStyle(V3.txt)
-                Text("\(count)").font(V3.number(13, weight: .regular)).foregroundStyle(V3.fnt)
+                Text(station.short).font(V3.sans(15, weight: .medium)).foregroundStyle(V3.txt)
+                Text("\(count)").font(V3.number(12.5, weight: .medium)).foregroundStyle(V3.fnt)
                 if station.kind == .written, let session {
                     let questions = (detail?["session"] ?? session)["written_questions"]?.items.count ?? 0
                     if questions > 0 {
@@ -211,8 +211,8 @@ struct CareerMaterialsPage: View {
     private func tile(name: String, meta: String, preview: CareerFilePreview) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             preview.frame(width: 188, height: 112).clipShape(RoundedRectangle(cornerRadius: 10))
-            Text(name).font(V3.sans(13)).foregroundStyle(V3.txt).lineLimit(1).truncationMode(.middle).frame(height: 18).padding(.top, 10).help(name)
-            Text(meta.isEmpty ? " " : meta).font(V3.sans(11)).foregroundStyle(V3.fnt).lineLimit(1).frame(height: 14)
+            Text(name).font(V3.sans(13.5)).foregroundStyle(V3.txt).lineLimit(1).truncationMode(.middle).frame(height: 18).padding(.top, 10).help(name)
+            Text(meta.isEmpty ? " " : meta).font(V3.sans(12)).foregroundStyle(V3.fnt).lineLimit(1).frame(height: 14)
         }.frame(width: 188, alignment: .leading).contentShape(Rectangle())
     }
 
@@ -276,13 +276,12 @@ struct CareerMaterialsPage: View {
     private var tray: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(readyCount > 0 ? "\(readyCount) 个文件，放进哪一轮？" : "\(pending.count) 个文件没传上去").font(V3.sans(15, weight: .medium)).foregroundStyle(V3.txt)
-                .frame(height: 22).padding(.bottom, 14)
+                .frame(height: 18).padding(.bottom, 10)
             VStack(spacing: 0) {
                 ForEach(pending) { item in trayRow(item).overlay(alignment: .top) { Rectangle().fill(V3.cl).frame(height: 1) } }
             }
             Text("一轮只整理一次面试记录，之后再传的文件只保存。").font(V3.sans(12)).foregroundStyle(PD.mute)
-                .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 12)
-                .overlay(alignment: .top) { Rectangle().fill(V3.cl).frame(height: 1).offset(y: 0) }
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
             HStack(spacing: 20) {
                 Spacer()
                 CareerJourneyTextButton(title: "取消", color: PD.body) { pending = [] }.disabled(processing)
@@ -290,10 +289,10 @@ struct CareerMaterialsPage: View {
                     Button(processing ? "正在处理…" : "开始处理") { Task { await process() } }
                         .buttonStyle(V3ButtonStyle(kind: .dark, height: 32, width: 94)).disabled(processing).keyboardShortcut(.defaultAction)
                 }
-            }.padding(.top, 18)
+            }.padding(.top, 14)
         }
-        .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 20)
-        .frame(width: 658)
+        .padding(.horizontal, 24).padding(.top, 21).padding(.bottom, 21)
+        .frame(width: 660)
         .background(.white, in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.black.opacity(0.08)))
         .shadow(color: .black.opacity(0.10), radius: 24, y: 10)
@@ -328,7 +327,7 @@ struct CareerMaterialsPage: View {
                 Image(systemName: "xmark").font(.system(size: 11)).foregroundStyle(PD.mute).frame(width: 22, height: 22).contentShape(Rectangle())
             }.buttonStyle(.plain).disabled(processing).accessibilityLabel("移除 \(item.name)")
         }
-        .padding(.vertical, 12)
+        .frame(height: 58)
         .disabled(processing)
     }
 
@@ -465,30 +464,38 @@ struct CareerFilePreview: View {
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            Color(hex: 0xF2F2EE)
+            Color(hex: 0xF4F4F1)
             switch kind {
-            case .audio(let seed):
-                wave(seed).frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .audio:
+                wave.frame(maxWidth: .infinity, maxHeight: .infinity)
                 if !label.isEmpty {
-                    Text(label).font(V3.number(11, weight: .medium)).foregroundStyle(V3.sub)
-                        .frame(maxWidth: .infinity, alignment: .trailing).padding(.trailing, 12).padding(.bottom, 9)
+                    Text(label).font(V3.number(11, weight: .medium)).foregroundStyle(Color(hex: 0x6C6C65))
+                        .frame(maxWidth: .infinity, alignment: .trailing).padding(.trailing, 8).padding(.bottom, 10)
                 }
             case .document:
-                page { VStack(alignment: .leading, spacing: 6) {
-                    Capsule().fill(Color(hex: 0xA9A9A3)).frame(width: 38, height: 4).padding(.bottom, 2)
-                    ForEach(0..<9, id: \.self) { index in Capsule().fill(Color(hex: 0xDCDCD6)).frame(width: index % 4 == 3 ? 40 : 72, height: 2.5) }
-                }.padding(.horizontal, 12).padding(.top, 12) }
+                // 96×124 的白纸，左右居中、顶端离缩略图 18，下半截被裁掉；标题条 52×5，下面 3 高的灰行每 8 一行。
+                page(width: 96, top: 18) {
+                    ZStack(alignment: .topLeading) {
+                        RoundedRectangle(cornerRadius: 1.5).fill(Color(hex: 0x1D1D1B).opacity(0.45)).frame(width: 52, height: 5).offset(x: 12, y: 12)
+                        ForEach(0..<9, id: \.self) { index in
+                            RoundedRectangle(cornerRadius: 1.5).fill(Color(hex: 0xDEDED9)).frame(width: index % 4 == 3 ? 40 : 72, height: 3).offset(x: 12, y: CGFloat(24 + index * 8))
+                        }
+                    }
+                }
                 ext
             case .image:
-                page(width: 132) { VStack(alignment: .leading, spacing: 6) {
-                    Rectangle().fill(Color(hex: 0xE0E0DA)).frame(height: 13)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Capsule().fill(Color(hex: 0xDCDCD6)).frame(width: 70, height: 2.5)
-                        Capsule().fill(Color(hex: 0xDCDCD6)).frame(width: 100, height: 2.5)
-                        Capsule().fill(Color(hex: 0xDCDCD6)).frame(width: 84, height: 2.5)
-                        HStack(spacing: 6) { ForEach(0..<2, id: \.self) { _ in RoundedRectangle(cornerRadius: 2).fill(Color(hex: 0xE0E0DA)).frame(width: 40, height: 14) } }.padding(.top, 6)
-                    }.padding(.horizontal, 10)
-                } }
+                // 132×92 的页面截图：14 高标题条 + 三行文字 + 两个 40×16 的按钮。
+                page(width: 132, top: 20) {
+                    ZStack(alignment: .topLeading) {
+                        Rectangle().fill(Color(hex: 0xDEDED9)).frame(width: 132, height: 14)
+                        ForEach(Array([70, 100, 88].enumerated()), id: \.offset) { index, w in
+                            RoundedRectangle(cornerRadius: 1.5).fill(Color(hex: 0xDEDED9)).frame(width: CGFloat(w), height: 4).offset(x: 10, y: CGFloat(24 + index * 10))
+                        }
+                        ForEach(0..<2, id: \.self) { index in
+                            RoundedRectangle(cornerRadius: 3).fill(Color(hex: 0xE4E4E0)).frame(width: 40, height: 16).offset(x: CGFloat(10 + index * 46), y: 58)
+                        }
+                    }
+                }
                 ext
             }
         }
@@ -496,23 +503,18 @@ struct CareerFilePreview: View {
     }
 
     private var ext: some View {
-        Text(label).font(V3.sans(9.5, weight: .medium)).foregroundStyle(V3.fnt).padding(.leading, 12).padding(.bottom, 10)
+        Text(label).font(V3.sans(10, weight: .medium)).foregroundStyle(V3.fnt).padding(.leading, 12).padding(.bottom, 10)
     }
 
-    private func page<Content: View>(width: CGFloat = 96, @ViewBuilder _ content: () -> Content) -> some View {
-        content().frame(width: width, height: 94, alignment: .topLeading).background(.white)
+    private func page<Content: View>(width: CGFloat, top: CGFloat, @ViewBuilder _ content: () -> Content) -> some View {
+        content().frame(width: width, height: 112 - top, alignment: .topLeading).background(.white, in: RoundedRectangle(cornerRadius: width > 100 ? 4 : 3))
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
     }
 
-    /// 按文件 ID 生成稳定的装饰波形，不代表真实音量。
-    private func wave(_ seed: String) -> some View {
-        var value = seed.unicodeScalars.reduce(17) { $0 + Int($1.value) }
-        let bars: [CGFloat] = (0..<26).map { index in
-            value = (value * 9301 + 49297) % 233280
-            let envelope = 0.45 + 0.55 * sin(Double(index) / 26 * .pi)
-            return CGFloat((10 + envelope * Double(value) / 233280 * 36).rounded())
-        }
-        return HStack(spacing: 4) { ForEach(Array(bars.enumerated()), id: \.offset) { Capsule().fill(Color(hex: 0xB3B3AD)).frame(width: 2.5, height: $0.element) } }
+    /// Figma 07.01 的波形：25 根 3 宽、间距 3.2、半透明墨色的圆角条，高度固定（装饰，不代表真实音量）。
+    private var wave: some View {
+        let heights: [CGFloat] = [10, 18, 30, 22, 40, 26, 14, 34, 46, 30, 20, 38, 28, 16, 24, 36, 22, 12, 28, 18, 10, 20, 32, 24, 14]
+        return HStack(spacing: 3.2) { ForEach(Array(heights.enumerated()), id: \.offset) { RoundedRectangle(cornerRadius: 1.5).fill(Color(hex: 0x1D1D1B).opacity(0.28)).frame(width: 3, height: $0.element) } }
     }
 }
 

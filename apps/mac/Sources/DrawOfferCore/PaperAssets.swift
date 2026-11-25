@@ -14,6 +14,8 @@ struct DesktopImage: Sendable {
 extension PaperAssets {
     /// 随包的模板示例头像（`/templates/avatar-*.png|svg|jpg`）。
     public static func isBundledTemplate(_ path: String) -> Bool { bundled.contains(path) }
+    /// 模板样式引用的装饰底图（山峦、竹叶、村落、湖面），随包放在 templates 目录，只供纸面读取。
+    public static func isTemplateStyleImage(_ path: String) -> Bool { styleImages.contains(path) }
 }
 
 // No global/disk cache. These bytes live only in the current prepared request.
@@ -21,7 +23,8 @@ public enum PaperAssets {
     static let maximumBytes = 10 * 1024 * 1024
     static let maximumImages = 32
     static let placeholder = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGM4c+bMfwAIMANkhLK+mwAAAABJRU5ErkJggg=="
-    static let bundled = Set(["avatar-administrative.png", "avatar-administrative.svg", "avatar-campus.png", "avatar-campus.svg", "avatar-cat.jpg", "avatar-civic.png", "avatar-civic.svg", "avatar-creative.png", "avatar-creative.svg"].map { "/templates/" + $0 })
+    static let styleImages = Set(["masthead-mountains.png", "bamboo-leaves.png", "deco-village.png", "deco-lake.png"].map { "/templates/" + $0 })
+    static let bundled = Set(["avatar-administrative.png", "avatar-administrative.svg", "avatar-campus.png", "avatar-campus.svg", "avatar-cat.jpg", "avatar-civic.png", "avatar-civic.svg", "avatar-creative.png", "avatar-creative.svg", "sample-photo-female.jpg", "sample-photo-male.jpg"].map { "/templates/" + $0 })
 
     static func sources(_ value: JSONValue) -> Set<String> {
         switch value {
@@ -82,6 +85,7 @@ public enum PaperAssets {
             catch APIError.unauthorized { throw APIError.unauthorized }
             catch { assets[source] = placeholder; failures += 1 }
         }
-        return PaperPreparation(request: ResumeRenderRequest(title: request.title, data: request.data, style: request.style, layoutPlan: request.layoutPlan, assets: assets), missingImageCount: failures)
+        let prepared = ResumeRenderRequest(title: request.title, data: request.data, style: request.style, layoutPlan: request.layoutPlan, assets: assets)
+        return PaperPreparation(request: request.firstPageOnly ? prepared.firstPage() : prepared, missingImageCount: failures)
     }
 }

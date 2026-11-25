@@ -64,12 +64,16 @@ struct MockSessionV2: View {
         } catch { if !Task.isCancelled { failed = MockInterviewText.error(error) } }
     }
 
-    /// 准备题目与生成评估由后台任务完成，页面没有推送，2.5 秒轮询一次到状态变化。
+    /// 准备题目与生成评估由后台任务完成，页面没有推送：2.5 秒起逐步放慢到 10 秒查一次，直到状态变化。
     private func poll() async {
+        var attempt = 0
         while !Task.isCancelled, ["preparing", "evaluating"].contains(detail?.text("status") ?? "") {
-            try? await Task.sleep(for: .milliseconds(2500))
-            if Task.isCancelled { return }
-            if !paused { await load() }
+            guard await Polling.wait(attempt, first: 2.5, cap: 10, topic: "mock_interview", ref: id) else { return }
+            attempt += 1
+            if !paused {
+                await load()
+                if !["preparing", "evaluating"].contains(detail?.text("status") ?? "") { await session.api.purgeCache() }
+            }
         }
     }
 }
@@ -167,13 +171,13 @@ struct MockPrepStage: View {
                 if failed {
                     Button(busy ? "正在重新准备…" : "重新准备") { run { _ = try await command("retry") } }.buttonStyle(MockPillStyle()).disabled(busy)
                 } else if detail.text("answer_mode") == "voice", let onCheckDevice {
-                    Button("先试一下麦克风", action: onCheckDevice).buttonStyle(MockPillStyle(kind: .ghost))
+                    Button("先试一下麦克风", action: onCheckDevice).buttonStyle(MockBorderedPillStyle())
                 }
             }
         }
         .overlay { MockNoticeToast(notice: $notice) }
         .mockDialog($dialog, "back") {
-            MockConfirmCard(title: "返回修改设置？", desc: "题目还在准备，返回后这场记为已放弃，不扣积分。", confirm: "返回改设置", cancel: "继续准备",
+            MockSessionConfirm(title: "返回修改设置？", desc: "题目还在准备，返回后这场记为已放弃，不扣积分。", confirm: "返回改设置", cancel: "继续准备",
                             busy: busy, busyLabel: "正在返回…", onConfirm: backToSettings, onCancel: { dialog = nil })
         }
         .onChange(of: step) { lineStart = Date() }
@@ -252,6 +256,9 @@ struct MockClosingStage: View {
     let open: (String) -> Void
     @State private var busy = false
     @State private var notice: MockNotice?
+    @Environment(WorkspaceRouter.self) private var router: WorkspaceRouter?
+    /// K2（Figma 02A · 61:3079）：这是第一场——报告会出现在首页，结束页就把人带回首页（Web `readMockProgress().first`）
+    @State private var firstMock = false
 
     private static let statX: [CGFloat] = [380, 684, 988]
 
@@ -281,23 +288,33 @@ struct MockClosingStage: View {
                 MockSessionHead(detail: detail)
                 MockCenterLine(text: "用时 \(MockSession.mmss(finished.timeIntervalSince(started)))", top: 216)
                 MockCenterLine(text: "面试结束，辛苦了", top: 244, size: 46, line: 64, color: MockPalette.ink, serif: true)
-                MockCenterLine(text: "面试官在把笔记整理成评估报告，约 1 分钟。", top: 318, size: 15, line: 26, color: MockPalette.sub)
+                MockCenterLine(text: firstMock ? "面试官在整理你的第一份报告，约 1 分钟。" : "面试官在把笔记整理成评估报告，约 1 分钟。", top: 318, size: 15, line: 26, color: MockPalette.sub)
                 MockLiveVoiceprint(tone: .rest).offset(x: 234, y: 370)
                 ForEach(Array([(mains, "主问题"), (follows, "次追问"), (points, "条要点")].enumerated()), id: \.offset) { index, item in
                     HStack(alignment: .firstTextBaseline, spacing: 3) {
                         Text(verbatim: "\(item.0)").font(V3.serif(28)).foregroundStyle(MockPalette.ink)
                         Text(verbatim: item.1).font(V3.sans(13)).foregroundStyle(MockPalette.fnt)
                     }
-                    .frame(width: 200, height: 38).offset(x: Self.statX[index] - 100, y: 484)
+                    .frame(width: 200, height: 38).offset(x: Self.statX[index] - 100, y: 488)
                 }
                 MockSessionFoot(goal: nil) {
-                    Text("报告好了会出现在模拟面试首页。").font(V3.sans(13)).foregroundStyle(MockPalette.fnt)
+                    Text(firstMock ? "报告好了会出现在首页。" : "报告好了会出现在模拟面试首页。").font(V3.sans(13)).foregroundStyle(MockPalette.fnt)
                 } right: {
-                    Button("先去忙，好了提醒我", action: home).buttonStyle(MockPillStyle())
+                    Button("先去忙，好了提醒我") { if firstMock, let router { router.jump(.section(.home)) } else { home() } }.buttonStyle(MockPillStyle())
                 }
             }
         }
         .overlay { MockNoticeToast(notice: $notice) }
+        .task(id: detail.display("id") + detail.text("status")) { await readFirst() }
+    }
+
+    /// 已经完成或正在出报告的场次只有这一场（不含放弃和准备失败的）。
+    private func readFirst() async {
+        guard detail.text("status") == "evaluating",
+              let list = try? await session.api.careerRequest(path: "/api/mock-interviews", method: "GET", query: ["limit": "100"], body: nil) else { return }
+        let counted: Set<String> = ["in_progress", "evaluating", "evaluation_failed", "completed"]
+        let items = (list["items"]?.items ?? []).filter { counted.contains($0.text("status")) }
+        if !Task.isCancelled { firstMock = items.count == 1 && items[0].display("id") == detail.display("id") }
     }
 
     private func command(_ name: String) async throws -> JSONValue {
@@ -363,7 +380,7 @@ struct MockTextSession: View {
                 MockSessionHead(detail: detail, timer: MockSessionText.elapsed(detail, now: timeline.date)) {
                     Button("跳过此题") { dialog = "skip" }.buttonStyle(MockLinkStyle()).disabled(locked)
                     Button("放弃") { dialog = "abandon" }.buttonStyle(MockLinkStyle()).disabled(busy != nil || phase == .closing)
-                    Button("结束并评估") { dialog = "finish" }.buttonStyle(MockPillStyle(kind: .ghost)).disabled(busy != nil || phase == .closing || phase == .sent)
+                    Button("结束并评估") { dialog = "finish" }.buttonStyle(MockBorderedPillStyle()).disabled(busy != nil || phase == .closing || phase == .sent)
                 }
                 if phase == .sent {
                     thinking(shownQuestion)
@@ -414,14 +431,14 @@ struct MockTextSession: View {
         }
     }
 
-    /// 无框写字区（左 234、顶 404、903 × 300）：语音输入时说的话接在后面，还没确认的字浅灰。
+    /// 无框写字区（左 234、顶 404、900 × 300）：语音输入时说的话接在后面，还没确认的字浅灰。
     @ViewBuilder private var writeArea: some View {
         if listening {
             ScrollView {
                 (Text(verbatim: draft).foregroundColor(MockPalette.ink) + Text(verbatim: voiceInput.partial).foregroundColor(MockPalette.faint))
                     .font(V3.sans(17)).lineHeight(17, 30).frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            .defaultScrollAnchor(.bottom).frame(width: 903, height: 300).offset(x: 234, y: 404)
+            .defaultScrollAnchor(.bottom).frame(width: 900, height: 300).offset(x: 234, y: 404)
         } else {
             ZStack(alignment: .topLeading) {
                 TextEditor(text: $draft)
@@ -436,7 +453,7 @@ struct MockTextSession: View {
                     Text("写下你的回答").font(V3.sans(17)).foregroundStyle(MockPalette.faint).padding(.leading, 5).allowsHitTesting(false)
                 }
             }
-            .frame(width: 903, height: 300).offset(x: 234, y: 404)
+            .frame(width: 900, height: 300).offset(x: 234, y: 404)
         }
     }
 
@@ -558,22 +575,22 @@ struct MockSessionDialogs: ViewModifier {
     func body(content: Content) -> some View {
         content
             .mockDialog($dialog, "skip") {
-                MockConfirmCard(title: "跳过这道题？", desc: "跳过的部分记为没答，面试官会换下一个考点；前面已经答的照常评分。", confirm: "跳过此题", cancel: "继续作答",
+                MockSessionConfirm(title: "跳过这道题？", desc: "跳过的部分记为没答，面试官会换下一个考点；前面已经答的照常评分。", confirm: "跳过此题", cancel: "继续作答",
                                 busy: busy == "skip", busyLabel: "正在跳过…", onConfirm: skip, onCancel: { dialog = nil })
             }
             .mockDialog($dialog, "finish") {
                 if MockSession.hasAnswered(detail) {
-                    MockConfirmCard(title: "结束并生成评估？", desc: "已作答的题目会进入评估，后面没问到的题不扣分。", confirm: "结束并评估", cancel: "继续面试",
+                    MockSessionConfirm(title: "结束并生成评估？", desc: "已作答的题目会进入评估，后面没问到的题不扣分。", confirm: "结束并评估", cancel: "继续面试",
                                     busy: busy == "finish", busyLabel: "正在结束…", onConfirm: { end("finish") }, onCancel: { dialog = nil }) {
                         MockFinishStats(detail: detail, elapsed: MockSessionText.elapsed(detail))
                     }
                 } else {
-                    MockConfirmCard(title: "结束这场面试？", desc: "你还没有回答任何考点，结束后这场记为已放弃，不生成报告。", confirm: "结束这场", cancel: "继续面试",
+                    MockSessionConfirm(title: "结束这场面试？", desc: "你还没有回答任何考点，结束后这场记为已放弃，不生成报告。", confirm: "结束这场", cancel: "继续面试",
                                     busy: busy == "finish", busyLabel: "正在结束…", onConfirm: { end("finish") }, onCancel: { dialog = nil })
                 }
             }
             .mockDialog($dialog, "abandon") {
-                MockConfirmCard(title: "放弃这场面试？", desc: voice ? "已作答的内容不会生成评估报告，录音会删除。放弃后可以重新开始一场。" : "已作答的内容不会生成评估报告。放弃后可以重新开始一场。",
+                MockSessionConfirm(title: "放弃这场面试？", desc: voice ? "已作答的内容不会生成评估报告，录音会删除。放弃后可以重新开始一场。" : "已作答的内容不会生成评估报告。放弃后可以重新开始一场。",
                                 confirm: "放弃面试", cancel: "继续面试", busy: busy == "abandon", busyLabel: "正在放弃…", onConfirm: { end("abandon") }, onCancel: { dialog = nil })
             }
     }

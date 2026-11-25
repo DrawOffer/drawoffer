@@ -35,7 +35,7 @@ struct MockQuestionDetail<Crumb: View>: View {
                     }.frame(height: 40)
                     if question.weak { Button("练这一处") { practice(question) }.buttonStyle(MockPillStyle(height: 40, padding: 20)) }
                 }
-                Text(verbatim: question.title).font(V3.serif(28)).foregroundStyle(RRC.ink).lineHeight(28, 36).padding(.top, 6)
+                Text(verbatim: question.title).font(V3.serif(28)).foregroundStyle(RRC.ink).lineHeight(28, 36, .serif).padding(.top, 6)
                 Text(verbatim: meta).font(V3.sans(14)).foregroundStyle(RRC.text).frame(height: 22).padding(.top, 4)
                 Text(verbatim: MockRV.depthSentence(question)).font(V3.sans(13, weight: .medium)).foregroundStyle(RRC.ink).frame(height: 20).padding(.top, 22)
                 depth(level)
@@ -65,7 +65,7 @@ struct MockQuestionDetail<Crumb: View>: View {
                         }.frame(width: cell)
                     }
                 }
-                Rectangle().fill(RRC.ink).frame(width: 2, height: 13).offset(x: (cell + 8) * CGFloat(max(1, min(5, question.expected))) - 13, y: -4)
+                Rectangle().fill(RRC.ink).frame(width: 2, height: 13).offset(x: (cell + 8) * CGFloat(max(1, min(5, question.expected))) - 5, y: -4)
             }
         }
         .frame(height: 30).padding(.top, 10).padding(.bottom, 16)
@@ -110,7 +110,7 @@ struct MockQuestionDetail<Crumb: View>: View {
                             Spacer(minLength: 0)
                             Text(verbatim: ["hit": "说到了", "partial": "说了一半", "miss": "没说到"][signal.state] ?? "").font(V3.sans(12, weight: signal.state == "miss" ? .medium : .regular))
                                 .foregroundStyle(signal.state == "miss" ? RRC.orange : RRC.sub).fixedSize()
-                        }.font(V3.sans(13)).padding(.bottom, 10)
+                        }.font(V3.sans(13)).frame(height: 22).padding(.bottom, 10)
                     }
                 }
             }
@@ -162,11 +162,36 @@ struct MockJudgeDialog: View {
         let aiText: String? = ai.flatMap { $0 <= 0 ? "没到「了解」" : question.layered ? "「\(MockRV.levelLabel($0))」" : nil }
         MockConfirmCard(title: "这题判得不对？", desc: "选你觉得答到的那一层，这题会按你的判断显示。", confirm: "按这个算", busy: busy,
                         onConfirm: { save(shown == ai ? nil : shown) }, onCancel: close) {
-            VStack(alignment: .leading, spacing: 10) {
-                MockSeg(label: "答到的层", options: options, current: shown) { picked = $0 }
+            VStack(alignment: .leading, spacing: 12) {
+                MockJudgeSeg(options: options.map { ($0.value, $0.title) }, current: shown) { picked = $0 }
                 if let aiText { Text(verbatim: "AI 判的是\(aiText)").font(V3.sans(12)).foregroundStyle(MockPalette.fnt) }
-            }.padding(.top, 16)
+            }.padding(.top, 22).padding(.bottom, -18)
         }
+    }
+}
+
+/// 判得不对里选层的分段（Figma 09 · 10.06）：404 × 40 的浅灰底，每格等宽，选中的是 33 高的白底小圆角。
+private struct MockJudgeSeg: View {
+    let options: [(Int, String)]
+    let current: Int
+    let pick: (Int) -> Void
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(options, id: \.0) { value, title in
+                let on = value == current
+                Button { pick(value) } label: {
+                    Text(verbatim: title).font(V3.sans(13, weight: on ? .medium : .regular)).foregroundStyle(on ? RRC.ink : RRC.sub)
+                        .frame(maxWidth: .infinity).frame(height: 33)
+                        .background {
+                            if on { RoundedRectangle(cornerRadius: 5).fill(.white).shadow(color: .black.opacity(0.12), radius: 1, y: 1).shadow(color: .black.opacity(0.06), radius: 0.5) }
+                        }
+                        .contentShape(Rectangle())
+                }.buttonStyle(.plain).accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .padding(.horizontal, 5.5).padding(.vertical, 3.5).frame(height: 40)
+        .background(Color.black.opacity(0.05), in: RoundedRectangle(cornerRadius: 7))
+        .accessibilityElement(children: .contain).accessibilityLabel("答到的层")
     }
 }
 
@@ -189,14 +214,14 @@ struct MockEditDialog: View {
                         VStack(alignment: .leading, spacing: 6) {
                             if turns.count > 1 { Text(verbatim: turn.ask).font(V3.sans(12)).foregroundStyle(MockPalette.fnt) }
                             TextEditor(text: Binding(get: { drafts[turn.id] ?? turn.answer ?? "" }, set: { drafts[turn.id] = $0 }))
-                                .font(V3.sans(14)).lineSpacing(24 - 14 * 1.2).scrollContentBackground(.hidden).padding(.horizontal, 12).padding(.vertical, 10)
-                                .frame(minHeight: 148).background(MockPalette.chip, in: RoundedRectangle(cornerRadius: 8))
+                                .font(V3.sans(14)).lineSpacing(24 - 14 * 1.2).foregroundStyle(RRC.ink).scrollContentBackground(.hidden).padding(.horizontal, 9).padding(.vertical, 10)
+                                .frame(minHeight: 150).background(MockPalette.chip, in: RoundedRectangle(cornerRadius: 10))
                                 .accessibilityLabel("修改识别稿")
                         }
                     }
                 }
             }
-            .frame(maxHeight: 360).padding(.top, 16)
+            .frame(maxHeight: 360).padding(.top, 22).padding(.bottom, -9)
         }
         .onAppear { drafts = Dictionary(uniqueKeysWithValues: turns.map { ($0.id, $0.answer ?? "") }) }
     }

@@ -52,6 +52,7 @@ enum MockRV {
         var title: String
         var meta: String
         var recordTitle: String
+        var recordMeta = ""
         var score: Int?
         var conclusion: String
         var compare: String
@@ -186,7 +187,9 @@ enum MockRV {
         let metrics = report["voice_metrics"].flatMap { $0 == .null ? nil : $0 }
         return View(
             title: title, meta: meta,
-            recordTitle: "\(stage)问了 \(rounds.count) 道题。" + (stats.minutes.map { " \($0) 分钟" } ?? ""),
+            recordTitle: "\(stage)的面试记录",
+            recordMeta: [role, "模拟", type, "\(rounds.count) 题", follows > 0 ? "追问 \(follows) 次" : nil, stats.minutes.map { "\($0) 分钟" }, monthDay(date)]
+                .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "),
             score: score,
             conclusion: verdict.flatMap { verdictName[$0] } ?? report.text("headline"),
             compare: compareLine(score, context?["previous"]?["score"]?.numberValue.map { Int($0.rounded()) }, questions),

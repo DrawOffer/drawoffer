@@ -35,13 +35,3 @@ struct PDButtonStyle: ButtonStyle {
             .contentShape(Capsule())
     }
 }
-
-/// `.pd-mini-btn`：缩略图虚线框里的小按钮。
-struct PDMiniButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(V3.sans(14)).foregroundStyle(PD.ink)
-            .padding(.horizontal, 12).frame(minHeight: 28)
-            .background(configuration.isPressed ? V3.field : .white, in: RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(.black.opacity(0.1)))
-    }
-}

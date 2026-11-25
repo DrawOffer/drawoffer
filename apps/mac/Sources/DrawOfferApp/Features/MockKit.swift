@@ -83,18 +83,21 @@ struct MockSeg<Value: Hashable>: View {
     let options: [(value: Value, title: String, disabled: Bool)]
     let current: Value
     var disabled = false
+    /// 弹窗里的胶囊分段（Figma 02.05：浅灰胶囊底、选中白胶囊带细描边）
+    var pill = false
     let pick: (Value) -> Void
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: pill ? 0 : 2) {
             ForEach(options, id: \.value) { option in
                 let on = option.value == current
                 let off = disabled || option.disabled
                 Button { pick(option.value) } label: {
-                    Text(verbatim: option.title).font(V3.sans(12.5, weight: on ? .medium : .regular))
+                    Text(verbatim: option.title).font(V3.sans(pill ? 13 : 12.5, weight: on ? .medium : .regular))
                         .foregroundStyle(off ? MockPalette.faint : on ? MockPalette.ink : MockPalette.sub)
-                        .frame(minWidth: 38).padding(.horizontal, 9).frame(height: 24)
+                        .frame(minWidth: pill ? 26 : 38).padding(.horizontal, pill ? 12.5 : 9).frame(height: pill ? 25 : 24)
                         .background {
-                            if on { RoundedRectangle(cornerRadius: 5).fill(.white).shadow(color: .black.opacity(0.12), radius: 0.5, y: 0.5).shadow(color: .black.opacity(0.06), radius: 2, y: 1) }
+                            if on && pill { Capsule().fill(.white).overlay(Capsule().strokeBorder(MockPalette.cl)) }
+                            else if on { RoundedRectangle(cornerRadius: 5).fill(.white).shadow(color: .black.opacity(0.12), radius: 0.5, y: 0.5).shadow(color: .black.opacity(0.06), radius: 2, y: 1) }
                         }
                         .contentShape(Rectangle())
                 }
@@ -102,7 +105,8 @@ struct MockSeg<Value: Hashable>: View {
                 .accessibilityAddTraits(on ? .isSelected : [])
             }
         }
-        .padding(2).background(Color.black.opacity(0.055), in: RoundedRectangle(cornerRadius: 7))
+        .padding(pill ? 2.5 : 2)
+        .background(pill ? MockPalette.hover : Color.black.opacity(0.055), in: RoundedRectangle(cornerRadius: pill ? 15 : 7))
         .fixedSize()
         .accessibilityElement(children: .contain).accessibilityLabel(label)
     }
@@ -125,15 +129,15 @@ struct MockConfirmCard<Extra: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             Text(verbatim: title).font(V3.sans(17, weight: .medium)).foregroundStyle(MockPalette.ink).frame(height: 24, alignment: .leading)
             Text(verbatim: desc).font(V3.sans(14)).foregroundStyle(MockPalette.sub).lineHeight(14, 22)
-                .fixedSize(horizontal: false, vertical: true).padding(.top, 10)
+                .fixedSize(horizontal: false, vertical: true).padding(.top, 12)
             extra()
             HStack(spacing: 10) {
                 Spacer(minLength: 0)
-                Button(cancel, action: onCancel).buttonStyle(MockPillStyle(kind: .ghost, height: 36, padding: 20)).disabled(busy).keyboardShortcut(.cancelAction)
-                Button(busy ? busyLabel ?? confirm : confirm, action: onConfirm).buttonStyle(MockPillStyle(height: 36, padding: 24)).disabled(busy)
-            }.padding(.top, 24)
+                Button(cancel, action: onCancel).buttonStyle(MockPillStyle(kind: .ghost, height: 32, padding: 23, size: 12)).disabled(busy).keyboardShortcut(.cancelAction)
+                Button(busy ? busyLabel ?? confirm : confirm, action: onConfirm).buttonStyle(MockPillStyle(height: 38, padding: 24)).disabled(busy)
+            }.padding(.top, 30)
         }
-        .padding(.horizontal, 33).padding(.top, 29).padding(.bottom, 28)
+        .padding(.horizontal, 33).padding(.top, 30).padding(.bottom, 23)
         .frame(width: 460, alignment: .leading)
     }
 }
@@ -149,26 +153,31 @@ struct MockFormCard<Content: View, Left: View, Foot: View>: View {
     let title: String
     var sub: String? = nil
     var serif = false
+    var subColor = MockPalette.fnt
     var width: CGFloat = 462
     let close: () -> Void
+    /// false：按钮行上面没有分隔线，按钮行按自身高度（Figma 02.02 / 02.05 的弹窗）
+    var footLine = true
+    var footTop: CGFloat = 20
+    var footBottom: CGFloat = 0
     @ViewBuilder var content: () -> Content
     @ViewBuilder var left: () -> Left
     @ViewBuilder var foot: () -> Foot
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(verbatim: title).font(serif ? V3.serif(20) : V3.sans(17, weight: .medium)).foregroundStyle(MockPalette.ink).frame(height: serif ? 28 : 24, alignment: .leading)
-            if let sub { Text(verbatim: sub).font(V3.sans(13)).foregroundStyle(MockPalette.fnt).frame(height: 20, alignment: .leading).padding(.top, 6) }
+            if let sub { Text(verbatim: sub).font(V3.sans(13)).foregroundStyle(subColor).frame(height: 20, alignment: .leading).padding(.top, 6) }
             content()
             HStack(spacing: 10) {
                 left()
                 Spacer(minLength: 0)
                 foot()
             }
-            .frame(maxWidth: .infinity).frame(height: 72)
-            .overlay(alignment: .top) { Rectangle().fill(MockPalette.line).frame(height: 1).padding(.horizontal, -33) }
-            .padding(.top, 20)
+            .frame(maxWidth: .infinity).frame(height: footLine ? 72 : 38)
+            .overlay(alignment: .top) { if footLine { Rectangle().fill(MockPalette.line).frame(height: 1).padding(.horizontal, -33) } }
+            .padding(.top, footTop)
         }
-        .padding(.horizontal, 33).padding(.top, 29)
+        .padding(.horizontal, 33).padding(.top, 29).padding(.bottom, footBottom)
         .frame(width: width, alignment: .leading)
         .background { Button("", action: close).keyboardShortcut(.cancelAction).opacity(0).accessibilityHidden(true) }
     }
@@ -183,33 +192,25 @@ struct MockNotice: Equatable {
     var message: String? = nil
 }
 
-/// 页面右上角的提示条（Web `Toast`）：4 秒后自动收起。
+/// 模拟面试各页的提示条：与其他页面一样走第 16 页「顶部提示栏统一」的 `NoticeToast`（Web `Toast`），居中浮在页面顶部 20pt。
+/// 页面仍持有 `MockNotice`，这里换算成 `NoticeToastItem`：出错 = 没做成，成功 = 完成，已提交 = 交给后台。
 struct MockNoticeToast: View {
     @Binding var notice: MockNotice?
+    @State private var item: NoticeToastItem?
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            if let notice {
-                HStack(alignment: .top, spacing: 10) {
-                    Circle().fill(notice.kind == .error ? MockPalette.orange : notice.kind == .success ? V3.green : MockPalette.blue).frame(width: 7, height: 7).padding(.top, 6)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(verbatim: notice.title).font(V3.sans(13, weight: .medium)).foregroundStyle(MockPalette.ink)
-                        if let message = notice.message { Text(verbatim: message).font(V3.sans(12.5)).foregroundStyle(MockPalette.fnt).fixedSize(horizontal: false, vertical: true) }
-                    }
-                    Button { self.notice = nil } label: { Image(systemName: "xmark").font(.system(size: 10, weight: .medium)).foregroundStyle(MockPalette.mute) }
-                        .buttonStyle(.plain).accessibilityLabel("关闭提示")
-                }
-                .padding(.horizontal, 14).padding(.vertical, 11).frame(maxWidth: 340, alignment: .leading)
-                .background(.white, in: RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.black.opacity(0.08)))
-                .shadow(color: .black.opacity(0.1), radius: 14, y: 6)
-                .padding(.top, 16).padding(.trailing, 20)
-                .transition(.opacity.combined(with: .move(edge: .top)))
-                .task(id: notice) { try? await Task.sleep(for: .seconds(4)); if !Task.isCancelled { withAnimation { self.notice = nil } } }
-            }
+        NoticeToast(item: $item).padding(.top, 20)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .allowsHitTesting(item != nil)
+            .onAppear { item = notice.map(Self.item) }
+            .onChange(of: notice) { _, next in item = next.map(Self.item) }
+            .onChange(of: item) { _, next in if next == nil, notice != nil { notice = nil } }
+    }
+    private static func item(_ notice: MockNotice) -> NoticeToastItem {
+        switch notice.kind {
+        case .error: return .failed(notice.title, notice.message)
+        case .success: return .done(notice.title, notice.message)
+        case .queued: return .queued(notice.title, notice.message)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-        .animation(.easeOut(duration: 0.2), value: notice)
-        .allowsHitTesting(notice != nil)
     }
 }
 
@@ -238,58 +239,6 @@ private enum Wave {
     static let ghost: [Double] = [6, 23, 11, 10, 22, 19, 16, 28, 31, 26, 32, 31, 38, 18, 22, 32, 30, 10, 26, 18, 27, 23, 8, 15, 23, 19, 19, 19, 28, 31, 19, 19, 36, 21, 15, 20, 24, 19, 39, 25, 28, 30, 8, 12, 17, 15, 13, 9, 23, 7, 15, 15, 25, 31, 19, 10, 14, 10, 10, 10, 7, 8, 7, 3, 5, 3]
     static let ghostBlue = 53, ghostStep = 5.5
     static let ghostBars = Int(rowW / ghostStep)
-}
-
-/// 首页一条回答的声纹：蓝色是答出来的部分，橙色是停下的那段；画得比最宽的页面还长，靠右对齐裁掉左边。
-struct MockRowVoiceprint: View {
-    let seed: String
-    var opacity: Double = 1
-    var body: some View {
-        let bars: [Double] = {
-            let next = MockRand.generator(seed)
-            let blue: [Double] = (0..<(Wave.rowBars - Wave.orangeBars)).map { (_: Int) -> Double in 10 + next() * 25 }
-            let orange: [Double] = (0..<Wave.orangeBars).map { (index: Int) -> Double in
-                let fade: Double = pow(1 - Double(index) / Double(Wave.orangeBars), 1.4)
-                let jitter: Double = 0.8 + next() * 0.2
-                return 3 + jitter * 24 * fade
-            }
-            return (blue + orange).map { $0 * Wave.rowScale }
-        }()
-        Canvas { context, size in
-            Self.draw(context, size, heights: bars, viewH: 60, step: Wave.rowStep, blueCount: Wave.rowBars - Wave.orangeBars, opacity: opacity)
-        }
-        .frame(height: 60).accessibilityHidden(true)
-    }
-
-    /// `preserveAspectRatio="xMaxYMid slice"`：按较大的缩放铺满，右对齐、上下居中。
-    static func draw(_ context: GraphicsContext, _ size: CGSize, heights: [Double], viewH: Double, step: Double, blueCount: Int, opacity: Double) {
-        let scale = max(size.width / Wave.rowW, size.height / viewH)
-        let dx = size.width - Wave.rowW * scale, dy = (size.height - viewH * scale) / 2
-        let count = heights.count
-        for (index, height) in heights.enumerated() {
-            let x = Wave.rowW - Wave.barW - Double(count - 1 - index) * step
-            let rect = CGRect(x: dx + x * scale, y: dy + (viewH - height) / 2 * scale, width: Wave.barW * scale, height: height * scale)
-            guard rect.maxX > 0 else { continue }
-            context.fill(Path(roundedRect: rect, cornerRadius: 1.3 * scale), with: .color((index < blueCount ? MockPalette.lightBlue : MockPalette.orange).opacity(opacity)))
-        }
-    }
-}
-
-/// 还没发生的一行：灰条占位加一段淡声纹，shift 让每行错开。
-struct MockGhostRow: View {
-    let opacity: Double
-    var shift = 0
-    var body: some View {
-        let tail = Wave.ghost.count - Wave.ghostBlue
-        let heights = (0..<Wave.ghostBars).map { index -> Double in
-            let at = index - (Wave.ghostBars - tail)
-            return (at >= 0 ? Wave.ghost[Wave.ghostBlue + at] : Wave.ghost[(index + shift * 17) % Wave.ghostBlue]) * Wave.rowScale
-        }
-        Canvas { context, size in
-            MockRowVoiceprint.draw(context, size, heights: heights, viewH: 64, step: Wave.ghostStep, blueCount: Wave.ghostBars - tail, opacity: 1)
-        }
-        .frame(height: 64).accessibilityHidden(true)
-    }
 }
 
 /// 面试中的大声纹（900 × 100）：you 跟着麦克风，interviewer 说话时持续起伏，rest 是静止的灰声纹，flat 是一条线。
@@ -382,26 +331,4 @@ struct MockTally: Identifiable {
     var text: String
     var dot: Color? = nil
     var id: String { label }
-}
-
-/// `.mi3-tally`：衬线大数 + 单位 + 标签，下面一行说明（带点时是蓝 / 橙小圆点）。
-struct MockTallyCell: View {
-    let item: MockTally
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 0) {
-                Text(verbatim: item.value).font(V3.serif(28)).foregroundStyle(item.unit == nil ? MockPalette.faint : MockPalette.ink)
-                if let unit = item.unit { Text(verbatim: unit).font(V3.sans(13)).foregroundStyle(MockPalette.fnt).padding(.leading, 3) }
-                Text(verbatim: item.label).font(V3.sans(13, weight: .medium)).foregroundStyle(item.tone ?? MockPalette.ink).lineLimit(1)
-                    .padding(.leading, item.unit == nil ? 5 : 8)
-            }
-            .frame(height: 38, alignment: .leading)
-            HStack(alignment: .top, spacing: 8) {
-                if let dot = item.dot { Circle().fill(dot).frame(width: 6, height: 6).padding(.top, 7) }
-                Text(verbatim: item.text).font(V3.sans(13)).foregroundStyle(item.dot == nil ? MockPalette.fnt : MockPalette.sub)
-                    .lineHeight(13, 20).fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-    }
 }

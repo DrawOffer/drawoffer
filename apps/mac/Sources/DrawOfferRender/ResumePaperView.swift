@@ -4,22 +4,30 @@ import WebKit
 
 /// 简历纸面。整个 App 里唯一用到网页视图的地方：加载随包的离线 paper.html，
 /// 通过 `window.drawoffer.render(request)` 注入数据；页面渲染完回报纸面高度。
-/// 外框、缩放、切换动画都在 SwiftUI 这一侧完成。
+/// 外框、切换动画在 SwiftUI 这一侧完成。缩放不要用 `scaleEffect`（那是把 794px 的位图缩小，字会发虚）：
+/// 直接给视图目标尺寸，页面按 794 CSS 像素排版，再用 CSS `scale = 视图宽度 / 794` 整体缩放（paper.html 里处理，同 Web 卡片），文字按实际尺寸绘制；回报的高度仍是未缩放的 CSS 像素。
 public struct ResumePaperView: NSViewRepresentable {
     private let request: ResumeRenderRequest
     private let highlights: [String]
     private let onError: (String) -> Void
     private let onRendered: (CGFloat) -> Void
+    private let onSnapshot: ((NSImage) -> Void)?
 
     /// `highlights`：纸面上包含这些文字的段落与列表项加底色标出（AI 待确认修改的原文）。
-    public init(request: ResumeRenderRequest, highlights: [String] = [], onRendered: @escaping (CGFloat) -> Void = { _ in }, onError: @escaping (String) -> Void = { _ in }) {
+    public init(request: ResumeRenderRequest, highlights: [String] = [], onRendered: @escaping (CGFloat) -> Void = { _ in }, onError: @escaping (String) -> Void = { _ in },
+                onSnapshot: ((NSImage) -> Void)? = nil) {
         self.onError = onError
+        self.onSnapshot = onSnapshot
         self.request = request
         self.highlights = highlights
         self.onRendered = onRendered
     }
 
-    public func makeCoordinator() -> PaperBridge { PaperBridge(onRendered: onRendered, onError: onError) }
+    public func makeCoordinator() -> PaperBridge {
+        let bridge = PaperBridge(onRendered: onRendered, onError: onError)
+        bridge.onSnapshot = onSnapshot
+        return bridge
+    }
 
     public func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -40,6 +48,7 @@ public struct ResumePaperView: NSViewRepresentable {
     public func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.onError = onError
         context.coordinator.onRendered = onRendered
+        context.coordinator.onSnapshot = onSnapshot
         context.coordinator.setHighlights(highlights)
         context.coordinator.render(request)
     }
@@ -57,6 +66,8 @@ public struct ResumePaperView: NSViewRepresentable {
 public final class PaperBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     var onError: (String) -> Void
     var onRendered: (CGFloat) -> Void
+    /// 渲染完成后把第一页（视图大小）按 2 倍截成图片交回；用于压在其他内容下面、只展示的纸（网页视图不受 SwiftUI 裁剪与层级约束）。
+    var onSnapshot: ((NSImage) -> Void)?
     private weak var webView: WKWebView?
     private var isReady = false
     private var pending: Data?
@@ -100,6 +111,19 @@ public final class PaperBridge: NSObject, WKScriptMessageHandler, WKNavigationDe
         """)
     }
 
+    private func snapshot() {
+        guard onSnapshot != nil, let webView, webView.bounds.width > 0 else { return }
+        let configuration = WKSnapshotConfiguration()
+        configuration.rect = webView.bounds
+        configuration.snapshotWidth = NSNumber(value: Double(webView.bounds.width) * 2)
+        // 图片与头像在 rendered 之后才解码完，稍等再截
+        Task { @MainActor [weak self, weak webView] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard let webView, let image = try? await webView.takeSnapshot(configuration: configuration) else { return }
+            self?.onSnapshot?(image)
+        }
+    }
+
     func attach(_ webView: WKWebView) { self.webView = webView; webView.navigationDelegate = self }
 
     public func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
@@ -136,6 +160,7 @@ public final class PaperBridge: NSObject, WKScriptMessageHandler, WKNavigationDe
                 rendered = true
                 if !highlights.isEmpty { applyHighlights() }
                 onRendered(CGFloat(body["heightPx"] as? Double ?? 0))
+                snapshot()
             case "error":
                 onError(body["message"] as? String ?? "纸面预览失败，请重试。")
             default:

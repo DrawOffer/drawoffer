@@ -406,6 +406,8 @@ private struct JobPoolDirectory: View {
     @State private var appliedText = ""
     @State private var sort = "open"
     @State private var page = 1
+    /// J1：求职进程里一个岗位都还没有（Web `useNoApplicationsYet`）；读不到时为 nil，不出引导。
+    @State private var noApplications: Bool?
     /// 82:5188 分页规则：每页 20 家；筛选、搜索或排序后回到第 1 页。分页、搜索、行业与排序都在服务端 `companies/page` 完成。
     static let pageSize = 20
 
@@ -417,6 +419,9 @@ private struct JobPoolDirectory: View {
     private var items: [JSONValue] { data?["items"]?.items ?? [] }
     private var total: Int { data?["total"]?.integer ?? 0 }
     private var pageCount: Int { max(1, (total + Self.pageSize - 1) / Self.pageSize) }
+    private var firstVisit: CoachSlot { CoachSlot(id: "plaza-first", user: session.coachUser) }
+    /// J1（Figma 02A · 61:2588）：还没有任何岗位时第一次进广场，压暗整页只亮第一家公司
+    private var showFirstVisit: Bool { firstVisit.open && noApplications == true && !busy && !failed && !items.isEmpty }
 
     var body: some View {
         V3Page(top: 50) {
@@ -448,6 +453,12 @@ private struct JobPoolDirectory: View {
             appliedText = next; page = 1
         }
         .task(id: request) { await load(request) }
+        .task(id: firstVisit.open) {
+            guard firstVisit.open else { return }
+            let list = try? await session.api.careerRequest(path: "/api/job-applications", method: "GET", query: ["scope": "all", "limit": "1"], body: nil)
+            noApplications = list.map { ($0["items"]?.items ?? []).isEmpty }
+        }
+        .coachMarkHost()
     }
 
     private var chipItems: [(value: String, label: String, count: Int?)] {
@@ -485,7 +496,14 @@ private struct JobPoolDirectory: View {
                 }
             }
         } else {
-            grid { ForEach(items, id: \.self) { company in CompanyCard(company: company) { open(company.text("id")) } } }
+            grid {
+                ForEach(Array(items.enumerated()), id: \.element) { index, company in
+                    CompanyCard(company: company) { firstVisit.dismiss(); open(company.text("id")) }
+                        .coachTarget(index == 0 && showFirstVisit, label: "岗位广场引导",
+                                     message: "点进一家公司，看官网正在招的岗位；\n看中哪个，就点「加入求职进程」。",
+                                     actions: [CoachAction(label: "知道了")], corner: 10) { firstVisit.dismiss() }
+                }
+            }
             if pageCount > 1 {
                 V3Pagination(page: min(page, pageCount), total: total, pageSize: Self.pageSize) { page = $0 }
                     .padding(.horizontal, 20).padding(.top, 16)
@@ -946,6 +964,15 @@ private struct JobPoolJob: View {
     @State private var copied = false
     @State private var revision = 0
     @State private var join = PoolJoin()
+    @Environment(WorkspaceRouter.self) private var router: WorkspaceRouter?
+    /// J2 / J3（Figma 02A · 61:2592、61:2593）：求职进程里还没有岗位时说明加入有什么用；加入的是第一个岗位时接一句去练面试
+    @State private var noApplications: Bool?
+    /// 点「加入」那一刻求职进程里是不是还没有岗位（加入之后再读就不是了）
+    @State private var firstBeforeJoin = false
+    @State private var justJoinedFirst: String?
+
+    private var jobFirst: CoachSlot { CoachSlot(id: "plaza-job-first", user: session.coachUser) }
+    private var joinedFirst: CoachSlot { CoachSlot(id: "plaza-joined-first", user: session.coachUser) }
 
     var body: some View {
         // 02 · C 岗位详情（82:22736）：左正文 680、右侧吸附操作栏 326，间距 41。
@@ -968,7 +995,14 @@ private struct JobPoolJob: View {
         }
         .task(id: revision) { await load() }
         .task(id: copied) { if copied { try? await Task.sleep(for: .seconds(1.6)); copied = false } }
+        .task(id: jobFirst.open || joinedFirst.open) {
+            guard jobFirst.open || joinedFirst.open else { return }
+            let list = try? await session.api.careerRequest(path: "/api/job-applications", method: "GET", query: ["scope": "all", "limit": "1"], body: nil)
+            noApplications = list.map { ($0["items"]?.items ?? []).isEmpty }
+            if noApplications == true { firstBeforeJoin = true }
+        }
         .modifier(PoolJoinFeedback(join: join, open: openApplication, retry: { job in Task { await joinJob(job) } }))
+        .coachMarkHost()
     }
 
     private var skeleton: some View {
@@ -1014,7 +1048,7 @@ private struct JobPoolJob: View {
                 }
             }.buttonStyle(.plain)
             (Text(job.text("title")) + Text(job.text("department").nonEmptyValue.map { " - " + $0 } ?? ""))
-                .font(.system(size: 26, weight: .semibold)).foregroundStyle(V3.txt).lineHeight(26, 37.7)
+                .font(.system(size: 26, weight: .semibold)).foregroundStyle(V3.txt).lineHeight(26, 37.7, .system)
                 .fixedSize(horizontal: false, vertical: true).padding(.top, 12)
             HStack(spacing: 12) {
                 if JobPool.isToday(job.text("new_at")) && !closed { PoolBadge(text: "今日新增") }
@@ -1146,6 +1180,14 @@ private struct JobPoolJob: View {
                 }
             }
             .padding(20).background(.white, in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(V3.line))
+            .coachTarget(joined == nil && !closed && jobFirst.open && noApplications == true, label: "岗位详情引导",
+                         message: "加入后，模拟面试就能对着\n这个岗位出题。",
+                         actions: [CoachAction(label: "知道了")]) { jobFirst.dismiss() }
+            .coachTarget(joined != nil && justJoinedFirst != nil && joinedFirst.open, label: "加入岗位后的下一步",
+                         message: "第一个岗位加好了。要不要对着它\n练一场？练完就有第一份报告。",
+                         actions: [CoachAction(label: "对着这个岗位练一场") { practiceJoined() }, CoachAction(label: "先接着看岗位")]) {
+                joinedFirst.dismiss(); jobFirst.dismiss()
+            }
             if let company { companyCard(company) }
             if !related.isEmpty { relatedList(job, companyID: companyID) }
         }
@@ -1254,8 +1296,18 @@ private struct JobPoolJob: View {
 
     private func joinJob(_ value: JSONValue) async {
         await join.join(value, api: session.api, open: openApplication,
-            joined: { _, application in job = job?.with("joined_application_id", .string(application)) },
+            joined: { _, application in
+                job = job?.with("joined_application_id", .string(application))
+                if firstBeforeJoin { justJoinedFirst = application }
+            },
             closed: { _ in job = job?.with("availability_status", .string("closed")) })
+    }
+
+    /// 「对着这个岗位练一场」：进模拟面试设置页，面试岗位预选刚加入的这个（设置页读走 `pendingMockApplication`）。
+    private func practiceJoined() {
+        guard let application = justJoinedFirst else { return }
+        CoachGuide.shared.pendingMockApplication = application
+        router?.jump(.mock(nil))
     }
 }
 

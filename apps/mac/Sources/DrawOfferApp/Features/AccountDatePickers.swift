@@ -53,11 +53,11 @@ struct AccountDateTrigger: View {
             HStack(spacing: 8) {
                 Text(value.isEmpty ? placeholder : value).font(V3.sans(14)).monospacedDigit().foregroundStyle(value.isEmpty ? V3.fnt2 : V3.txt)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Image(systemName: "chevron.down").font(.system(size: 9, weight: .medium)).foregroundStyle(V3.fnt)
+                Image(systemName: open ? "chevron.up" : "chevron.down").font(.system(size: 9, weight: .medium)).foregroundStyle(V3.fnt)
             }
             .padding(.horizontal, 15).frame(height: 40)
             .background(.white, in: RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(open ? V3.txt.opacity(0.5) : V3.cl))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(open ? V3.txt : V3.cl))
             .contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityLabel(label).accessibilityValue(value.isEmpty ? "未填" : value)
     }
@@ -108,6 +108,8 @@ struct AccountYearMonthField: View {
         AccountDateTrigger(label: label, value: value, placeholder: "选择年月", open: $open)
             .popover(isPresented: $open, arrowEdge: .bottom) {
                 AccountMonthGrid(selected: AccountDates.yearMonth(value), showThisMonth: true, pick: { year, month in pick("\(year)-\(AccountDates.pad(month))") }) {
+                    VStack(spacing: 0) {
+                    Rectangle().fill(V3.line).frame(height: 1).padding(.horizontal, 12).padding(.top, 8)
                     HStack {
                         Button("清除") { pick("") }.buttonStyle(.plain).font(V3.sans(12)).foregroundStyle(value.isEmpty ? V3.fnt2 : V3.fnt).disabled(value.isEmpty)
                         Spacer()
@@ -117,7 +119,8 @@ struct AccountYearMonthField: View {
                                 .background(value == AccountDates.present ? V3.blue : .white, in: Capsule())
                                 .overlay(Capsule().stroke(value == AccountDates.present ? .clear : V3.cl))
                         }
-                    }.padding(.horizontal, 13).frame(height: 25).padding(.top, 4)
+                    }.padding(.horizontal, 12).frame(height: 25).padding(.top, 8)
+                    }
                 }
             }
     }
@@ -143,17 +146,20 @@ struct AccountMonthGrid<Footer: View>: View {
                 Button { years.toggle() } label: {
                     HStack(spacing: 4) {
                         Text(years ? "\(yearPage) – \(yearPage + 11)" : "\(String(year)) 年").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
-                        Text(years ? "▴" : "▾").font(.system(size: 10)).foregroundStyle(Color(hex: 0x96968F))
+                        Text(years ? "▴" : "▾").font(.system(size: 8)).foregroundStyle(Color(hex: 0x96968F))
                     }.contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityLabel(years ? "收起年份" : "选择年份")
                 Spacer()
-                arrow("chevron.left") { year -= years ? 12 : 1 }
-                if showThisMonth && !years {
-                    Button("本月") { let now = AccountDates.today; pick(now.year, now.month) }.buttonStyle(.plain)
-                        .font(V3.sans(12, weight: .medium)).foregroundStyle(V3.txt).padding(.horizontal, 6)
+                // ‹ › 之间：有「本月」时紧贴（本月左右各 12），没有时隔 6（03.05 / 03.08）
+                HStack(spacing: showThisMonth && !years ? 0 : 6) {
+                    arrow("chevron.left") { year -= years ? 12 : 1 }
+                    if showThisMonth && !years {
+                        Button("本月") { let now = AccountDates.today; pick(now.year, now.month) }.buttonStyle(.plain)
+                            .font(V3.sans(12, weight: .medium)).foregroundStyle(V3.txt).padding(.horizontal, 12)
+                    }
+                    arrow("chevron.right") { year += years ? 12 : 1 }
                 }
-                arrow("chevron.right") { year += years ? 12 : 1 }
-            }.padding(.leading, 17).padding(.trailing, 13).frame(height: 24).padding(.top, 15)
+            }.padding(.leading, 17).padding(.trailing, 15).frame(height: 24).padding(.top, 15)
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(86), spacing: 6), count: 3), spacing: 6) {
                 if years {
                     ForEach(yearPage..<(yearPage + 12), id: \.self) { value in
@@ -164,8 +170,8 @@ struct AccountMonthGrid<Footer: View>: View {
                         cell("\(month) 月", on: selected.map { $0.year == year && $0.month == month } ?? false) { pick(year, month) }
                     }
                 }
-            }.padding(.top, 16).padding(.horizontal, 13)
-            footer().padding(.top, 8)
+            }.padding(.top, 10).padding(.horizontal, 13)
+            footer()
         }
         .padding(.bottom, 13).frame(width: 296)
         .onAppear { if let selected { year = selected.year } }
@@ -175,7 +181,7 @@ struct AccountMonthGrid<Footer: View>: View {
     private var yearPage: Int { year - (((year - 2000) % 12) + 12) % 12 }
 
     private func arrow(_ symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: symbol).font(.system(size: 11, weight: .medium)).foregroundStyle(V3.sub).frame(width: 24, height: 24).contentShape(Rectangle()) }
+        Button(action: action) { Image(systemName: symbol).font(.system(size: 10, weight: .medium)).foregroundStyle(V3.sub).frame(width: 24, height: 24).contentShape(Rectangle()) }
             .buttonStyle(.plain)
     }
 
@@ -218,7 +224,7 @@ struct AccountDayGrid: View {
                 }.buttonStyle(.plain).accessibilityLabel("重新选择年月")
                 Spacer()
                 arrow("chevron.right") { shift(1) }
-            }.padding(.horizontal, 15).frame(height: 24).padding(.top, 15)
+            }.padding(.leading, 13).padding(.trailing, 15).frame(height: 24).padding(.top, 15)
             HStack(spacing: 2) {
                 ForEach(["一", "二", "三", "四", "五", "六", "日"], id: \.self) { Text($0).font(V3.sans(12)).foregroundStyle(V3.fnt).frame(width: 36) }
             }.padding(.top, 14)
@@ -240,7 +246,7 @@ struct AccountDayGrid: View {
     }
 
     private func arrow(_ symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: symbol).font(.system(size: 11, weight: .medium)).foregroundStyle(V3.sub).frame(width: 24, height: 24).contentShape(Rectangle()) }
+        Button(action: action) { Image(systemName: symbol).font(.system(size: 10, weight: .medium)).foregroundStyle(V3.sub).frame(width: 24, height: 24).contentShape(Rectangle()) }
             .buttonStyle(.plain)
     }
 }

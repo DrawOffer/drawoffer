@@ -195,7 +195,8 @@ struct RRMemorySection: View {
     @State private var points: [JSONValue] = []
     @State private var pending: JSONValue?
     @State private var levels: [JSONValue] = []
-    @State private var loaded = false
+    @Environment(WorkspaceRouter.self) private var router: WorkspaceRouter?
+    private var firstReport: CoachSlot { CoachSlot(id: "report-first", user: session.coachUser) }
 
     private static let word = ["up": "升了", "down": "降了", "same": "没变", "new": "第一次记下", "unsettled": "还说不准"]
     private static let order = ["up": 0, "down": 1, "new": 2, "unsettled": 3, "same": 4]
@@ -208,7 +209,7 @@ struct RRMemorySection: View {
                 let sub = first && !many ? (pending != nil ? "" : "以后改简历、出题和面试前提醒，都会按这里的结论来。")
                     : [many ? "对照这场之前的记忆。" : pastCount > 0 ? "对照你之前的 \(pastCount) 场面试。" : nil, pending != nil ? nil : "以后出题和面试前提醒会按这里的结论来。"].compactMap { $0 }.joined()
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(first && !many ? "第一场之后，记忆里记下了什么" : "这场之后，记忆里变了什么").font(V3.serif(22)).foregroundStyle(RRC.ink).lineHeight(22, 30)
+                    Text(first && !many ? "第一场之后，记忆里记下了什么" : "这场之后，记忆里变了什么").font(V3.serif(22)).foregroundStyle(RRC.ink).lineHeight(22, 30, .serif)
                     if !sub.isEmpty { Text(verbatim: sub).font(V3.sans(13)).foregroundStyle(RRC.sub).frame(height: 20).padding(.top, 4) }
                     VStack(spacing: 0) {
                         if pending == nil && !levels.isEmpty { levelRow }
@@ -221,6 +222,10 @@ struct RRMemorySection: View {
                     }
                     .background(.white, in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(RRC.line)).padding(.top, 14)
                 }
+                // K3（Figma 02A · 61:3080）：第一份报告第一次打开，压暗整页只亮这一块（Web `ReviewMemory`：第一场且没有“正在记入”）
+                .coachTarget(first && pending == nil && firstReport.open, label: "第一份报告引导",
+                             message: "这些已经记进你的长期记忆。\n以后改简历、出题，都会按这里来。",
+                             actions: [CoachAction(label: "回首页看看") { router?.jump(.section(.home)) }, CoachAction(label: "先看完报告")]) { firstReport.dismiss() }
                 .padding(.top, 44)
             }
         }
@@ -241,7 +246,9 @@ struct RRMemorySection: View {
             MockFlow(spacing: 40, lineSpacing: 14) {
                 ForEach(Array(levels.enumerated()), id: \.offset) { _, item in
                     let change = item.text("change")
-                    let tone: Color? = change == "up" ? RRC.blue : change == "down" ? RRC.orange : nil
+                    // 升了蓝、降了橙、没变灰字常规、第一次记下 / 还说不准整行灰、等级加粗（Figma 09 · 11.04）
+                    let muted = change == "new" || change == "unsettled"
+                    let tone: Color? = change == "up" ? RRC.blue : change == "down" ? RRC.orange : muted ? Color(hex: 0x96968F) : nil
                     VStack(alignment: .leading, spacing: 2) {
                         Text(verbatim: item.text("name")).font(V3.sans(15, weight: .medium)).foregroundStyle(RRC.ink)
                         (Text(verbatim: "\(item.text("before")) → ").foregroundColor(Color(hex: 0x96968F))

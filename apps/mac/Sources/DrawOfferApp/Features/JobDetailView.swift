@@ -76,6 +76,7 @@ struct JobDetailView: View {
             }
         }
         .foregroundStyle(V3.txt)
+        .overlay(alignment: .top) { TextNoticeToast(text: $notice) }
         .task(id: reload) { await load() }
         .task(id: matchScope) { await loadMatch() }
         .centeredSheet(isPresented: $editing) {
@@ -131,16 +132,10 @@ struct JobDetailView: View {
                 } label: {
                     Image(systemName: "ellipsis").font(.system(size: 13, weight: .semibold)).foregroundStyle(V3.sub)
                         .frame(width: 33, height: 33).background(.white, in: Circle()).overlay(Circle().stroke(V3.cl))
-                }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().disabled(busy).accessibilityLabel("更多岗位操作")
+                }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().disabled(busy).accessibilityLabel("更多岗位操作")
             }.padding(.top, 14)
             facts(job).padding(.top, 10)
             if let error { Text(error).font(V3.sans(12.5)).foregroundStyle(V3.red).padding(.top, 10) }
-            if let notice {
-                HStack(spacing: 8) {
-                    Text(notice).font(V3.sans(12.5)).foregroundStyle(V3.sub)
-                    Button { self.notice = nil } label: { Image(systemName: "xmark").font(.system(size: 9)) }.buttonStyle(.plain).foregroundStyle(V3.fnt).accessibilityLabel("关闭提示")
-                }.padding(.top, 10)
-            }
             Rectangle().fill(V3.line).frame(height: 1).padding(.top, 22)
             if width >= 760 {
                 HStack(alignment: .top, spacing: 0) {
@@ -191,7 +186,7 @@ struct JobDetailView: View {
             Text("岗位描述").font(V3.sans(15, weight: .medium)).frame(height: 18)
             if hasDescription {
                 let overflowing = bodyHeight > Self.collapsedHeight + 1
-                NativeMarkdownView(source: job.text("description"), size: 13.5, line: 24).textSelection(.enabled)
+                NativeMarkdownView(source: job.text("description"), size: 13.5, line: 24, softBreaks: true).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                     .background { GeometryReader { proxy in Color.clear.onAppear { bodyHeight = proxy.size.height }.onChange(of: proxy.size.height) { _, height in bodyHeight = height } } }
                     .frame(maxHeight: expanded ? nil : Self.collapsedHeight, alignment: .top).clipped()
@@ -255,30 +250,30 @@ struct JobDetailView: View {
     @ViewBuilder private var matchSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Text("简历匹配").font(V3.sans(12)).foregroundStyle(V3.sub)
+                Text("简历匹配").font(V3.sans(12)).foregroundStyle(V3.sub).fixedSize()
                 Spacer(minLength: 8)
                 if application != nil && !resumes.isEmpty {
                     Menu {
                         ForEach(resumes) { resume in
                             Button(resume.title + (resume.id == linkedResumeID ? " ✓" : "")) { Task { await linkResume(resume) } }.disabled(resume.id == linkedResumeID)
                         }
-                    } label: { Text(resumeLabel.nonEmptyValue ?? "选择投递简历").font(V3.sans(12)).foregroundStyle(V3.sub).lineLimit(1) }
-                        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().disabled(busy).help("换一份投递简历").accessibilityLabel("投递简历")
+                    } label: { Text(resumeLabel.nonEmptyValue ?? "选择投递简历").font(V3.sans(12)).foregroundStyle(V3.sub).lineLimit(1).truncationMode(.middle) }
+                        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize(horizontal: false, vertical: true).disabled(busy).help("换一份投递简历").accessibilityLabel("投递简历")
                 } else if !resumeLabel.isEmpty {
-                    Text(resumeLabel).font(V3.sans(12)).foregroundStyle(V3.sub).lineLimit(1).help(resumeLabel)
+                    Text(resumeLabel).font(V3.sans(12)).foregroundStyle(V3.sub).lineLimit(1).truncationMode(.middle).help(resumeLabel)
                 }
             }.frame(height: 14)
             if matchResume == nil {
                 if !resumesLoaded { Text("正在读取简历…").font(V3.sans(12.5)).foregroundStyle(V3.fnt).padding(.top, 14) }
                 else {
                     Text("还没有简历").font(V3.serif(16)).padding(.top, 16)
-                    Text("创建第一份简历后，打开岗位就会自动对照岗位描述算出匹配度。").font(V3.sans(12.5)).foregroundStyle(V3.sub).fixedSize(horizontal: false, vertical: true).padding(.top, 6)
+                    Text("创建第一份简历后，打开岗位就会自动对照岗位描述算出匹配度。").font(V3.sans(12.5)).foregroundStyle(V3.sub).lineSpacing(4).fixedSize(horizontal: false, vertical: true).padding(.top, 6)
                     Button { router?.jump(.section(.resumes)) } label: { HStack(spacing: 6) { Image(systemName: "plus").font(.system(size: 11)); Text("去创建简历") }.frame(maxWidth: .infinity) }
                         .buttonStyle(CareerRailButtonStyle()).padding(.top, 16)
                 }
             } else if !hasDescription {
                 Text("补充岗位描述后自动计算").font(V3.serif(16)).padding(.top, 16)
-                Text("会用这份简历对照岗位要求，算出匹配度和还缺的经历。").font(V3.sans(12.5)).foregroundStyle(V3.sub).fixedSize(horizontal: false, vertical: true).padding(.top, 6)
+                Text("会用这份简历对照岗位要求，算出匹配度和还缺的经历。").font(V3.sans(12.5)).foregroundStyle(V3.sub).lineSpacing(4).fixedSize(horizontal: false, vertical: true).padding(.top, 6)
             } else {
                 matchBody
             }
@@ -293,7 +288,7 @@ struct JobDetailView: View {
         if matchLoading { title = "正在计算匹配度…"; note = nil }
         else if analyzing { title = "正在计算匹配度…"; note = "正在对照岗位要求逐条检查这份简历。" }
         else if let failure { title = "匹配度没有算出来"; note = failure }
-        else if let ready { title = ready.headline.map { "还缺\($0)" } ?? "已覆盖主要要求"; note = ready.stale ? "简历或岗位描述已变化，这个分数可能已过期。" : nil }
+        else if let ready { title = ready.headline.map { "还缺：\($0)" } ?? "已覆盖主要要求"; note = ready.stale ? "简历或岗位描述已变化，这个分数可能已过期。" : nil }
         else { title = "还没有匹配度"; note = "补充岗位描述或核心技能后自动计算。" }
         let score = ready?.score
         return VStack(alignment: .leading, spacing: 0) {
@@ -533,15 +528,6 @@ struct CareerRailButtonStyle: ButtonStyle {
             .background(configuration.isPressed ? V3.field : .white, in: Capsule())
             .overlay(Capsule().stroke(V3.cl))
             .opacity(enabled ? 1 : 0.45).contentShape(Capsule())
-    }
-}
-
-/// 自动换行的标签组。
-struct FlowTags: View {
-    let words: [String]
-    let tone: CareerTone
-    var body: some View {
-        FlowLayout(spacing: 6) { ForEach(Array(words.enumerated()), id: \.offset) { CareerChipView($0.element, tone) } }
     }
 }
 

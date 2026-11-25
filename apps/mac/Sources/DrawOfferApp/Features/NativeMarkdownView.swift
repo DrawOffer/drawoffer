@@ -9,7 +9,8 @@ struct NativeMarkdownView: View {
     private let truncated:Bool
     /// 正文字号与行高；对话回复用 02B·03 的 13.5 / 24。
     private let size:CGFloat, line:CGFloat
-    init(source:String, size:CGFloat=13, line:CGFloat=0) {
+    /// `softBreaks`：同 Web 岗位描述的 markdown-it `breaks: true`，相邻的普通文字行合成一段、段内换行，空行才分段。
+    init(source:String, size:CGFloat=13, line:CGFloat=0, softBreaks:Bool=false) {
         self.size=size; self.line=line
         let limited=String(source.prefix(500_000)); let characterTruncated=limited.count<source.count
         let lines=limited.components(separatedBy:"\n"); var blocks:[Block]=[], index=0
@@ -20,7 +21,10 @@ struct NativeMarkdownView: View {
             if index+1<lines.count,line.contains("|"),lines[index+1].contains("---") {var rows=[cells(line)];index+=2;while index<lines.count && lines[index].contains("|") && !lines[index].isEmpty {rows.append(cells(lines[index]));index+=1};blocks.append(Block(id:blocks.count,kind:"table",text:"",rows:rows,level:0));continue}
             let level=trim.prefix(while:{$0=="#"}).count
             let kind=level>0 && level<=6 && trim.dropFirst(level).hasPrefix(" ") ? "heading":trim.hasPrefix("![") ? "image":"text"
-            if !trim.isEmpty { blocks.append(Block(id:blocks.count,kind:kind,text:kind=="heading" ? String(trim.dropFirst(level+1)):trim.hasPrefix("- ") ? "• "+String(trim.dropFirst(2)):trim,rows:[],level:level)) }
+            let plain=kind=="text" && !trim.hasPrefix("- ")
+            if softBreaks, plain, index>0, !lines[index-1].trimmingCharacters(in:.whitespaces).isEmpty, let last=blocks.last, last.kind=="text", !last.text.hasPrefix("• ") {
+                blocks[blocks.count-1]=Block(id:last.id,kind:"text",text:last.text+"\n"+trim,rows:[],level:0)
+            } else if !trim.isEmpty { blocks.append(Block(id:blocks.count,kind:kind,text:kind=="heading" ? String(trim.dropFirst(level+1)):trim.hasPrefix("- ") ? "• "+String(trim.dropFirst(2)):trim,rows:[],level:level)) }
             index+=1
         }
         self.blocks=blocks
@@ -34,7 +38,7 @@ struct NativeMarkdownView: View {
                 else if block.kind=="code" {MarkdownCodeBlock(code:block.text,language:block.language,mermaid:block.level==1)}
                 else if block.kind=="table" {ScrollView(.horizontal){Grid(alignment:.leading,horizontalSpacing:16,verticalSpacing:10){ForEach(Array(block.rows.enumerated()),id:\.offset){row,values in GridRow{ForEach(Array(values.enumerated()),id:\.offset){_,value in Text(inline(value)).font(.system(size:12,weight:row==0 ? .semibold:.regular)).frame(minWidth:80,maxWidth:280,alignment:.leading)}}}}.padding(12).overlay(RoundedRectangle(cornerRadius:8).stroke(Color(hex:0xE4E4E0)))}}
                 else if block.kind=="image" {Label("文档图片请下载原文件查看",systemImage:"photo").font(.system(size:12)).foregroundStyle(.secondary)}
-                else {Text(inline(block.text)).font(.system(size:size)).lineHeight(size, line > 0 ? line : size*1.2).textSelection(.enabled)}
+                else {Text(inline(block.text)).font(.system(size:size)).lineHeight(size, line > 0 ? line : size*1.2, .system).textSelection(.enabled)}
             }
         }
     }

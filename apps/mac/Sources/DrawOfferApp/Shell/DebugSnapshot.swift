@@ -38,8 +38,9 @@ enum DebugSnapshot {
             if name.hasPrefix("request-") {
                 try? FileManager.default.removeItem(at: file)
                 let base = String(name.dropFirst(8))
-                capture(to: directory.appendingPathComponent(base + ".png"))
-                dumpAccessibility(to: directory.appendingPathComponent(base + ".ax.txt"))
+                capture(to: directory.appendingPathComponent(base + ".png")) {
+                    dumpAccessibility(to: directory.appendingPathComponent(base + ".ax.txt"))
+                }
             } else if name.hasPrefix("press-") {
                 // 内容为要按下的元素标签（完整匹配优先，其次包含）；可用 "#2 标签" 指定第几个匹配。
                 let text = ((try? String(contentsOf: file, encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -113,12 +114,100 @@ enum DebugSnapshot {
         NSApplication.shared.windows.first { $0.isVisible && $0.contentView != nil && $0.frame.width > 400 }
     }
 
-    private static func capture(to url: URL) {
-        guard let view = window?.contentView?.superview ?? window?.contentView else { return }
+    private static func capture(to url: URL, done: @escaping () -> Void) {
+        guard let main = window else { done(); return }
+        render(main, to: url, done: done)
+        // popover、菜单等附属窗口不在主窗口里：各存一张 `<name>-popup<i>.png`，文件名后附它相对主窗口左上角的位置。
+        let base = url.deletingPathExtension().lastPathComponent
+        let others = NSApplication.shared.windows.filter { $0 !== main && $0.isVisible && $0.frame.width > 20 && $0.frame.height > 20 }
+        for (index, other) in others.enumerated() {
+            let x = Int(other.frame.minX - main.frame.minX), y = Int(main.frame.maxY - other.frame.maxY)
+            render(other, to: url.deletingLastPathComponent().appendingPathComponent("\(base)-popup\(index)@\(x),\(y).png")) {}
+        }
+    }
+
+    private static func render(_ window: NSWindow, to url: URL, done: @escaping () -> Void) {
+        guard let view = window.contentView?.superview ?? window.contentView else { done(); return }
         let bounds = view.bounds
-        guard let rep = view.bitmapImageRepForCachingDisplay(in: bounds) else { return }
-        view.cacheDisplay(in: bounds, to: rep)
-        if let data = rep.representation(using: .png, properties: [:]) { try? data.write(to: url) }
+        guard let base = view.bitmapImageRepForCachingDisplay(in: bounds), let rep = view.bitmapImageRepForCachingDisplay(in: bounds) else { done(); return }
+        view.cacheDisplay(in: bounds, to: base)
+        // macOS 26 上 SwiftUI ScrollView 的内容不随窗口一起 cacheDisplay（岗位广场、模拟面试整页透明）：
+        // 逐个可见滚动区单独拍它的文档视图垫在底下，再把整窗盖上去——窗里不透明的部分（居中弹窗、浮层）留在上面，不被滚动内容盖住。
+        if let context = NSGraphicsContext(bitmapImageRep: rep) {
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = context
+            defer {
+                base.draw(in: bounds, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: false, hints: nil)
+                NSGraphicsContext.restoreGraphicsState()
+            }
+            for scroll in scrollViews(in: view) {
+                guard let document = scroll.documentView else { continue }
+                let visible = scroll.contentView.documentVisibleRect
+                guard visible.width > 1, visible.height > 1, let sub = document.bitmapImageRepForCachingDisplay(in: visible) else { continue }
+                document.cacheDisplay(in: visible, to: sub)
+                var frame = scroll.contentView.convert(scroll.contentView.bounds, to: view)
+                if view.isFlipped { frame.origin.y = bounds.height - frame.maxY }
+                sub.draw(in: frame, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: false, hints: nil)
+            }
+        }
+        // WKWebView（简历纸面）不走 cacheDisplay：逐个 takeSnapshot 再按位置画回去，全部回来后才写文件。
+        let webs = webViews(in: view)
+        let group = DispatchGroup()
+        var shots: [(NSImage, NSRect)] = []
+        for web in webs {
+            var frame = web.convert(web.bounds, to: view)
+            if view.isFlipped { frame.origin.y = bounds.height - frame.maxY }
+            group.enter()
+            web.takeSnapshot(with: nil) { image, _ in
+                if let image { shots.append((image, frame)) }
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) {
+            if !shots.isEmpty, let context = NSGraphicsContext(bitmapImageRep: rep) {
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = context
+                // 网页视图上面还叠着原生浮层（对话列等）：网页里跟画布同色的底抠成透明，只把纸补上去，不盖住浮层
+                for (image, frame) in shots {
+                    guard let keyed = keyedOut(image) else { continue }
+                    context.cgContext.draw(keyed, in: frame)
+                }
+                NSGraphicsContext.restoreGraphicsState()
+            }
+            if let data = rep.representation(using: .png, properties: [:]) { try? data.write(to: url) }
+            done()
+        }
+    }
+
+    /// 以左上角像素为底色，把与之相近的像素改成透明。
+    private static func keyedOut(_ image: NSImage) -> CGImage? {
+        guard let source = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        let width = source.width, height = source.height
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let data = context.data else { return nil }
+        context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
+        let pixels = data.bindMemory(to: UInt8.self, capacity: width * height * 4)
+        let key = (Int(pixels[0]), Int(pixels[1]), Int(pixels[2]))
+        for index in stride(from: 0, to: width * height * 4, by: 4) {
+            let distance = abs(Int(pixels[index]) - key.0) + abs(Int(pixels[index + 1]) - key.1) + abs(Int(pixels[index + 2]) - key.2)
+            if distance < 8 { pixels[index] = 0; pixels[index + 1] = 0; pixels[index + 2] = 0; pixels[index + 3] = 0 }
+        }
+        return context.makeImage()
+    }
+
+    private static func webViews(in view: NSView) -> [WKWebView] {
+        guard !view.isHiddenOrHasHiddenAncestor else { return [] }
+        if let web = view as? WKWebView { return [web] }
+        return view.subviews.flatMap(webViews)
+    }
+
+    private static func scrollViews(in view: NSView) -> [NSScrollView] {
+        guard !view.isHiddenOrHasHiddenAncestor else { return [] }
+        var found: [NSScrollView] = []
+        if let scroll = view as? NSScrollView { found.append(scroll) }
+        for child in view.subviews { found += scrollViews(in: child) }
+        return found
     }
 
     /// 输出窗口的无障碍树（角色、标题/值、窗口内坐标），用于逐项核对按钮与文字是否与 Web 一致。

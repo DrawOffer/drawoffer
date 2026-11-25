@@ -29,7 +29,7 @@ struct MockReviewOverview<Crumb: View, Actions: View, Memory: View, Footnote: Vi
                     Spacer(minLength: 0)
                     HStack(spacing: 10) { actions() }
                 }
-                Text(verbatim: view.title).font(V3.serif(28)).foregroundStyle(RRC.ink).lineHeight(28, 36).padding(.top, 6)
+                Text(verbatim: view.title).font(V3.serif(28)).foregroundStyle(RRC.ink).lineHeight(28, 36, .serif).padding(.top, 6)
                 Text(verbatim: view.meta).font(V3.sans(14)).foregroundStyle(RRC.text).frame(height: 22).padding(.top, 4)
                 GeometryReader { geometry in
                     let wide = geometry.size.width > 800
@@ -80,7 +80,7 @@ struct MockReviewOverview<Crumb: View, Actions: View, Memory: View, Footnote: Vi
     @ViewBuilder private func top(wide: Bool, reached: Int, weak: Int) -> some View {
         let ring = box {
             VStack(alignment: .leading, spacing: 0) {
-                Text(verbatim: view.conclusion).font(V3.serif(22)).foregroundStyle(RRC.ink).lineHeight(22, 30).padding(.horizontal, 24)
+                Text(verbatim: view.conclusion).font(V3.serif(22)).foregroundStyle(RRC.ink).lineHeight(22, 30, .serif).padding(.horizontal, 24)
                 Text(verbatim: view.compare).font(V3.sans(13)).foregroundStyle(RRC.sub).frame(height: 20).padding(.horizontal, 24).padding(.top, 2)
                 RRScoreRing(questions: view.questions, target: view.target, score: view.score).padding(.top, 16)
                 Spacer(minLength: 0)
@@ -98,8 +98,10 @@ struct MockReviewOverview<Crumb: View, Actions: View, Memory: View, Footnote: Vi
         }
         if wide {
             HStack(alignment: .top, spacing: 12) {
-                ring.frame(maxHeight: .infinity).layoutPriority(520)
-                VStack(spacing: 12) { bars.frame(maxHeight: .infinity); abilityBox.frame(maxHeight: .infinity) }.layoutPriority(523)
+                // 520 : 523 按宽度明确分（layoutPriority 只会让高优先级一边全占，环形卡被挤成一条）
+                let ringWidth = max(0, (width - 12) * 520 / 1043)
+                ring.frame(width: ringWidth).frame(maxHeight: .infinity)
+                VStack(spacing: 12) { bars.frame(maxHeight: .infinity); abilityBox.frame(maxHeight: .infinity) }.frame(maxWidth: .infinity)
             }
         } else {
             VStack(spacing: 12) { ring; bars.frame(height: 248); abilityBox.frame(height: 248) }
@@ -252,19 +254,20 @@ private struct RRSuggestCard: View {
 }
 
 /// 原话里出问题的部分划橙色下划线。
-func rrMarked(_ text: String, _ marks: [MockRV.Mark], base: Color) -> Text {
+func rrMarked(_ text: String, _ marks: [MockRV.Mark], base: Color, mark markColor: Color = RRC.orange) -> Text {
     var result = Text(verbatim: "")
     var cursor = text.startIndex
     for mark in marks.sorted(by: { (text.range(of: $0.quote)?.lowerBound ?? text.endIndex) < (text.range(of: $1.quote)?.lowerBound ?? text.endIndex) }) {
         guard let range = text.range(of: mark.quote, range: cursor..<text.endIndex) else { continue }
         result = result + Text(verbatim: String(text[cursor..<range.lowerBound])).foregroundColor(base)
-        result = result + Text(verbatim: mark.quote).foregroundColor(RRC.orange).underline(true, color: RRC.orange)
+        result = result + Text(verbatim: mark.quote).foregroundColor(markColor).underline(true, color: RRC.orange)
         cursor = range.upperBound
     }
     return result + Text(verbatim: String(text[cursor...])).foregroundColor(base)
 }
 
-/// 翻看面试记录（Figma 09 · 10.04；Web `ReviewRecord.tsx`）：逐题问答，没答好的题标橙、问题处加批注；右边题目索引可跳转。
+/// 翻看面试记录（Figma 09 · 10.05；Web `ReviewRecord.tsx`）：顶上一条按用时分段的进度条，点哪段跳到哪题；
+/// 左边题号、分数、播放，右边逐题问答，没答好的题在回答右侧加批注。
 struct MockReviewRecord<Crumb: View>: View {
     let view: MockRV.View
     var initial: String?
@@ -278,23 +281,21 @@ struct MockReviewRecord<Crumb: View>: View {
             V3Page(top: 46) {
                 VStack(alignment: .leading, spacing: 0) {
                     crumb().padding(.top, 6)
-                    Text(verbatim: view.recordTitle).font(V3.serif(28)).foregroundStyle(RRC.ink).lineHeight(28, 36).padding(.top, 18)
-                    HStack(alignment: .top, spacing: 40) {
-                        VStack(alignment: .leading, spacing: 36) {
-                            ForEach(Array(view.questions.enumerated()), id: \.element.id) { index, q in block(q).id(q.id).onAppear { active = index } }
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                        VStack(alignment: .leading, spacing: 10) {
-                            ForEach(Array(view.questions.enumerated()), id: \.element.id) { index, q in
-                                Button { withAnimation { proxy.scrollTo(q.id, anchor: .top) }; active = index } label: {
-                                    HStack(spacing: 8) {
-                                        Circle().fill(q.weak ? RRC.orange : .clear).frame(width: 6, height: 6)
-                                        Text(verbatim: "\(String(format: "%02d", q.no))  \(q.title)").lineLimit(1)
-                                    }
-                                    .font(V3.sans(13, weight: index == active ? .medium : .regular)).foregroundStyle(index == active ? RRC.ink : RRC.sub)
-                                }.buttonStyle(.plain)
-                            }
-                        }.frame(width: 220, alignment: .leading)
-                    }.padding(.top, 28)
+                    Text(verbatim: view.recordTitle).font(V3.serif(28)).foregroundStyle(RRC.ink).lineHeight(28, 36, .serif).padding(.top, 18)
+                    if !view.recordMeta.isEmpty {
+                        Text(verbatim: view.recordMeta).font(V3.sans(14)).foregroundStyle(RRC.text).frame(height: 22).padding(.top, 4)
+                    }
+                    RRRecordBar(questions: view.questions, active: active) { index in
+                        withAnimation { proxy.scrollTo(view.questions[index].id, anchor: .top) }; active = index
+                    }.padding(.top, view.recordMeta.isEmpty ? 26 : 22)
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(view.questions.enumerated()), id: \.element.id) { index, q in
+                            if index > 0 { Rectangle().fill(RRC.thin).frame(height: 1) }
+                            block(q).id(q.id).onAppear { active = index }
+                                .padding(.top, 36).padding(.bottom, 24)
+                        }
+                    }
+                    .padding(.bottom, 40)
                 }
             }
             .onAppear { if let initial { DispatchQueue.main.async { proxy.scrollTo(initial, anchor: .top) } } }
@@ -303,35 +304,91 @@ struct MockReviewRecord<Crumb: View>: View {
     }
 
     private func block(_ q: MockRV.Question) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
-                Text(verbatim: String(format: "%02d", q.no)).font(V3.serif(20)).foregroundStyle(RRC.ink)
-                if q.weak { Text(verbatim: MockRV.outcomeText(q)).font(V3.sans(12, weight: .medium)).foregroundStyle(RRC.orange) }
-                if let play, q.turns.contains(where: \.hasRecording) {
-                    Button(playing == q.id ? "❚❚ 暂停" : "▶ 播放这段") { play(q) }.buttonStyle(MockLinkStyle(blue: true))
+        let outcome = MockRV.outcomeText(q)
+        let hasRecording = play != nil && q.turns.contains(where: \.hasRecording)
+        return HStack(alignment: .top, spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(verbatim: String(format: "%02d", q.no)).font(V3.serif(26)).foregroundStyle(q.weak ? RRC.ink : RRC.faint).lineHeight(26, 36, .serif)
+                Text(verbatim: [q.score.map { "\($0) 分" }, outcome].compactMap { $0 }.joined(separator: " · "))
+                    .font(V3.sans(12, weight: q.weak ? .medium : .regular)).foregroundStyle(q.weak ? RRC.orange : RRC.sub).frame(height: 18)
+                if hasRecording, let play {
+                    Button(playing == q.id ? "❚❚ 暂停" : "▶ 播放这段") { play(q) }.buttonStyle(MockLinkStyle(blue: true, size: 12))
                 }
-            }
-            ForEach(q.turns) { turn in
-                let marks = MockRV.marks(q, turn.answer)
-                VStack(alignment: .leading, spacing: 8) {
-                    if turn.follow {
-                        Text(verbatim: "追问  \(turn.ask)").font(V3.sans(14, weight: .medium)).foregroundStyle(RRC.ink).lineHeight(14, 24)
-                    } else {
-                        Text(verbatim: turn.ask).font(V3.sans(17, weight: .medium)).foregroundStyle(RRC.ink).lineHeight(17, 28)
-                    }
-                    if let answer = turn.answer {
-                        rrMarked(answer, marks, base: RRC.text).font(V3.sans(14)).lineHeight(14, 24).fixedSize(horizontal: false, vertical: true)
-                    } else {
-                        Text(verbatim: turn.missing).font(V3.sans(14)).foregroundStyle(RRC.faint)
-                    }
-                    ForEach(marks, id: \.quote) { mark in
-                        (Text("问题在这  ").fontWeight(.medium) + Text(verbatim: MockRV.markText(mark))).font(V3.sans(12)).foregroundStyle(RRC.orange)
+            }.frame(width: 142, alignment: .leading)
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(q.turns) { turn in
+                    let marks = MockRV.marks(q, turn.answer)
+                    HStack(alignment: .top, spacing: 0) {
+                        VStack(alignment: .leading, spacing: turn.follow ? 4 : 12) {
+                            if turn.follow {
+                                Text("追问").font(V3.sans(12)).foregroundStyle(RRC.faint).frame(height: 18)
+                                Text(verbatim: turn.ask).font(V3.sans(15, weight: .medium)).foregroundStyle(RRC.ink).lineHeight(15, 26).fixedSize(horizontal: false, vertical: true)
+                            } else {
+                                Text(verbatim: turn.ask).font(V3.serif(20)).foregroundStyle(RRC.ink).lineHeight(20, 30, .serif).fixedSize(horizontal: false, vertical: true)
+                            }
+                            if let answer = turn.answer {
+                                rrMarked(answer, marks, base: RRC.text, mark: RRC.ink).font(V3.sans(15)).lineHeight(15, 27).fixedSize(horizontal: false, vertical: true)
+                            } else {
+                                Text(verbatim: turn.missing).font(V3.sans(14)).foregroundStyle(RRC.faint)
+                            }
+                        }
+                        .padding(.top, turn.follow ? 8 : 0)
+                        .frame(maxWidth: 600, alignment: .leading)
+                        Spacer(minLength: 13)
+                        if !marks.isEmpty {
+                            VStack(alignment: .leading, spacing: 12) {
+                                ForEach(marks, id: \.quote) { mark in
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("问题在这").font(V3.sans(12, weight: .medium)).foregroundStyle(RRC.orange).frame(height: 18)
+                                        Text(verbatim: MockRV.markText(mark)).font(V3.sans(13)).foregroundStyle(RRC.text).lineHeight(13, 21).fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    .padding(.leading, 12).frame(maxWidth: .infinity, alignment: .leading)
+                                    .overlay(alignment: .leading) { Rectangle().fill(Color(hex: 0xE8B78F)).frame(width: 1.5) }
+                                }
+                            }
+                            .frame(width: 235, alignment: .leading).padding(.top, turn.follow ? 8 : 0)
+                        }
                     }
                 }
-                .padding(.leading, turn.follow ? 16 : 0)
-                .overlay(alignment: .leading) { if turn.follow { Rectangle().fill(RRC.line).frame(width: 1) } }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// 面试记录顶上的分段条：一段一道题，宽度按这题用时；没答好的橙，当前的墨黑，其余浅灰。
+private struct RRRecordBar: View {
+    let questions: [MockRV.Question]
+    let active: Int
+    let jump: (Int) -> Void
+
+    private var weights: [CGFloat] {
+        let spent = questions.map { q in CGFloat(q.turns.reduce(0) { $0 + ($1.durationMs ?? 0) }) }
+        if spent.allSatisfy({ $0 > 0 }) { return spent }
+        let size = questions.map { q in CGFloat(max(1, q.turns.reduce(0) { $0 + ($1.ask.count + ($1.answer?.count ?? 0)) })) }
+        return size
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let shares = weights
+            let total = max(1, shares.reduce(0, +))
+            let free = max(0, geometry.size.width - CGFloat(max(0, questions.count - 1)) * 4)
+            let widths = shares.map { max(12, free * $0 / total) }
+            let starts = widths.indices.map { index in widths[..<index].reduce(0, +) + CGFloat(index) * 4 }
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(questions.enumerated()), id: \.element.id) { index, q in
+                    let current = index == active
+                    Button { jump(index) } label: {
+                        RoundedRectangle(cornerRadius: 3).fill(current ? RRC.ink : q.weak ? Color(hex: 0xE8B78F) : Color(hex: 0xD8D8D3)).frame(width: widths[index], height: 6)
+                            .frame(height: 24, alignment: .top).contentShape(Rectangle())
+                    }.buttonStyle(.plain).offset(x: starts[index])
+                    Text(verbatim: current ? "\(q.no)　\(q.title)" : "\(q.no)").lineLimit(1).fixedSize()
+                        .font(V3.sans(12, weight: current ? .medium : .regular)).foregroundStyle(current ? RRC.ink : RRC.sub)
+                        .offset(x: starts[index], y: 12).allowsHitTesting(false)
+                }
             }
         }
+        .frame(height: 32)
     }
 }
 

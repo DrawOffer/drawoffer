@@ -29,27 +29,36 @@ struct MockImportDialog: View {
     private var ready: Bool { !company.trimmingCharacters(in: .whitespaces).isEmpty && (paste ? !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty : file != nil) }
 
     var body: some View {
-        MockFormCard(title: "导入面试记录", sub: "录音或文字稿都可以，导入后会记进你的长期记忆。", serif: true, close: { if !busy { close() } }) {
+        MockFormCard(title: "导入面试记录", sub: "录音或文字稿都可以，导入后会记进你的长期记忆。", serif: !paste, subColor: paste ? MockPalette.fnt : MockPalette.sub,
+                     close: { if !busy { close() } }, footLine: !paste, footTop: paste ? 18 : 25, footBottom: paste ? 15 : 0) {
             if paste {
                 ZStack(alignment: .topLeading) {
-                    TextEditor(text: $text).font(V3.sans(13.5)).scrollContentBackground(.hidden).padding(.horizontal, 9).padding(.vertical, 8)
+                    TextEditor(text: $text).font(V3.sans(13)).foregroundStyle(MockPalette.sub).scrollContentBackground(.hidden).padding(.horizontal, 9).padding(.vertical, 8)
                         .accessibilityLabel("面试文字稿")
-                    if text.isEmpty { Text("把面试问答贴在这里").font(V3.sans(13.5)).foregroundStyle(MockPalette.mute).padding(.horizontal, 14).padding(.vertical, 12).allowsHitTesting(false) }
+                    if text.isEmpty { Text("把面试问答贴在这里").font(V3.sans(13)).foregroundStyle(MockPalette.mute).padding(.horizontal, 14).padding(.vertical, 12).allowsHitTesting(false) }
                 }
-                .frame(height: 160).background(MockPalette.field, in: RoundedRectangle(cornerRadius: 10)).padding(.top, 18)
-                Button("‹ 改为上传文件") { paste = false }.buttonStyle(MockLinkStyle(blue: true)).padding(.top, 8)
+                .frame(height: 160).background(MockPalette.field, in: RoundedRectangle(cornerRadius: 10)).padding(.top, 16)
+                Button("‹ 改为上传文件") { paste = false }.buttonStyle(MockLinkStyle()).padding(.top, 12)
             } else {
+                // Figma 09.01：虚线框里一行标题、一行格式说明，「粘贴文字 ›」跟在格式说明后面
                 Button(action: pick) {
-                    VStack(spacing: 2) {
-                        Text(verbatim: file?.lastPathComponent ?? "拖入录音或文字稿，或点击选择").font(V3.sans(14)).foregroundStyle(MockPalette.ink).lineLimit(1).truncationMode(.middle)
-                        Text(verbatim: file == nil ? "mp3、m4a、wav、PDF、Word" : "点击换一个文件").font(V3.sans(13)).foregroundStyle(MockPalette.fnt)
-                    }
-                    .padding(.horizontal, 16).frame(maxWidth: .infinity).frame(height: 112)
-                    .background(MockPalette.rowHover, in: RoundedRectangle(cornerRadius: 12))
-                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(over ? MockPalette.blue : MockPalette.cl, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
-                    .contentShape(RoundedRectangle(cornerRadius: 12))
+                    RoundedRectangle(cornerRadius: 12).fill(MockPalette.rowHover)
+                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(over ? MockPalette.blue : MockPalette.faint, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+                        .frame(maxWidth: .infinity).frame(height: 111)
+                        .contentShape(RoundedRectangle(cornerRadius: 12))
                 }
-                .buttonStyle(.plain).padding(.top, 18).accessibilityLabel("选择录音或文字稿")
+                .buttonStyle(.plain).padding(.top, 22).accessibilityLabel("选择录音或文字稿")
+                .overlay {
+                    VStack(spacing: 6) {
+                        Text(verbatim: file?.lastPathComponent ?? "拖入录音或文字稿，或点击选择").font(V3.sans(14, weight: .medium)).foregroundStyle(MockPalette.ink)
+                            .lineLimit(1).truncationMode(.middle).allowsHitTesting(false)
+                        HStack(spacing: 8) {
+                            Text(verbatim: file == nil ? "mp3、m4a、wav、PDF、Word" : "点击换一个文件").font(V3.sans(12.5)).foregroundStyle(MockPalette.fnt).allowsHitTesting(false)
+                            Button("粘贴文字 ›") { paste = true }.buttonStyle(MockLinkStyle(blue: true, size: 12.5))
+                        }
+                    }
+                    .padding(.horizontal, 16).padding(.top, 22)
+                }
                 .onDrop(of: [.fileURL], isTargeted: $over) { providers in
                     guard let provider = providers.first else { return false }
                     _ = provider.loadObject(ofClass: URL.self) { url, _ in
@@ -57,31 +66,31 @@ struct MockImportDialog: View {
                     }
                     return true
                 }
-                Button("粘贴文字 ›") { paste = true }.buttonStyle(MockLinkStyle(blue: true)).padding(.top, 8)
             }
             HStack(alignment: .top, spacing: 12) {
                 field("公司") {
-                    TextField("比如云川科技", text: Binding(get: { company }, set: { company = String($0.prefix(100)) })).textFieldStyle(.plain).font(V3.sans(13.5))
+                    TextField("", text: Binding(get: { company }, set: { company = String($0.prefix(100)) })).textFieldStyle(.plain).font(V3.sans(13.5))
+                        .overlay(alignment: .leading) { if company.isEmpty { Text("比如云川科技").font(V3.sans(13.5)).foregroundStyle(MockPalette.mute).allowsHitTesting(false) } }
                 }
                 field("时间") {
                     DatePicker("时间", selection: $date, in: ...Date(), displayedComponents: .date).labelsHidden().datePickerStyle(.field)
                         .environment(\.timeZone, Beijing.calendar.timeZone)
                 }
-            }.padding(.top, 20)
+            }.padding(.top, paste ? 12 : 21)
         } left: {
             if let failed { Text(verbatim: failed).font(V3.sans(12.5)).foregroundStyle(MockPalette.orange).frame(maxWidth: 200, alignment: .leading).fixedSize(horizontal: false, vertical: true) }
         } foot: {
-            Button("取消", action: close).buttonStyle(MockPillStyle(kind: .ghost, height: 36, padding: 20)).disabled(busy)
-            Button(busy ? "正在导入…" : "开始导入") { Task { await run() } }.buttonStyle(MockPillStyle(height: 36, padding: 20)).disabled(!ready || busy)
+            Button("取消", action: close).buttonStyle(MockPillStyle(kind: .ghost, height: 32, padding: 21, size: 13)).disabled(busy)
+            Button(busy ? "正在导入…" : "开始导入") { Task { await run() } }.buttonStyle(MockPillStyle(height: paste ? 38 : 36, padding: 24)).disabled(!ready || busy)
         }
         .onDisappear { upload?.discard() }
     }
 
     private func field<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(verbatim: label).font(V3.sans(13)).foregroundStyle(MockPalette.sub).frame(height: 20)
-            content().padding(.horizontal, 12).frame(height: 40)
-                .background(.white, in: RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(MockPalette.cl))
+        VStack(alignment: .leading, spacing: 4) {
+            Text(verbatim: label).font(V3.sans(paste ? 12.5 : 13)).foregroundStyle(paste ? MockPalette.fnt : MockPalette.sub).frame(height: 20)
+            content().padding(.horizontal, 13).frame(height: 38)
+                .background(.white, in: RoundedRectangle(cornerRadius: 6)).overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.black.opacity(0.14)))
         }.frame(width: 192)
     }
 

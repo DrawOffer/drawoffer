@@ -411,7 +411,12 @@ struct InterviewScheduleView: View {
                                 .frame(height: 12).offset(y: y - 6)
                         }
                         // 滚动定位锚点（offset 不改布局位置，锚点单独按行排）
-                        VStack(spacing: 0) { ForEach(0..<24, id: \.self) { hour in Color.clear.frame(width: 1, height: Self.hourHeight).id("hour\(hour)") } }.padding(.top, Self.gridInset)
+                        // 锚点比整点线高 10：滚到顶时刻度（压在线上、上半截在线以上）不被日期行挡住半截
+                        VStack(spacing: 0) {
+                            ForEach(0..<24, id: \.self) { hour in
+                                Color.clear.frame(width: 1, height: hour == 0 ? Self.gridInset + Self.hourHeight - 10 : Self.hourHeight).id("hour\(hour)")
+                            }
+                        }
                         HStack(spacing: 0) {
                             Color.clear.frame(width: Self.gutter)
                             ForEach(0..<7, id: \.self) { index in dayColumn(plus(week, index), width: width) }

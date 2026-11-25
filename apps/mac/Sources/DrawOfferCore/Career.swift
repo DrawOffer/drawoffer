@@ -175,39 +175,6 @@ public enum CareerStage {
 
 private extension String { func nonempty(_ fallback: String) -> String { isEmpty ? fallback : self } }
 
-/// V4's only page-level primary action. Stage history never mutates the flow.
-public struct CareerFlow: Sendable {
-    public let kind: String
-    public let button: String
-    public let headline: String
-    public let explanation: String
-    public init(_ item: CareerApplication) {
-        if item.ended {
-            kind = "history"; button = "查看阶段记录"
-            headline = item.raw.text("offer_status") == "accepted" ? "已接受 Offer" : item.raw.text("offer_status") == "declined" ? "已婉拒 Offer" : "本次求职已结束"
-            explanation = "保留每个阶段的记录，回顾这次求职经历。"
-        } else if item.stage == "pending" {
-            kind = "apply"; button = "记录投递"; headline = "准备好了，就记录一次投递。"
-            explanation = "记录投递日期、渠道和使用的简历，开始跟进这个岗位。"
-        } else if item.stage == "offer" {
-            let received = item.raw.text("offer_status") == "received"
-            kind = received ? "accept" : "offer"; button = received ? "接受 Offer" : "记录正式 Offer"
-            headline = received ? "正式 Offer 已收到，做出你的选择。" : "口头意向已沟通，等待正式 Offer。"
-            explanation = received ? "核对薪酬、工作地点和入职信息，再确认是否接受。" : "收到正式 Offer 后，记录条件并决定接受或婉拒。"
-        } else if ["assessment", "written_test", "ai_interview", "interview"].contains(item.stage) && item.raw.text("stage_state") == "awaiting_schedule" {
-            kind = "schedule-current"; button = "安排时间"; headline = "先把时间安排好。"
-            explanation = "记录时间、方式和链接，排期会同步到面试日程。"
-        } else if item.raw.text("stage_state") == "scheduled" && item.completedSchedule == nil {
-            kind = "records"; button = "记录与复盘"; headline = "已安排，准备好迎接这次机会。"
-            explanation = "查看排期、记录面试情况；结束后标记完成。"
-        } else {
-            kind = "stage"; button = item.stage == "screening" ? "进入下一阶段" : "通过，添加下一轮"
-            headline = "等待结果，有进展再记录。"
-            explanation = "收到通过通知后，添加下一阶段；多轮面试会分别保留记录。"
-        }
-    }
-}
-
 /// V4 fields that the shared schema keeps in notes. Preserve all unrelated lines.
 public enum CareerNotes {
     public static let fields = ["投递渠道", "口头薪酬", "收到日期", "回复截止", "薪酬说明", "预计入职", "试用期", "Offer 材料"]
@@ -220,38 +187,5 @@ public enum CareerNotes {
         var lines = notes.components(separatedBy: "\n").filter { line in !keys.contains(where: { line.hasPrefix($0 + "：") }) }
         for key in fields where keys.contains(key) { if let value = values[key], !value.isEmpty { lines.append(key + "：" + value.replacingOccurrences(of: "\n", with: " ")) } }
         return lines.joined(separator: "\n").trimmingCharacters(in: .newlines)
-    }
-}
-
-public struct CareerProgressStep: Identifiable, Sendable {
-    public let id: String
-    public let label: String
-    public let date: String
-    public let state: String
-}
-public enum CareerProgress {
-    public static func steps(_ item: CareerApplication) -> [CareerProgressStep] {
-        let stages = item.raw["stages"]?.items ?? []
-        if stages.isEmpty {
-            let type = item.ended ? item.raw.text("current_stage_type") : item.stage
-            let rank = type == "pending" ? 0 : type == "screening" ? 1 : ["assessment", "written_test"].contains(type) ? 2 : type == "offer" ? 4 : 3
-            return ["待投递", "筛选中", "笔试 / 测评", "面试", "Offer"].enumerated().map { index, label in CareerProgressStep(id: String(index), label: label, date: index == 0 ? item.raw.text("created_at") : "", state: index == rank && !item.ended ? "current" : "future") }
-        }
-        let currentID = item.raw["current_stage"]?.text("id") ?? ""
-        var result = [CareerProgressStep(id: "applied", label: "已投递", date: item.raw.text("applied_at"), state: "completed")]
-        for stage in stages {
-            let isCurrent = stage.text("id") == currentID || currentID.isEmpty && stage == stages.last
-            let state = !item.ended && isCurrent ? "current" : "completed"
-            let type = stage.text("stage_type")
-            let oral = type == "offer" && (stage.text("stage_label") == "OC" || item.raw.text("offer_status") == "none")
-            let formal = type == "offer" && ["received", "accepted", "declined"].contains(item.raw.text("offer_status"))
-            result.append(CareerProgressStep(id: stage.text("id"), label: oral ? "OC" : stage.text("stage_label"), date: stage.text("entered_at"), state: oral && formal ? "completed" : state))
-            if oral && formal { result.append(CareerProgressStep(id: "formal", label: "Offer", date: CareerNotes.value("收到日期", in: item.raw.text("notes")), state: state)) }
-        }
-        if !item.ended {
-            let future: [String] = item.stage == "screening" ? ["笔试 / 测评", "面试", "Offer"] : ["assessment", "written_test"].contains(item.stage) ? ["面试", "Offer"] : ["interview", "ai_interview"].contains(item.stage) ? ["Offer"] : []
-            for label in future { result.append(CareerProgressStep(id: "future:" + label, label: label, date: "", state: "future")) }
-        }
-        return result
     }
 }

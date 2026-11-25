@@ -17,7 +17,7 @@ struct AccountApiKeySection: View {
     @State private var deleting: AccountApiKeyItem?
     @State private var removing = false
 
-    private static let guideURL = URL(string: "https://github.com/DrawOffer/drawoffer-mcp")
+    fileprivate static let guideURL = URL(string: "https://github.com/DrawOffer/drawoffer-mcp")
     private var account: String { if case .signedIn(let user) = session.phase { return user.id }; return "" }
     private var full: Bool { (keys?.count ?? 0) >= AccountApiKeyItem.limit }
 
@@ -36,10 +36,11 @@ struct AccountApiKeySection: View {
             }.frame(height: 18).padding(.bottom, 6)
             AccountHairline()
             rows
-            HStack(spacing: 0) {
+            // 04.11：说明挪到组尾（最后一把 Key 下方 7），同一行末尾接蓝色「怎么配置 →」
+            HStack(spacing: 4) {
                 Text("让 Claude、Cursor 等 AI 工具通过 MCP 读取你的简历、岗位和投递记录，最多 \(AccountApiKeyItem.limit) 把。")
-                Button("怎么配置 →") { if let url = Self.guideURL { NSWorkspace.shared.open(url) } }.buttonStyle(.plain).foregroundStyle(V3.link)
-            }.font(V3.sans(12)).foregroundStyle(V3.fnt).frame(minHeight: 14).padding(.top, 8)
+                Button("怎么配置 →") { if let url = Self.guideURL { NSWorkspace.shared.open(url) } }.buttonStyle(.plain).foregroundStyle(V3.blue)
+            }.font(V3.sans(12)).foregroundStyle(V3.fnt).frame(minHeight: 14).padding(.top, 7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: "\(account)|\(reload)") { await load() }
@@ -141,7 +142,8 @@ struct AccountApiKeySecret: Identifiable {
     let value: String
 }
 
-/// 一把 Key 一行：50 高、底部细线；名称 14 墨黑，前缀等宽 12 浅字，权限 13 sub，垃圾桶悬停只加深颜色（不加灰底）。
+/// 一把 Key 一行（04.11）：50 高、底部细线；名称 14 墨黑，前缀等宽 13、权限 13 都是 fnt 灰，
+/// 最右 16 的垃圾桶；不再显示「最近使用 / 从未使用」。
 private struct AccountApiKeyRow: View {
     let key: AccountApiKeyItem
     let delete: () -> Void
@@ -151,11 +153,11 @@ private struct AccountApiKeyRow: View {
         HStack(spacing: 16) {
             Text(key.name).font(V3.sans(14)).foregroundStyle(V3.txt).lineLimit(1).truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text("\(key.prefix)…").font(.system(size: 12, design: .monospaced)).foregroundStyle(V3.fnt).lineLimit(1)
-            Text(key.scopeLabel).font(V3.sans(13)).foregroundStyle(V3.sub).frame(width: 28, alignment: .trailing)
+            Text("\(key.prefix)…").font(.system(size: 13, design: .monospaced)).foregroundStyle(V3.fnt).lineLimit(1)
+            Text(key.scopeLabel).font(V3.sans(13)).foregroundStyle(V3.fnt).frame(width: 26, alignment: .trailing)
             Button(action: delete) {
-                Image(systemName: "trash").font(.system(size: 12)).foregroundStyle(hover ? V3.red : V3.fnt)
-                    .frame(width: 20, height: 20).contentShape(Rectangle())
+                Image(systemName: "trash").font(.system(size: 13)).foregroundStyle(hover ? V3.red : V3.fnt)
+                    .frame(width: 16, height: 16).contentShape(Rectangle())
             }
             .buttonStyle(.plain).onHover { hover = $0 }.help("删除").accessibilityLabel("删除 \(key.name)")
         }
@@ -164,7 +166,7 @@ private struct AccountApiKeyRow: View {
     }
 }
 
-// MARK: - 创建 API Key（520 宽）
+// MARK: - 创建 API Key（460 宽，04.02）
 
 private struct AccountApiKeyCreateSheet: View {
     @Environment(SessionStore.self) private var session
@@ -183,52 +185,51 @@ private struct AccountApiKeyCreateSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("创建 API Key").font(.system(size: 17, weight: .semibold)).foregroundStyle(V3.txt).frame(height: 22).padding(.top, 4)
-            Text("持有 Key 的工具可以读取你的简历、岗位和投递记录，请只填进你信任的工具。")
-                .font(V3.sans(13)).foregroundStyle(V3.sub).lineHeight(13, 18).fixedSize(horizontal: false, vertical: true).padding(.top, 12)
-            HStack(spacing: 8) {
-                Text("名称").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
-                Text("用来区分用途，例如「Claude Code」").font(V3.sans(12)).foregroundStyle(V3.fnt)
-            }.frame(height: 16).padding(.top, 22)
-            TextField("", text: $name).textFieldStyle(.plain).font(V3.sans(13.5)).foregroundStyle(V3.txt)
+            Text("创建 API Key").font(V3.sans(18, weight: .medium)).foregroundStyle(V3.txt).frame(height: 22).padding(.top, 4)
+            Text("持有 Key 的工具能读取你的简历、岗位和投递记录，只填进你信任的工具。")
+                .font(V3.sans(13)).foregroundStyle(V3.fnt).lineHeight(13, 21).fixedSize(horizontal: false, vertical: true).padding(.top, 12)
+            Text("名称").font(V3.sans(14, weight: .medium)).foregroundStyle(V3.sub).frame(height: 17).padding(.top, 19)
+            TextField("", text: $name).textFieldStyle(.plain).font(V3.sans(14)).foregroundStyle(V3.txt)
                 .focused($focused).disabled(saving)
-                .padding(.horizontal, 12).frame(height: 32)
-                .overlay(RoundedRectangle(cornerRadius: 7.5).stroke(focused ? V3.txt : V3.cl))
+                .padding(.horizontal, 14).frame(height: 39)
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(focused ? V3.txt : V3.cl))
                 .onChange(of: name) { if name.count > 64 { name = String(name.prefix(64)) } }
                 .onSubmit { Task { await save() } }
                 .accessibilityLabel("名称")
-                .padding(.top, 8)
-            Text("权限").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt).frame(height: 16).padding(.top, 18)
-            // 单选：选中项白底 1px 墨黑细边，未选浅描边（不加灰底）
-            HStack(spacing: 10) {
+                .padding(.top, 10)
+            Text("用来区分用途，以后在列表里认出它").font(V3.sans(12)).foregroundStyle(V3.fnt).frame(height: 14).padding(.top, 10)
+            Text("权限").font(V3.sans(14, weight: .medium)).foregroundStyle(V3.txt).frame(height: 17).padding(.top, 25)
+            // 单选两行（44 高）：圆点 15 + 名称 + 灰字说明；选中行 1px 浅灰描边
+            VStack(spacing: 0) {
                 ForEach(scopes, id: \.0) { option in
+                    let selected = scope == option.0
                     Button { scope = option.0 } label: {
-                        HStack(alignment: .top, spacing: 8) {
-                            Image(systemName: scope == option.0 ? "largecircle.fill.circle" : "circle")
-                                .font(.system(size: 12)).foregroundStyle(scope == option.0 ? V3.txt : V3.fnt2).padding(.top, 1)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(option.1).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
-                                Text(option.2).font(V3.sans(12)).foregroundStyle(V3.fnt)
-                            }
+                        HStack(spacing: 12) {
+                            ZStack {
+                                Circle().stroke(selected ? V3.txt : V3.fnt2, lineWidth: 1.5)
+                                if selected { Circle().fill(V3.txt).padding(3.5) }
+                            }.frame(width: 15, height: 15).padding(.leading, 0.5).padding(.trailing, 0)
+                            Text(option.1).font(V3.sans(14, weight: selected ? .medium : .regular)).foregroundStyle(V3.txt)
+                                .frame(width: 40, alignment: .leading)
+                            Text(option.2).font(V3.sans(12)).foregroundStyle(Color(hex: 0x96968F))
                             Spacer(minLength: 0)
                         }
-                        .padding(.horizontal, 12).padding(.vertical, 10).frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.white, in: RoundedRectangle(cornerRadius: 7.5))
-                        .overlay(RoundedRectangle(cornerRadius: 7.5).stroke(scope == option.0 ? V3.txt : V3.cl))
-                        .contentShape(RoundedRectangle(cornerRadius: 7.5))
+                        .frame(maxWidth: .infinity, alignment: .leading).frame(height: 44)
+                        .overlay(Rectangle().stroke(selected ? V3.line : Color.clear))
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain).disabled(saving)
-                    .accessibilityLabel("\(option.1)：\(option.2)").accessibilityAddTraits(scope == option.0 ? .isSelected : [])
+                    .accessibilityLabel("\(option.1)：\(option.2)").accessibilityAddTraits(selected ? .isSelected : [])
                 }
-            }.padding(.top, 8)
-            HStack(spacing: 10) {
+            }.padding(.top, 10)
+            HStack(spacing: 8) {
                 Text(error ?? "").font(V3.sans(12)).foregroundStyle(V3.red).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
-                Button("取消", action: close).buttonStyle(V3ButtonStyle(kind: .ghost, height: 32)).disabled(saving)
-                Button(saving ? "创建中…" : "创建") { Task { await save() } }.buttonStyle(V3ButtonStyle(kind: .dark, height: 32, width: 100))
+                Button("取消", action: close).buttonStyle(AccountPillButtonStyle(kind: .ghost, width: 79)).disabled(saving)
+                Button(saving ? "创建中…" : "创建") { Task { await save() } }.buttonStyle(AccountPillButtonStyle(kind: .dark, width: 100))
                     .disabled(!valid || saving).keyboardShortcut(.defaultAction)
-            }.padding(.top, 24)
+            }.padding(.top, 20)
         }
-        .padding(24).frame(width: 520, alignment: .leading)
+        .padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 20).frame(width: 460, alignment: .leading)
         .background { Button("", action: close).keyboardShortcut(.cancelAction).opacity(0).accessibilityHidden(true).disabled(saving) }
         .onAppear { focused = true }
     }
@@ -247,7 +248,7 @@ private struct AccountApiKeyCreateSheet: View {
     }
 }
 
-// MARK: - API Key 已创建（560 宽，明文只显示这一次）
+// MARK: - API Key 已创建（520 宽，04.03，明文只显示这一次）
 
 private struct AccountApiKeySecretSheet: View {
     let value: String
@@ -256,32 +257,40 @@ private struct AccountApiKeySecretSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("API Key 已创建").font(.system(size: 17, weight: .semibold)).foregroundStyle(V3.txt).frame(height: 22).padding(.top, 4)
-            Text("请现在复制并保存。关闭后无法再次查看完整的 Key，丢失只能删除后重新创建。")
-                .font(V3.sans(13)).foregroundStyle(V3.sub).lineHeight(13, 18).fixedSize(horizontal: false, vertical: true).padding(.top, 12)
-            HStack(spacing: 8) {
-                Image(systemName: "lock").font(.system(size: 12)).foregroundStyle(V3.fnt)
-                Text(value).font(.system(size: 12.5, design: .monospaced)).foregroundStyle(V3.txt)
+            Text("API Key 已创建").font(V3.sans(18, weight: .medium)).foregroundStyle(V3.txt).frame(height: 22).padding(.top, 4)
+            Text("现在复制保存。关闭后看不到完整的 Key，丢了只能删掉重建。")
+                .font(V3.sans(13)).foregroundStyle(V3.fnt).lineHeight(13, 18).fixedSize(horizontal: false, vertical: true).padding(.top, 12)
+            // 49 高浅灰圆角 10 条：锁 + 完整 Key（13 常规字，可选中）+ 右侧「复制」
+            HStack(spacing: 9) {
+                Image(systemName: "lock").font(.system(size: 13)).foregroundStyle(V3.fnt).frame(width: 16)
+                Text(value).font(.system(size: 13)).foregroundStyle(V3.txt)
                     .textSelection(.enabled).lineLimit(1).truncationMode(.middle)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityLabel("API Key")
+                Button(action: copy) {
+                    HStack(spacing: 4) {
+                        Image(systemName: copied == true ? "checkmark" : "doc.on.doc").font(.system(size: 12))
+                        Text(copied == true ? "已复制" : "复制").font(V3.sans(13))
+                    }.foregroundStyle(V3.txt).contentShape(Rectangle())
+                }.buttonStyle(.plain)
             }
-            .padding(.horizontal, 12).frame(height: 34)
-            .background(V3.field, in: RoundedRectangle(cornerRadius: 7.5))
+            .padding(.horizontal, 13).padding(.trailing, 7).frame(height: 49)
+            .background(V3.field, in: RoundedRectangle(cornerRadius: 10))
             .padding(.top, 20)
             if copied == false {
                 Text("无法自动复制，请手动选中后复制。").font(V3.sans(12)).foregroundStyle(V3.red).padding(.top, 8)
             }
+            Text("下一步：填进 AI 工具").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt).frame(height: 16).padding(.top, 22)
+            Text("在 Claude Code、Cursor 的 MCP 设置里添加 DrawOffer，把这把 Key 填进去。具体步骤见使用说明。")
+                .font(V3.sans(12.5)).foregroundStyle(V3.fnt).lineHeight(12.5, 20).fixedSize(horizontal: false, vertical: true).padding(.top, 11)
             HStack(spacing: 10) {
+                Button("查看使用说明 →") { if let url = AccountApiKeySection.guideURL { NSWorkspace.shared.open(url) } }
+                    .buttonStyle(.plain).font(V3.sans(13)).foregroundStyle(Color(hex: 0x2966D9))
                 Spacer()
-                Button(action: copy) {
-                    Image(systemName: copied == true ? "checkmark" : "doc.on.doc").font(.system(size: 11, weight: .medium))
-                    Text(copied == true ? "已复制" : "复制")
-                }.buttonStyle(V3ButtonStyle(kind: .ghost, height: 32))
-                Button("完成", action: close).buttonStyle(V3ButtonStyle(kind: .dark, height: 32, width: 100)).keyboardShortcut(.defaultAction)
-            }.padding(.top, 24)
+                Button("完成", action: close).buttonStyle(AccountPillButtonStyle(kind: .dark, width: 100)).keyboardShortcut(.defaultAction)
+            }.padding(.top, 18)
         }
-        .padding(24).frame(width: 560, alignment: .leading)
+        .padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 20).frame(width: 520, alignment: .leading)
         .background { Button("", action: close).keyboardShortcut(.cancelAction).opacity(0).accessibilityHidden(true) }
     }
 

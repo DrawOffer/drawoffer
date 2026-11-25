@@ -5,3 +5,4 @@
 | 日期 | upstream 提交 | 说明 |
 | --- | --- | --- |
 | 2026-11-16 | 4ac1ef568 | 从主仓库拆分，Mac / Windows / Electron 壳与主仓库 dev 此刻一致 |
+| 2026-11-19 | 0e5e31d9f | 只对齐纸面渲染与模板：resume-themes / crafted 样式、示例证件照、模板装饰底图、编辑器画布拖动；同期 Web 页面、接口类型等其余改动仍待按 .sync/pending.md 逐项同步 |

@@ -156,6 +156,7 @@ struct DatasetLibraryView: View {
                     tabButton("mine","我的项目",loaded ? "\(folders.count)" : "")
                     tabButton("jobs","求职进程",jobState == "ready" ? "\(listedProjects.count)" : "")
                     Spacer(minLength:0)
+                    if loaded, let storageSummary { Text(storageSummary).font(V3.sans(12)).foregroundStyle(LibraryTone.faint).lineLimit(1) }
                     if loaded && tab == "mine" && !folders.isEmpty { sortMenu }
                 }.frame(height:20).padding(.top,30).padding(.bottom,17)
             } else {
@@ -182,12 +183,13 @@ struct DatasetLibraryView: View {
         .padding(.top,view == "home" ? 68 : 52)
     }
     private var homeSummary: String {
-        var parts = ["\(projectCount) 个项目","\(datasets.count) 份资料"]
-        if let storage {
-            parts.append("资料 \(JobProjects.size(storage["datasetBytesUsed"]?.numberValue ?? 0)) / \(JobProjects.size(storage["datasetBytesLimit"]?.numberValue ?? 0))")
-            parts.append("音视频 \(JobProjects.size(storage["mediaBytesUsed"]?.numberValue ?? 0)) / \(JobProjects.size(storage["mediaBytesLimit"]?.numberValue ?? 0))")
-        }
-        return parts.joined(separator:" · ")
+        "\(projectCount) 个项目 · \(datasets.count) 份资料"
+    }
+    /// 存储用量放到标签栏右端（Web `DatasetsPage`：「存储用量放到标签栏右端」；Figma 05.01 摘要只写项目与资料数）。
+    private var storageSummary: String? {
+        guard let storage else { return nil }
+        return "资料 \(JobProjects.size(storage["datasetBytesUsed"]?.numberValue ?? 0)) / \(JobProjects.size(storage["datasetBytesLimit"]?.numberValue ?? 0))"
+            + " · 音视频 \(JobProjects.size(storage["mediaBytesUsed"]?.numberValue ?? 0)) / \(JobProjects.size(storage["mediaBytesLimit"]?.numberValue ?? 0))"
     }
     private func tabButton(_ id:String,_ label:String,_ count:String) -> some View {
         Button { tab = id; query = "" } label:{
@@ -205,7 +207,7 @@ struct DatasetLibraryView: View {
             }
         } label:{
             HStack(spacing:4) { Text(sortLabel).font(V3.sans(12.5)).foregroundStyle(V3.sub); Image(systemName:"chevron.down").font(.system(size:8,weight:.medium)).foregroundStyle(LibraryTone.faint) }
-        }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("排序方式：\(sortLabel)")
+        }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().accessibilityLabel("排序方式：\(sortLabel)")
     }
     private var sortLabel: String { ["name":"名称","count":"资料数量"][sortKey] ?? "最近活动" }
     @ViewBuilder private var headerActions: some View {
@@ -270,15 +272,6 @@ struct DatasetLibraryView: View {
         }
     }
     private func go(_ next:String) { guard !busy else { return }; view = next; if next == "home" { tab = tab } ; selected = []; query = ""; batchMode = false }
-    private func relativeDay(_ value:String,withTime:Bool = false) -> String {
-        guard let date = CareerApplication.date(value) else { return "" }
-        let calendar = Beijing.calendar
-        let days = calendar.dateComponents([.day],from:calendar.startOfDay(for:date),to:calendar.startOfDay(for:Date())).day ?? 0
-        let time = self.date(value,format:"HH:mm")
-        if days == 0 { return withTime ? "今天 " + time : "今天" }
-        if days == 1 { return withTime ? "昨天 " + time : "昨天" }
-        return listDate(value)
-    }
     private func listDate(_ value:String) -> String {
         guard let date = CareerApplication.date(value) else { return value }
         return self.date(value,format:Beijing.calendar.component(.year,from:date) == Beijing.calendar.component(.year,from:Date()) ? "MM-dd" : "yyyy-MM-dd")
@@ -346,7 +339,7 @@ struct DatasetLibraryView: View {
             Menu { Button("重命名") { show("renameFolder",item) }; Divider(); Button("删除项目及资料",role:.destructive) { show("deleteFolder",item) } } label:{
                 Image(systemName:"ellipsis").font(.system(size:12,weight:.medium)).foregroundStyle(LibraryTone.faint).frame(width:24,height:20)
             }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().padding(.trailing,12).padding(.top,136).disabled(busy)
+                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().padding(.trailing,12).padding(.top,136).disabled(busy)
                 .accessibilityLabel("项目「\(item.text("name"))」操作菜单")
         }
     }
@@ -658,7 +651,7 @@ struct DatasetLibraryView: View {
                         Image(systemName:"ellipsis").font(.system(size:12,weight:.medium)).foregroundStyle(hovered ? V3.txt : LibraryTone.faint).frame(width:27,height:27)
                             .background(hovered ? Color.white : .clear,in:RoundedRectangle(cornerRadius:6.5)).overlay(RoundedRectangle(cornerRadius:6.5).stroke(hovered ? V3.cl : .clear))
                     }
-                        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().disabled(busy).accessibilityLabel("打开「\(item.displayName)」操作菜单")
+                        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().disabled(busy).accessibilityLabel("打开「\(item.displayName)」操作菜单")
                 }
             }.frame(width:42,alignment:.trailing)
         }
@@ -697,7 +690,7 @@ struct DatasetLibraryView: View {
     /// 底部 88 高的按钮行带顶部分隔线，按钮一律靠右（32 高：Bordered「取消」+ 墨黑主按钮），管理关联左侧放红字「取消关联」。
     private var sheet: some View {
         let kind = action ?? ""
-        let width: CGFloat = kind == "preview" ? 640 : kind == "media" ? 640 : kind == "upload" ? 560 : kind == "associate" ? 540 : ["move","pick"].contains(kind) ? 480 : 440
+        let width: CGFloat = kind == "preview" ? 640 : kind == "media" ? 640 : kind == "upload" ? 560 : kind == "associate" ? 540 : ["move","pick","createFolder"].contains(kind) ? 480 : 440
         return VStack(alignment:.leading,spacing:0) {
             VStack(alignment:.leading,spacing:0) {
                 Text(sheetTitle).font(V3.serif(kind == "preview" || kind == "media" ? 22 : 20)).foregroundStyle(V3.txt).lineLimit(1).frame(height:29)
@@ -707,12 +700,13 @@ struct DatasetLibraryView: View {
                 VStack(alignment:.leading,spacing:0) { sheetContent }.padding(.top,["preview","media"].contains(kind) ? 0 : 22)
                 if let sheetError, !["preview","media"].contains(kind) { Text(sheetError).foregroundStyle(V3.red).font(V3.sans(11.5)).padding(.top,12) }
             }
-            .padding(.horizontal,31).padding(.top,30).padding(.bottom,32)
-            Rectangle().fill(V3.line).frame(height:1)
+            .padding(.horizontal,kind == "createFolder" ? 23 : 31).padding(.top,kind == "createFolder" ? 26 : 30).padding(.bottom,kind == "createFolder" ? 20 : 32)
+            if kind != "createFolder" { Rectangle().fill(V3.line).frame(height:1) }
             HStack(spacing:10) {
                 if kind == "associate" && !target.text("interview_session_id").isEmpty {
                     Button("取消关联") { Task { await save(unlink:true) } }.buttonStyle(.plain).font(V3.sans(12,weight:.medium)).foregroundStyle(V3.red).disabled(busy)
                 }
+                if kind == "createFolder" { Text("求职进程的项目会自动生成，无需手动创建").font(V3.sans(11.5)).foregroundStyle(LibraryTone.faint).lineLimit(1) }
                 if kind == "upload" { Text(stagedSummary).font(V3.sans(11.5)).foregroundStyle(LibraryTone.faint).lineLimit(1) }
                 Spacer(minLength:0)
                 if ["preview","media"].contains(kind) {
@@ -723,7 +717,7 @@ struct DatasetLibraryView: View {
                         .buttonStyle(V3ButtonStyle(kind:["deleteFolder","deleteBatch"].contains(kind) ? .danger : .dark,height:36))
                         .disabled(busy || (loading && kind != "upload") || confirmDisabled)
                 }
-            }.padding(.horizontal,31).frame(height:88)
+            }.padding(.horizontal,kind == "createFolder" ? 23 : 31).frame(height:kind == "createFolder" ? 64 : 88)
         }
         .frame(width:width).frame(maxHeight:760)
         .background { Button("") { if !busy { if kind == "upload" { discardStaged() }; action = nil } }.keyboardShortcut(.cancelAction).opacity(0).accessibilityHidden(true) } // 不画 ×，Esc 关闭
@@ -769,18 +763,17 @@ struct DatasetLibraryView: View {
     @ViewBuilder private var sheetContent: some View {
         if ["createFolder","renameFolder","rename","uploadRename"].contains(action ?? "") {
             VStack(alignment:.leading,spacing:8) {
-                Text(["createFolder":"项目名称","renameFolder":"项目名称"][action ?? ""] ?? "资料名称").font(V3.sans(13,weight:.medium)).foregroundStyle(V3.txt).frame(height:18)
+                Text(["createFolder":"项目名称","renameFolder":"项目名称"][action ?? ""] ?? "资料名称").font(V3.sans(action == "createFolder" ? 12.5 : 13,weight:.medium)).foregroundStyle(V3.txt).frame(height:18)
                 TextField("",text:Binding(get:{name},set:{ name = action == "createFolder" || action == "renameFolder" ? String($0.prefix(64)) : $0 }),prompt:Text(action == "createFolder" ? "例如：系统设计复习、英文简历与求职信" : "").foregroundStyle(V3.fnt2)).textFieldStyle(.plain).font(V3.sans(13))
                     .padding(.horizontal,12).frame(height:36).background(.white,in:RoundedRectangle(cornerRadius:8)).overlay(RoundedRectangle(cornerRadius:8).stroke(V3.txt.opacity(0.85)))
                     .onSubmit { Task { await save() } }.disabled(busy)
                 if action == "createFolder" {
-                    HStack(spacing:6) { Text("项目说明").font(V3.sans(13,weight:.medium)).foregroundStyle(V3.txt); Text("可选").font(V3.sans(11.5)).foregroundStyle(LibraryTone.faint) }.frame(height:18).padding(.top,14)
+                    HStack(spacing:6) { Text("项目说明").font(V3.sans(12.5,weight:.medium)).foregroundStyle(V3.txt); Text("可选").font(V3.sans(11.5)).foregroundStyle(LibraryTone.faint) }.frame(height:18).padding(.top,14)
                     ZStack(alignment:.topLeading) {
-                        if descriptionText.isEmpty { Text("告诉 AI 这个项目的目标，例如：准备字节三面行为面试，回答按 STAR 结构，控制在 2 分钟内。").font(V3.sans(13)).foregroundStyle(V3.fnt2).padding(.horizontal,12).padding(.vertical,10).allowsHitTesting(false) }
+                        if descriptionText.isEmpty { Text("告诉 AI 这个项目的目标，例如：准备字节三面行为面试，回答按 STAR 结构，控制在 2 分钟内。").font(V3.sans(12.5)).foregroundStyle(V3.fnt2).padding(.horizontal,12).padding(.vertical,10).allowsHitTesting(false) }
                         TextEditor(text:Binding(get:{descriptionText},set:{ descriptionText = String($0.prefix(500)) })).font(V3.sans(13)).scrollContentBackground(.hidden).scrollIndicators(.never)
                             .padding(.horizontal,7).padding(.vertical,6).disabled(busy).accessibilityLabel("项目说明")
-                    }.frame(height:76).background(.white,in:RoundedRectangle(cornerRadius:8)).overlay(RoundedRectangle(cornerRadius:8).stroke(V3.cl))
-                    Text("求职进程的项目会自动生成，无需手动创建").font(V3.sans(11.5)).foregroundStyle(LibraryTone.faint).padding(.top,4)
+                    }.frame(height:76).background(.white,in:RoundedRectangle(cornerRadius:8)).overlay(RoundedRectangle(cornerRadius:8).stroke(Color(hex:0xECECEA)))
                 }
             }
         }
@@ -961,13 +954,21 @@ struct DatasetLibraryView: View {
         let generation = UUID(); loadID = generation
         guard !account.isEmpty else { loaded = true; return }; loading = true; error = nil
         do {
+            var attempt = 0, withFolders = true
             repeat {
+                // 轮询时只重读资料列表；有资料处理完（处理中的变少）才连资料夹一起重读
                 async let files = request("/api/datasets")
-                async let groups = request("/api/datasets/folders")
-                let (data,group) = try await (files,groups); try Task.checkCancellation(); guard active, loadID == generation else { return }
-                datasets = (data["datasets"]?.items ?? []).map(DatasetRecord.init); folders = group["folders"]?.items ?? []; limits = data["limits"] ?? .null; loaded = true; loading = false; selected.formIntersection(datasets.map(\.id))
+                let group: JSONValue? = withFolders ? try await request("/api/datasets/folders") : nil
+                let data = try await files; try Task.checkCancellation(); guard active, loadID == generation else { return }
+                let wasBusy = Set(datasets.filter(\.busy).map(\.id))
+                datasets = (data["datasets"]?.items ?? []).map(DatasetRecord.init); limits = data["limits"] ?? .null; loaded = true; loading = false; selected.formIntersection(datasets.map(\.id))
+                if let group { folders = group["folders"]?.items ?? [] }
                 if DatasetRequest.id(view) && !folders.contains(where:{$0.text("id")==view}) { view = "home"; tab = "mine" }
-                if !poll || !datasets.contains(where:{$0.busy}) { break }; try await Task.sleep(for:.seconds(3))
+                withFolders = !wasBusy.isSubset(of: Set(datasets.filter(\.busy).map(\.id)))
+                if withFolders && attempt > 0 { await session.api.purgeCache() }
+                if !poll || !datasets.contains(where:{$0.busy}) { break }
+                // 有资料在处理：3 秒起逐步放慢到 20 秒，App 不在前台时暂停
+                guard await Polling.wait(attempt,first:3,cap:20,topic:"parse_task") else { break }; attempt += 1
             } while !Task.isCancelled
         } catch { if active && loadID == generation && !(error is CancellationError) { self.error = explain(error) } }
         if active && loadID == generation && !Task.isCancelled { loading = false }
@@ -1236,8 +1237,12 @@ private struct LibrarySearchField: View {
     var body: some View {
         HStack(spacing:7) {
             Image(systemName:"magnifyingglass").font(.system(size:11.5)).foregroundStyle(LibraryTone.faint)
-            TextField("",text:$text,prompt:Text(placeholder).foregroundStyle(LibraryTone.faint)).textFieldStyle(.plain)
-                .font(V3.sans(12.5)).foregroundStyle(V3.txt).focused($focused)
+            TextField("",text:$text).textFieldStyle(.plain)
+                .font(V3.sans(12.5)).foregroundStyle(V3.txt).focused($focused).accessibilityLabel(placeholder)
+                .overlay(alignment:.leading) {
+                    // macOS 26 上 prompt 颜色会被 foregroundStyle 覆盖，占位字手动叠加。
+                    if text.isEmpty { Text(placeholder).font(V3.sans(12.5)).foregroundStyle(LibraryTone.faint).lineLimit(1).allowsHitTesting(false) }
+                }
             if !text.isEmpty {
                 Button { text = "" } label:{ Image(systemName:"xmark.circle.fill").font(.system(size:11)).foregroundStyle(V3.fnt2) }.buttonStyle(.plain).accessibilityLabel("清除搜索")
             }
@@ -1245,6 +1250,8 @@ private struct LibrarySearchField: View {
         .padding(.horizontal,12).frame(width:width,height:height)
         .background(focused ? Color.white : V3.field,in:RoundedRectangle(cornerRadius:8))
         .overlay(RoundedRectangle(cornerRadius:8).stroke(focused ? Color.accentColor.opacity(0.5) : .clear,lineWidth:3).padding(-1.5))
+        // 窗口打开时 AppKit 会把首个输入框设为第一响应者；设计稿里搜索框默认不聚焦，出现后撤掉这次自动聚焦。
+        .task { try? await Task.sleep(for:.milliseconds(80)); if text.isEmpty { focused = false } }
     }
 }
 
@@ -1308,19 +1315,20 @@ private struct LibraryAlertGrayStyle: ButtonStyle {
 
 enum LibraryTypography {
     static let registered: Void = {
-        for (name,ext) in [("LibrarySans-Regular","otf"),("LibrarySerif-SemiBold","ttf")] {
+        for (name,ext) in [("LibrarySerif-SemiBold","ttf")] {
             if let url = Bundle.module.url(forResource:name,withExtension:ext,subdirectory:"Library") {
                 CTFontManagerRegisterFontsForURL(url as CFURL,.process,nil)
             }
         }
     }()
+    /// 正文用系统字体（拉丁 SF、中文苹方），和 Web `--ui-font-sans` 在 macOS 上实际落到的 PingFang SC 一致，
+    /// 有真实的中粗 / 粗体字重；随包的思源黑体只有常规一档，粗体靠模拟，屏幕上发虚，已不再使用。
     static func sans(_ size:CGFloat,weight:Font.Weight = .regular) -> Font {
-        _ = registered
-        return .custom("DrawOfferLibrarySans-Regular",size:size).weight(weight)
+        .system(size:size,weight:weight)
     }
     static func serif(_ size:CGFloat) -> Font {
         _ = registered
-        return .custom("DrawOfferLibrarySerif-SemiBold",size:size)
+        return .custom("LinkResumeLibrarySerif-SemiBold",size:size)
     }
 }
 

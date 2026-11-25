@@ -32,6 +32,8 @@ struct MockReportV2: View {
     @State private var player = InterviewerVoice()
     @State private var playing: String?
 
+    private var reportShown: Bool { detail.map { $0["report"] != nil && $0["report"] != .null } ?? false }
+
     var body: some View {
         Group {
             if let detail, let view = MockRV.view(detail, context: context) {
@@ -50,6 +52,11 @@ struct MockReportV2: View {
             } else { V3Loading("正在打开复盘…").frame(maxWidth: .infinity, maxHeight: .infinity).background(.white) }
         }
         .overlay { MockNoticeToast(notice: $notice) }
+        .coachMarkHost()
+        // 看过任意一份报告后，首页就从“报告好了”换成记忆首页（Web `FIRST_REPORT_SEEN`；与 HomeMemoryView 同一个键）
+        .onChange(of: reportShown, initial: true) { _, shown in
+            if shown, !session.coachUser.isEmpty { UserDefaults.standard.set(true, forKey: CoachGuide.firstReportSeenKey(session.coachUser)) }
+        }
         .task(id: id) { await load() }
         .task(id: "\(id)-\(detail?["report"]?["total_score"]?.numberValue ?? -1)") { await loadContext() }
         .task(id: detail?.display("job_application_id") ?? "") { await loadNext() }

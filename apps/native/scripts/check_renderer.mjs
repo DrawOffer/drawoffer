@@ -28,8 +28,10 @@ for (const path of ['apps/windows/src/DrawOffer.Core/Resources/resume-templates.
 const { templates } = JSON.parse(fixtures);
 assert.equal(templates.length, 9);
 assert.equal(templates.filter(t => t.key.startsWith('muse-')).length, 6);
-const shared = await build({ stdin: { contents: `export {renderResumePrintDocument} from './apps/web/src/features/preview/print/resumePrintDocument';`, resolveDir: root }, bundle: true, write: false, format: 'iife', globalName: 'SharedPaper' });
-const css = ['styles.css', 'app.css', 'features/preview/print/resume-print.css', 'muse-templates.css'].map(path => readFileSync(resolve(root, 'apps/web/src', path), 'utf8')).join('\n');
+const shared = await build({ stdin: { contents: `export {renderResumePrintDocument} from './apps/web/src/features/preview/print/resumePrintDocument'; export {syncResumeIdentityCentering, syncResumeSheetColumns} from './apps/web/src/features/preview/print/resumeSheetDecoration';`, resolveDir: root }, bundle: true, write: false, format: 'iife', globalName: 'SharedPaper' });
+// 与 entry.ts 同序：模板样式已从 app.css 拆到 resume-themes.css，风格合集单独拼入并去掉它的 @import
+const css = ['styles.css', 'app.css', 'resume-themes.css', 'crafted-style-collection.css', 'features/preview/print/resume-print.css', 'muse-templates.css'].map(path => readFileSync(resolve(root, 'apps/web/src', path), 'utf8').replace('@import "./crafted-style-collection.css";', '')).join('\n')
+  + '\n[data-resume-print-document]{height:auto;overflow:visible}html,body{margin:0}'; // 与 entry.ts 的原生规则一致
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH || [
   chromium.executablePath(), '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   '/usr/bin/google-chrome', '/usr/bin/chromium',
@@ -62,7 +64,13 @@ try {
     await native.evaluate(request => { window.__messages = []; window.drawoffer.render(request); }, request);
     await native.waitForFunction(() => window.__messages.some(m => ['rendered','error'].includes(m.type)));
     assert.equal(await native.evaluate(() => window.__messages.at(-1).type), 'rendered', template.key);
-    await reference.evaluate(request => { document.getElementById('paper-root').innerHTML = SharedPaper.renderResumePrintDocument(request); }, request);
+    // 参照 Web ResumePreview：出纸面后再做身份区居中与侧栏补满
+    await reference.evaluate(request => {
+      document.getElementById('paper-root').innerHTML = SharedPaper.renderResumePrintDocument(request);
+      const paper = document.querySelector('[data-resume-print-document]');
+      SharedPaper.syncResumeIdentityCentering({ paper });
+      SharedPaper.syncResumeSheetColumns({ paper });
+    }, request);
     const actual = await native.evaluate(snapshot);
     cases.push({ request, expected: {
       text: actual.text, colors: actual.colors,
@@ -95,7 +103,10 @@ try {
   await native.evaluate(request => { window.__messages = []; window.drawoffer.render({ ...request, layout_plan: null }); }, base);
   await native.waitForFunction(() => window.__messages.some(m => m.type === 'error'));
   assert.ok(!await native.evaluate(() => window.__messages.some(m => m.type === 'rendered')), 'invalid layout must fail');
-  await native.evaluate(request => { window.__messages = []; window.drawoffer.render({ ...request, assets: { '/templates/avatar-cat.jpg': 'data:image/png;base64,YQ==' } }); }, base);
+  // 模板样例不含图片，坏图用带 assets 的用例
+  const pictured = cases.find(({ request }) => Object.keys(request.assets ?? {}).length)?.request;
+  assert.ok(pictured, 'a fixture with an image asset is required');
+  await native.evaluate(request => { window.__messages = []; window.drawoffer.render({ ...request, assets: Object.fromEntries(Object.keys(request.assets).map(key => [key, 'data:image/png;base64,YQ=='])) }); }, pictured);
   await native.waitForFunction(() => window.__messages.some(m => m.type === 'error'));
   assert.ok(await native.evaluate(() => window.__messages.some(m => m.type === 'rendered')), 'image failure must preserve paper height');
   assert.ok(await native.locator('img').evaluateAll(images => images.every(image => image.getAttribute('alt') === '图片不可用')), 'visible image fallback');

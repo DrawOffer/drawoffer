@@ -325,7 +325,7 @@ struct ScheduleDetailDialog: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 10) {
                     Text(current.company + " · " + stage).font(V3.serif(20)).foregroundStyle(V3.txt).lineLimit(1).frame(height: 29)
-                    SchedulePill(label: status.0, foreground: status.1, background: status.2)
+                    SchedulePill(label: status.0, foreground: status.1, background: status.2).offset(y: -2.5)
                     Spacer(minLength: 0)
                 }
                 Text(current.title + relative).font(V3.sans(12.5)).foregroundStyle(V3.sub).lineLimit(1).frame(height: 15).padding(.top, 2)
@@ -397,7 +397,7 @@ struct ScheduleDetailDialog: View {
         return list
     }
 
-    // 信息卡：每行 46 高，图标 + 12 号灰标签，右侧 12.5 号值
+    // 信息卡：行距 46（45 + 1 分隔线，4 行共 183），图标 + 12 号灰标签，右侧 12.5 号值
     private enum Tone { case strong, normal, soft, muted, link, result }
     private var rows: some View {
         let interviewer = [current.raw.text("interviewer_name"), current.raw.text("interviewer_title")].filter { !$0.isEmpty }
@@ -433,7 +433,7 @@ struct ScheduleDetailDialog: View {
                     Text(row.1).font(V3.sans(12)).foregroundStyle(ScheduleInk.faint).padding(.leading, 10)
                     Spacer(minLength: 12)
                     value(row.2, tone: row.3)
-                }.padding(.leading, 18).padding(.trailing, 18).frame(height: 46)
+                }.padding(.leading, 18).padding(.trailing, 18).frame(height: 45)
             }
         }
         .background(.white, in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(V3.cl))
@@ -568,7 +568,7 @@ struct ScheduleNoStageDialog: View {
                             let block = Self.block(item)
                             if index > 0 { Rectangle().fill(V3.line).frame(height: 1).padding(.horizontal, 17) }
                             HStack(spacing: 0) {
-                                Circle().fill(block.tone).frame(width: 6, height: 6).padding(.trailing, 11)
+                                Circle().fill(block.tone).frame(width: 6, height: 6).padding(.trailing, 8.5)
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(item.company + " · " + item.title).font(V3.sans(12.5, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1)
                                     Text(block.reason).font(V3.sans(11)).foregroundStyle(ScheduleInk.faint).lineLimit(1)
@@ -578,7 +578,7 @@ struct ScheduleNoStageDialog: View {
                                     HStack(spacing: 8) { Text(block.action); Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold)) }
                                         .font(V3.sans(12, weight: .medium)).foregroundStyle(V3.sub).contentShape(Rectangle())
                                 }.buttonStyle(.plain)
-                            }.padding(.leading, 14).padding(.trailing, 22).frame(height: 52)
+                            }.padding(.leading, 17.5).padding(.trailing, 22).frame(height: 51)
                         }
                     }
                     .background(.white, in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(V3.cl))
@@ -614,7 +614,7 @@ struct ScheduleNoStageDialog: View {
                     RoundedRectangle(cornerRadius: 5.5).fill(Color(hex: 0xFBFBFA)).overlay(RoundedRectangle(cornerRadius: 5.5).strokeBorder(V3.line))
                     Text(label).font(V3.sans(8, weight: .medium)).foregroundStyle(ScheduleInk.faint).padding(.top, 5)
                     VStack(spacing: 7) {
-                        if index < 2 { miniCard; miniCard }
+                        if index < 2 { miniCard.opacity(0.6); miniCard.opacity(0.35) }
                         else { RoundedRectangle(cornerRadius: 3.5).strokeBorder(Color(hex: 0xE9E9E5), style: StrokeStyle(lineWidth: 1, dash: [2, 2])).frame(width: 43, height: 23) }
                     }.padding(.top, 24)
                 }.frame(width: 51, height: 83).offset(x: 243 + CGFloat(index) * 58, y: 19)

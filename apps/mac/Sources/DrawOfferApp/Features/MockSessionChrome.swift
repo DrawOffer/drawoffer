@@ -8,15 +8,42 @@ import SwiftUI
 enum MockFull {
     static let width: CGFloat = 1368
     static let height: CGFloat = 828
+    /// Figma 09 的窗口稿 1392 × 852：正文坐标 = 稿内坐标 - 12，顶行（和红绿灯同一行）用负偏移。
+    static let windowWidth: CGFloat = 1392
+    static let windowHeight: CGFloat = 852
+    static let inset: CGFloat = 12
 }
 
-/// 场次画面的外框：没有侧栏，白底铺满，按设计尺寸缩放。
+/// 场次画面的外框：没有侧栏，白底铺满，按 1392 × 852 的窗口稿等比缩放；正文留 12 的边。
 struct MockSessionFrame<Content: View>: View {
     @ViewBuilder var content: () -> Content
     var body: some View {
-        MockStage(width: MockFull.width, height: MockFull.height) {
-            ZStack(alignment: .topLeading) { Color.white; content() }
+        // 等比缩放后贴顶（水平居中）：顶行要和红绿灯同一行，窗口比稿高时多出来的白在底下，不能居中把顶行压下去
+        GeometryReader { geometry in
+            let scale = min(geometry.size.width / MockFull.windowWidth, geometry.size.height / MockFull.windowHeight, 1) // 只缩不放，放大会把字拉糊
+            ZStack(alignment: .topLeading) { content() }
+                .frame(width: MockFull.width, height: MockFull.height, alignment: .topLeading)
+                .offset(x: MockFull.inset, y: MockFull.inset)
+                .frame(width: MockFull.windowWidth, height: MockFull.windowHeight, alignment: .topLeading)
+                .scaleEffect(scale, anchor: .topLeading)
+                .offset(x: (geometry.size.width - MockFull.windowWidth * scale) / 2)
+                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
         }
+        .background(.white)
+    }
+}
+
+/// 白底、1px #E4E4E0 描边的系统 Bordered 按钮（Figma `macOS / Button / Bordered`）：32 高，12 号中等字，胶囊圆角。
+struct MockBorderedPillStyle: ButtonStyle {
+    var padding: CGFloat = 26
+    @Environment(\.isEnabled) private var enabled
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(V3.sans(12, weight: .medium)).lineLimit(1).fixedSize()
+            .foregroundStyle(MockPalette.ink)
+            .padding(.horizontal, padding).frame(height: 32)
+            .background { Capsule().fill(configuration.isPressed ? MockPalette.chip : .white).overlay(Capsule().strokeBorder(MockPalette.cl)) }
+            .opacity(enabled ? 1 : 0.4).contentShape(Capsule())
     }
 }
 
@@ -82,12 +109,12 @@ struct MockCenterLine: View {
     var color: Color = MockPalette.fnt
     var serif = false
     var body: some View {
-        Text(verbatim: text).font(serif ? V3.serif(size) : V3.sans(size)).foregroundStyle(color).lineHeight(size, line)
+        Text(verbatim: text).font(serif ? V3.serif(size) : V3.sans(size)).foregroundStyle(color).lineHeight(size, line, serif ? .serif : .sans)
             .multilineTextAlignment(.center).frame(width: 1120).offset(x: 124, y: top)
     }
 }
 
-/// 顶行（`SessionHead`）：没开始或已结束的页面左边是返回；面试进行中左边是这场是谁，中间计时，右边跳过 / 放弃 / 结束。
+/// 顶行（`SessionHead`，Figma 09 · 05：和红绿灯同一行，左边从 x 92 起）：没开始或已结束的页面左边是返回；面试进行中左边是这场是谁，中间计时，右边跳过 / 放弃 / 结束。
 struct MockSessionHead<Right: View>: View {
     let detail: JSONValue
     var timer: String? = nil
@@ -96,19 +123,19 @@ struct MockSessionHead<Right: View>: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             if let back {
-                MockBackCrumb(label: back.label, current: MockSessionText.who(detail), disabled: back.disabled, action: back.action).frame(maxWidth: 480, alignment: .leading).offset(x: 48, y: 25)
+                MockBackCrumb(label: back.label, current: MockSessionText.who(detail), disabled: back.disabled, action: back.action).frame(maxWidth: 480, alignment: .leading).offset(x: 80, y: 4)
             } else {
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text(verbatim: MockSessionText.who(detail)).font(V3.sans(14, weight: .medium)).foregroundStyle(MockPalette.ink).lineLimit(1)
                     Text(verbatim: detail.text("job_title").nonEmptyValue ?? detail.text("target_role")).font(V3.sans(13)).foregroundStyle(MockPalette.fnt).lineLimit(1)
                 }
-                .frame(maxWidth: 480, alignment: .leading).frame(height: 20).offset(x: 48, y: 25)
+                .frame(maxWidth: 480, alignment: .leading).frame(height: 20).offset(x: 80, y: 3)
             }
             if let timer {
-                Text(verbatim: timer).font(V3.serif(22)).monospacedDigit().foregroundStyle(MockPalette.ink).frame(width: MockFull.width, height: 30).offset(y: 19)
+                Text(verbatim: timer).font(V3.serif(22)).monospacedDigit().foregroundStyle(MockPalette.ink).frame(width: MockFull.width, height: 30).offset(y: 1.5)
                     .accessibilityLabel("用时 \(timer)")
             }
-            HStack(spacing: 24) { right() }.frame(height: 40).frame(width: MockFull.width - 96, alignment: .trailing).offset(x: 48, y: 16)
+            HStack(spacing: 24) { right() }.frame(height: 32).frame(width: MockFull.width - 96, alignment: .trailing).offset(x: 48, y: -2)
         }
     }
 }
@@ -128,7 +155,7 @@ struct MockBigQuestion: View {
         let (size, line): (CGFloat, CGFloat) = count <= 48 ? (46, 64) : count <= 93 ? (36, 50) : count <= 160 ? (28, 40) : (22, 32)
         let typed = String(text.prefix(shown)), rest = shown < count ? String(text.dropFirst(shown)) : ""
         (Text(verbatim: typed).foregroundColor(MockPalette.ink) + Text(verbatim: rest).foregroundColor(MockPalette.faint))
-            .font(V3.serif(size)).lineHeight(size, line).multilineTextAlignment(.center)
+            .font(V3.serif(size)).lineHeight(size, line, .serif).multilineTextAlignment(.center)
             .frame(width: 1120, height: 160, alignment: .top).clipped().offset(x: 124, y: 203)
             .accessibilityLabel(text)
     }
@@ -186,7 +213,7 @@ struct MockAnswerFeedback: View {
     }
 }
 
-/// `FinishStats`：结束确认里的三个数（题、次追问、用时）。
+/// `FinishStats`：结束确认里的三个数（题、次追问、用时），数字和单位排在一行，三列各 132 宽（Figma 09 · 05.06）。
 struct MockFinishStats: View {
     let detail: JSONValue
     let elapsed: String
@@ -194,15 +221,50 @@ struct MockFinishStats: View {
         let rounds = MockMap.rounds(detail).filter { !$0.intro }
         let answered = rounds.filter { $0.main.text("answer_status") != "pending" }.count
         let follows = (detail["questions"]?.items ?? []).filter { $0.text("kind") == "follow_up" }.count
-        HStack(spacing: 72) {
+        HStack(spacing: 0) {
             stat("\(answered) / \(detail["question_count"]?.integer ?? 0)", "题"); stat("\(follows)", "次追问"); stat(elapsed, "用时")
-        }.padding(.top, 16)
+        }
     }
     private func stat(_ value: String, _ label: String) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(verbatim: value).font(V3.serif(24)).foregroundStyle(MockPalette.ink).frame(height: 32)
-            Text(verbatim: label).font(V3.sans(13)).foregroundStyle(MockPalette.fnt).frame(height: 20)
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Text(verbatim: value).font(V3.serif(24)).foregroundStyle(MockPalette.ink)
+            Text(verbatim: label).font(V3.sans(13)).foregroundStyle(MockPalette.fnt)
         }
+        .lineLimit(1).frame(width: 132, height: 34, alignment: .leading)
+    }
+}
+
+/// 面试中的确认卡（Figma 09 · 05.06，460 宽 Sheet）：标题 17、说明 14，右下「取消」是 32 高的白底描边按钮，确认是 38 高的墨黑胶囊。
+struct MockSessionConfirm<Extra: View>: View {
+    let title: String
+    let desc: String
+    let confirm: String
+    var cancel = "取消"
+    var busy = false
+    var busyLabel: String? = nil
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+    @ViewBuilder var extra: () -> Extra
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(verbatim: title).font(V3.sans(17, weight: .medium)).foregroundStyle(MockPalette.ink).frame(height: 24, alignment: .leading)
+            Text(verbatim: desc).font(V3.sans(14)).foregroundStyle(MockPalette.sub).lineHeight(14, 22)
+                .fixedSize(horizontal: false, vertical: true).padding(.top, 12)
+            extra().padding(.top, 23)
+            HStack(spacing: 10) {
+                Spacer(minLength: 0)
+                Button(cancel, action: onCancel).buttonStyle(MockBorderedPillStyle(padding: 23)).disabled(busy).keyboardShortcut(.cancelAction)
+                Button(busy ? busyLabel ?? confirm : confirm, action: onConfirm).buttonStyle(MockPillStyle(height: 38, padding: 24)).disabled(busy)
+            }.padding(.top, 30)
+        }
+        .padding(.horizontal, 33).padding(.top, 30).padding(.bottom, 23)
+        .frame(width: 460, alignment: .leading)
+    }
+}
+
+extension MockSessionConfirm where Extra == EmptyView {
+    init(title: String, desc: String, confirm: String, cancel: String = "取消", busy: Bool = false, busyLabel: String? = nil, onConfirm: @escaping () -> Void, onCancel: @escaping () -> Void) {
+        self.init(title: title, desc: desc, confirm: confirm, cancel: cancel, busy: busy, busyLabel: busyLabel, onConfirm: onConfirm, onCancel: onCancel, extra: { EmptyView() })
     }
 }
 

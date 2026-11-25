@@ -60,11 +60,12 @@ struct CareerReviewReportView: View {
         .task(id: refreshed) { await load() }
         .task(id: generating) {
             guard generating else { return }
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(3))
-                guard !Task.isCancelled else { return }
+            var attempt = 0
+            while await Polling.wait(attempt, first: 3, cap: 20, topic: "interview_session", ref: sessionID) {
+                attempt += 1
                 now = Date()
                 await load(quiet: true)
+                if !generating { await api.purgeCache(); return }
             }
         }
         .centeredSheet(isPresented: $textOpen) {

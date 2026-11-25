@@ -28,7 +28,6 @@ struct CareerStageScheduleFields: View {
 
     private var interviewForm: Bool { stage == "interview" }
     private var isWindow: Bool { stage == "assessment" || (stage == "written_test" && window) }
-    private var stageName: String { isHR ? "HR 面" : CareerStage.label(stage) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

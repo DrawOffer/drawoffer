@@ -2,8 +2,9 @@ import Foundation
 import DrawOfferCore
 import SwiftUI
 
-/// 模拟面试首页（Figma 09 · 01 首页：01.01 没有简历 / 01.02 有简历没面试 / 01.03 一条 / 01.04 两条 / 01.05 多条记录；Web `v2/MockHome.tsx`）。
-/// 五个状态共用一个骨架：页头写结论、操作放右上，中间固定三行录音时间线，分隔线下是四列摘要。走工作区页面宽度，不进缩放画布。
+/// 模拟面试首页（Figma 09 · 01 首页，11-16 定稿：01.01 没有简历 / 01.02 有简历没练过 / 01.03 多条记录；Web `v2/MockHome.tsx` 仍是旧版）。
+/// 没有记录时是一句话加两张纸：左边标题和入口，右边叠着的简历纸与面试纸，点纸等于点主按钮。
+/// 有记录时左边是「还要补」时间线，右边是「下一场」计划卡片，底下是最近几场的分数。三个状态都按 1151 × 828 的设计画布等比缩放。
 struct MockHomeV2: View {
     @Environment(SessionStore.self) private var session
     var focus: PracticeFocus?
@@ -18,13 +19,20 @@ struct MockHomeV2: View {
     var showConfig: () -> Void = {}
 
     private static let countWord = ["", "一", "两", "三", "四", "五", "六", "七", "八", "九"]
-    private static let stopLabel = ["", "停在这里", "两次都停在这里", "每次都停在这里"]
-    private static let rowOpacity = [1.0, 0.75, 0.5]
-    private static let ghostFade = [0.5, 0.25, 0.12]
-    private static let emptyFade = [0.6, 0.32, 0.14]
-    private static let quoteW: CGFloat = 263
+    private static let stageW: CGFloat = 1151, stageH: CGFloat = 828
+    private static let paper = Color(hex: 0xFCFBF8), paperEdge = Color(hex: 0xE7E5DE), paperMute = Color(hex: 0xA5A39B)
+    private static let lineGray = Color(hex: 0xD6D4C9), ringGray = Color(hex: 0xC9C7BC)
 
-    struct HomeData { var overview: JSONValue; var list: [JSONValue]; var resumes: [JSONValue] }
+    struct HomeData { var overview: JSONValue; var list: [JSONValue]; var resumes: [JSONValue]; var applications: [JSONValue] = []; var sessions: [JSONValue] = [] }
+
+    /// 「还要补」里的一条：卡住的考点、停在哪、你说过的原话、停过几场。
+    struct OpenItem: Identifiable {
+        var topic: String
+        var detail: String?
+        var quote: String?
+        var meta: String?
+        var id: String { topic }
+    }
 
     @State private var data: HomeData?
     @State private var failed = false
@@ -45,25 +53,45 @@ struct MockHomeV2: View {
     private var blocking: JSONValue? { active ?? evaluating }
 
     var body: some View {
-        GeometryReader { geometry in
-            let card = geometry.size.width, gutter = V3Page<EmptyView>.gutter(card: card)
-            let width = max(0, card - gutter * 2)
-            // 行高跟着内容卡高度走：900 高的窗口是设计稿的 114，高屏把多出来的高度分给时间线
-            let runH = min(200, max(120, (geometry.size.height - 528) / 2))
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) { page(width: width, runH: runH) }
-                    .frame(width: width, alignment: .leading)
-                    .padding(.horizontal, gutter).padding(.top, 52).padding(.bottom, 60)
+        Group {
+            if let data {
+                let finished = (data.overview["counts"]?["mock"]?.integer ?? 0) + (data.overview["counts"]?["real"]?.integer ?? 0)
+                let reviewing = data.overview["records"]?.items.contains { $0.text("status") == "reviewing" } ?? false
+                MockStage(width: Self.stageW, height: Self.stageH) {
+                    if data.resumes.isEmpty {
+                        intro(first: false, reviewing: false, resumeTitle: "")
+                    } else if finished == 0 {
+                        intro(first: true, reviewing: reviewing, resumeTitle: data.resumes.first?.text("title") ?? "")
+                    } else {
+                        history(data, finished: finished)
+                    }
+                }
+            } else if failed {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("模拟面试没有加载出来").font(V3.serif(28)).foregroundStyle(MockPalette.ink)
+                    Text("请检查网络后重试。").font(V3.sans(13)).foregroundStyle(MockPalette.fnt)
+                    Button("重新加载") { tick += 1 }.buttonStyle(MockPillStyle(kind: .ghost, height: 32, padding: 21, size: 13))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(.horizontal, 61).padding(.top, 120)
+            } else {
+                V3Loading("正在加载模拟面试…").frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .background(.white)
         .overlay { MockNoticeToast(notice: $notice) }
         .task(id: "\(account):\(tick)") { await load() }
         .task(id: evaluating?.text("status") == "evaluating" ? evaluating?.text("id") ?? "" : "") {
-            // 评估中：5 秒刷新一次，好了提示一下
+            // 评估中：5 秒起逐步放慢到 30 秒刷新一次，好了提示一下
             guard let id = evaluating?.text("id"), evaluating?.text("status") == "evaluating" else { return }
             waitingID = id
-            while !Task.isCancelled { try? await Task.sleep(for: .seconds(5)); if Task.isCancelled { return }; tick += 1 }
+            var attempt = 0
+            // 只查这一场的状态，评估完了才作废缓存、整页重取
+            while await Polling.wait(attempt, first: 5, cap: 30, topic: "mock_interview", ref: id) {
+                attempt += 1
+                guard let value = try? await session.api.careerRequest(path: "/api/mock-interviews/\(id)", method: "GET", query: [:], body: nil)["mock_interview"],
+                      value.text("status") != "evaluating" else { continue }
+                await session.api.purgeCache(); tick += 1; return
+            }
         }
         .onChange(of: data?.list.map { $0.text("id") + $0.text("status") } ?? []) { _, _ in
             guard let id = waitingID, data?.list.contains(where: { $0.text("id") == id && $0.text("status") == "completed" }) == true else { return }
@@ -86,162 +114,330 @@ struct MockHomeV2: View {
         }
     }
 
-    // MARK: 页面
+    // MARK: 01.01 / 01.02 没有记录
 
-    @ViewBuilder private func page(width: CGFloat, runH: CGFloat) -> some View {
-        let overview = data?.overview
-        let finished = (overview?["counts"]?["mock"]?.integer ?? 0) + (overview?["counts"]?["real"]?.integer ?? 0)
-        let reviewing = overview?["records"]?.items.contains { $0.text("status") == "reviewing" } ?? false
-        if let data, let overview {
-            if data.resumes.isEmpty {
-                head(overview, title: "先放一份简历，面试官按它出题。", desc: "面试里的问题，都从你写的经历来。\n没有现成的，现在写一份也可以。", note: "支持 PDF、Word、Markdown", width: width) {
-                    Button("写第一份简历", action: showResumes).buttonStyle(MockPillStyle(kind: .ghost, height: 40))
-                    Button("导入简历") { resumeImport = true }.buttonStyle(MockPillStyle(height: 40, padding: 20))
-                }
-                ghostRuns(runH: runH)
-                tallies("有了简历，练完这里会记下", items: Self.emptyTallies, width: width)
-            } else if finished == 0 {
-                head(overview, title: "先有一场面试，才知道该练什么。", desc: "练一场，或者导入面过的一场。\n之后每一场，都从你卡住的地方接着问。",
-                     note: reviewing ? "导入的面试正在生成复盘，好了会出现在这里。" : "录音或文字稿都可以导入。", width: width) {
-                    Button("导入面试记录") { importing = true }.buttonStyle(MockPillStyle(kind: .ghost, height: 40))
-                    Button(startLabel("开始第一场模拟面试"), action: start).buttonStyle(MockPillStyle(height: 40, padding: 20))
-                }
-                ghostRuns(runH: runH)
-                tallies("练完第一场，这里会记下", items: Self.emptyTallies, width: width)
-            } else {
-                let stuck = overview["stuck"].flatMap { $0 == .null ? nil : $0 }
-                head(overview, title: stuck.map(Self.stuckTitle) ?? "这几场没有卡住的地方。",
-                     desc: stuck != nil ? "这场从这里接着问，答过去就不用再练了。" : "下一场换个方向，继续往深处问。", note: nil, width: width) {
-                    Button("导入面试记录") { importing = true }.buttonStyle(MockPillStyle(kind: .ghost, height: 40))
-                    Button(startLabel("开始这一场"), action: start).buttonStyle(MockPillStyle(height: 40))
-                }
-                stuckRuns(stuck, runH: runH)
-                tallies("这 \(finished) 场记下的", items: Self.tallies(overview), width: width, records: true)
+    /// first = false：没有简历（01.01）；first = true：简历放好了、还没练过（01.02）。
+    private func intro(first: Bool, reviewing: Bool, resumeTitle: String) -> some View {
+        let lines = first
+            ? ["题目按你简历里写的经历来出，大约 15 分钟。", "练完会记下你答得好和卡住的地方，", "下一场从卡住的地方接着练。"]
+            : ["模拟面试的题目从你简历里的经历来出，", "放好以后，第一场大约 15 分钟。", "练完会记下你答得好和卡住的地方。"]
+        let primary: () -> Void = { if first { start() } else { resumeImport = true } }
+        return ZStack(alignment: .topLeading) {
+            Color.white
+            HStack(spacing: 10) {
+                AssistantBrandMark(size: 28)
+                Text(first ? "简历已经放好" : "模拟面试").font(V3.sans(18, weight: .medium)).foregroundStyle(MockPalette.ink)
+            }.frame(height: 28).offset(x: 120, y: 210)
+            Text(first ? "来练第一场" : "先放一份简历").font(V3.sans(52, weight: .medium)).tracking(-0.52)
+                .foregroundStyle(MockPalette.ink).lineLimit(1).fixedSize().frame(height: 70, alignment: .leading).offset(x: 120, y: 258)
+            Text(verbatim: lines.joined(separator: "\n")).font(V3.sans(17)).foregroundStyle(MockPalette.sub).lineHeight(17, 30).fixedSize()
+                .offset(x: 120, y: 346 - 4.8)
+            HStack(spacing: 24) {
+                Button(action: primary) {
+                    HStack(spacing: 8) {
+                        Text(verbatim: first ? startLabel("开始第一场") : "导入简历")
+                        Image(systemName: "arrow.right").font(.system(size: 12, weight: .semibold))
+                    }
+                }.buttonStyle(MockPillStyle(height: 44, padding: 24, size: 15))
+                Button { if first { importing = true } else { showResumes() } } label: {
+                    HStack(spacing: 6) {
+                        Text(verbatim: first ? "已经面过？导入面试记录" : "没有现成的，写一份")
+                        Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold))
+                    }
+                }.buttonStyle(MockLinkStyle(size: 15, color: MockPalette.sub))
+            }.offset(x: 120, y: 476)
+            if reviewing {
+                Text("导入的面试正在生成复盘，好了会出现在这里。").font(V3.sans(13)).foregroundStyle(MockPalette.fnt).fixedSize().offset(x: 120, y: 540)
             }
-        } else if failed {
-            head(nil, title: "模拟面试", desc: nil, note: nil, width: width) { EmptyView() }
-            VStack(alignment: .leading, spacing: 12) {
-                Text("模拟面试没有加载出来").font(V3.serif(28)).foregroundStyle(MockPalette.ink)
-                Text("请检查网络后重试。").font(V3.sans(13)).foregroundStyle(MockPalette.fnt)
-                Button("重新加载") { tick += 1 }.buttonStyle(MockPillStyle(kind: .ghost))
-            }.padding(.top, 12)
-        } else {
-            V3Loading("正在加载模拟面试…").frame(maxWidth: .infinity).padding(.top, 160)
+            Button(action: primary) { pile(first: first, resumeTitle: resumeTitle) }.buttonStyle(.plain)
+                .frame(width: 600, height: 560, alignment: .topLeading).offset(x: 520, y: 100)
+                .accessibilityLabel(first ? "开始第一场模拟面试" : "放一份简历")
+            Text(first ? "点这张纸，开始第一场" : "点这张纸，先放一份简历").font(V3.sans(13)).foregroundStyle(Self.paperMute).fixedSize().offset(x: 850, y: 660)
         }
+        .frame(width: Self.stageW, height: Self.stageH, alignment: .topLeading)
     }
 
-    /// `.mi3-home-head`：左边眉题、标题、说明，右边操作（下面一行小字）；窄于 640 时操作换到下面。
-    private func head<Actions: View>(_ overview: JSONValue?, title: String, desc: String?, note: String?, width: CGFloat, @ViewBuilder actions: () -> Actions) -> some View {
-        let counts = overview.map { Self.countLine($0) } ?? ""
-        let copy = VStack(alignment: .leading, spacing: 0) {
-            Text(verbatim: ["MOCK INTERVIEWS", counts].filter { !$0.isEmpty }.joined(separator: " · ")).font(V3.sans(12, weight: .medium)).foregroundStyle(MockPalette.fnt).frame(height: 18, alignment: .leading)
-            Text(verbatim: title).font(V3.serif(28)).foregroundStyle(MockPalette.ink).lineHeight(28, 36).fixedSize(horizontal: false, vertical: true).padding(.top, 8)
-            if let desc { Text(verbatim: desc).font(V3.sans(14)).foregroundStyle(MockPalette.sub).lineHeight(14, 22).fixedSize(horizontal: false, vertical: true).padding(.top, 6) }
+    /// 两张叠着的纸：后面一张简历（顺时针 6°），前面一张面试题（逆时针 3°）。
+    private func pile(first: Bool, resumeTitle: String) -> some View {
+        ZStack(alignment: .topLeading) {
+            resumePaper(filled: first, title: resumeTitle).rotationEffect(.degrees(6)).position(x: 224, y: 307.5)
+            interviewPaper(first: first).rotationEffect(.degrees(-3)).position(x: 402.3, y: 258.3)
         }
-        let side = VStack(alignment: width < 640 ? .leading : .trailing, spacing: 9) {
-            HStack(spacing: 10) { actions() }
-            if let note { Text(verbatim: note).font(V3.sans(13)).foregroundStyle(MockPalette.fnt).frame(height: 20) }
+        .frame(width: 600, height: 560, alignment: .topLeading).contentShape(Rectangle())
+    }
+
+    private func paperSheet<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: 4).fill(Self.paper).shadow(color: .black.opacity(0.08), radius: 14, y: 12)
+            RoundedRectangle(cornerRadius: 4).strokeBorder(Self.paperEdge)
+            content().clipShape(RoundedRectangle(cornerRadius: 4))
         }
-        return Group {
-            if width < 640 {
-                VStack(alignment: .leading, spacing: 16) { copy; side }
-            } else {
-                HStack(alignment: .top, spacing: 24) { copy.layoutPriority(1); Spacer(minLength: 0); side.padding(.top, 30).fixedSize() }
+        .frame(width: 360, height: 480)
+    }
+
+    private func bar(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ color: Color) -> some View {
+        RoundedRectangle(cornerRadius: min(3, h / 2)).fill(color).frame(width: w, height: h).offset(x: x, y: y)
+    }
+
+    private func resumePaper(filled: Bool, title: String) -> some View {
+        let strong = Color(hex: filled ? 0x9C9A93 : 0xCCC9C2), soft = Color(hex: filled ? 0xC9C7C0 : 0xE4E2DB)
+        return paperSheet {
+            ZStack(alignment: .topLeading) {
+                if filled && !title.isEmpty {
+                    Text(verbatim: title).font(V3.serif(16)).foregroundStyle(MockPalette.sub).lineLimit(1).frame(width: 180, alignment: .leading).offset(x: 29, y: 32)
+                } else {
+                    bar(29, 39, 150, 12, strong)
+                }
+                bar(29, 62, 100, 7, soft)
+                bar(29, 92, 24, 2, MockPalette.lightBlue)
+                Rectangle().fill(Color(hex: 0xECEBE5)).frame(width: 300, height: 1).offset(x: 29, y: 95)
+                ForEach(0..<3, id: \.self) { index in
+                    let y = 120 + CGFloat(index) * 95
+                    bar(29, y, 60, 8, strong)
+                    bar(29, y + 20, 300, 6, soft)
+                    bar(29, y + 34, 280, 6, soft)
+                    bar(29, y + 48, 240, 6, soft)
+                }
+                ForEach(Array([40.0, 62, 34].enumerated()), id: \.offset) { index, width in
+                    RoundedRectangle(cornerRadius: 6).strokeBorder(Color(hex: 0xD6D4CC)).frame(width: width, height: 13)
+                        .offset(x: 29 + [0.0, 48, 120][index], y: 436)
+                }
             }
         }
-        .frame(minHeight: 112, alignment: .topLeading)
     }
 
-    // MARK: 时间线
+    private static let wave: [CGFloat] = [2, 2, 2, 3, 6, 5, 5, 6, 9, 6, 11, 8, 10, 12, 18, 13, 9, 17, 22, 14, 11, 18, 21, 11, 17, 15, 16, 18, 22, 13, 12, 22, 24, 14, 12, 21, 20, 10, 11, 15, 13, 13, 12, 9, 7, 13, 11, 5, 6, 9, 6, 3, 3, 3, 2, 2]
 
-    private func ghostRuns(runH: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            ForEach(0..<3, id: \.self) { index in ghostRow(opacity: Self.emptyFade[index], shift: index, height: index == 2 ? 126 : runH) }
+    private func interviewPaper(first: Bool) -> some View {
+        paperSheet {
+            ZStack(alignment: .topLeading) {
+                ZStack(alignment: .topLeading) {
+                    Text(first ? "第 1 题 · 来自你的简历" : "第 1 题 · 开场").font(V3.sans(11)).foregroundStyle(MockPalette.fnt).fixedSize().offset(y: 0)
+                    Text(first ? "讲讲你简历里最有挑战的一个项目，为什么这样设计？" : "先介绍一下你自己，挑一个最想聊的项目讲讲。")
+                        .font(V3.serif(21)).foregroundStyle(MockPalette.ink).lineHeight(21, 31, .serif).frame(width: 300, alignment: .leading).fixedSize(horizontal: false, vertical: true).offset(y: 28 - 2.9)
+                    Canvas { context, _ in
+                        for (index, height) in Self.wave.enumerated() {
+                            context.fill(Path(roundedRect: CGRect(x: CGFloat(index) * 5.41, y: 14 - height / 2, width: 2.2, height: height), cornerRadius: 1.1), with: .color(Color(hex: 0xCCC9C2)))
+                        }
+                    }.frame(width: 300, height: 28).offset(y: 116)
+                    Text("轮到你时，直接开口说就行").font(V3.sans(11.5)).foregroundStyle(MockPalette.fnt).fixedSize().offset(y: 170)
+                    Rectangle().fill(Color(hex: 0xEFEEE9)).frame(width: 300, height: 1).offset(y: 212)
+                    Text(first ? "第 2 题 · 来自你的简历" : "第 2 题 · 来自你的简历").font(V3.sans(11)).foregroundStyle(Self.paperMute).fixedSize().offset(y: 239)
+                    Text(first ? "接着问你简历里的另一段经历" : "放好简历后，这一题换成你写过的项目").font(V3.serif(15)).foregroundStyle(Color(hex: 0xA8A8A1)).fixedSize().offset(y: 261)
+                    Text("第 3 题 · 开始后，接着你的回答追问").font(V3.sans(11)).foregroundStyle(Self.paperMute).fixedSize().offset(y: 310)
+                }
+                .frame(width: 300, height: 326, alignment: .topLeading).offset(x: 29, y: 39)
+                Rectangle().fill(LinearGradient(stops: [.init(color: Self.paper.opacity(0), location: 0), .init(color: Self.paper, location: 0.6), .init(color: Self.paper, location: 1)], startPoint: .top, endPoint: .bottom))
+                    .frame(width: 362, height: 174).offset(x: -1, y: 306)
+                Text("第一场 · 3 题 · 约 15 分钟").font(V3.sans(11.5)).foregroundStyle(MockPalette.fnt).fixedSize().offset(x: 29, y: 433)
+            }
         }
-        .padding(.top, 28).padding(.top, 12)
     }
 
-    private func ghostRow(opacity: Double, shift: Int, height: CGFloat) -> some View {
-        HStack(alignment: .top, spacing: 0) {
-            VStack(alignment: .leading, spacing: 8) {
-                RoundedRectangle(cornerRadius: 3).fill(MockPalette.cl).frame(width: 42, height: 6)
-                RoundedRectangle(cornerRadius: 2.5).fill(MockPalette.line).frame(width: 66, height: 5)
-            }.padding(.top, 11).frame(width: Self.metaW, alignment: .leading)
-            MockGhostRow(opacity: 1, shift: shift).padding(.trailing, 25).padding(.top, -11)
-            Color.clear.frame(width: Self.quoteW)
+    // MARK: 01.03 有记录
+
+    private func history(_ data: HomeData, finished: Int) -> some View {
+        let overview = data.overview
+        let stuck = overview["stuck"].flatMap { $0 == .null ? nil : $0 }
+        let items = Self.openItems(overview, stuck: stuck)
+        let openCount = max(overview["tallies"]?["open"]?["count"]?.integer ?? 0, items.count)
+        let cleared = overview["tallies"]?["cleared"]
+        let clearedCount = cleared?["count"]?.integer ?? 0
+        let clearedText = (cleared?["examples"]?.items ?? []).compactMap(\.stringValue).filter { !$0.isEmpty }.joined(separator: "、")
+        return ZStack(alignment: .topLeading) {
+            Color.white
+            Text(verbatim: ["MOCK INTERVIEWS", Self.countLine(overview)].filter { !$0.isEmpty }.joined(separator: " · ")).font(V3.sans(12, weight: .medium))
+                .foregroundStyle(MockPalette.fnt).fixedSize().frame(height: 18).offset(x: 48, y: 52)
+            Text(verbatim: stuck.map(Self.stuckTitle) ?? "这几场没有卡住的地方。").font(V3.serif(28)).foregroundStyle(MockPalette.ink).lineLimit(1).fixedSize().frame(height: 36).offset(x: 48, y: 78)
+            Text(verbatim: "根据你 \(finished) 场面试和练习记下的：还要补 \(openCount) 处，已经掌握 \(clearedCount) 处。").font(V3.sans(14)).foregroundStyle(MockPalette.sub)
+                .lineLimit(1).fixedSize().frame(height: 22).offset(x: 48, y: 120)
+            Button("导入面试记录") { importing = true }.buttonStyle(MockPillStyle(kind: .ghost, height: 40)).offset(x: 980, y: 82)
+            openColumn(items, openCount: openCount, clearedCount: clearedCount, clearedText: clearedText).offset(x: 48, y: 184)
+            nextCard(overview, items: items, data: data).offset(x: 712, y: 176)
+            recentScores(overview).offset(x: 48, y: 656)
         }
-        .frame(height: height, alignment: .top).opacity(opacity)
+        .frame(width: Self.stageW, height: Self.stageH, alignment: .topLeading)
     }
 
-    private static let metaW: CGFloat = 154
+    private func ring(_ color: Color) -> some View {
+        Circle().fill(.white).overlay(Circle().strokeBorder(color, lineWidth: 1.5)).frame(width: 9, height: 9)
+    }
 
-    @ViewBuilder private func stuckRuns(_ stuck: JSONValue?, runH: CGFloat) -> some View {
-        let records = Array((stuck?["records"]?.items ?? []).suffix(3).reversed())
-        let rows = records.count
-        ZStack(alignment: .topTrailing) {
-            VStack(spacing: 0) {
-                ForEach(Array(records.enumerated()), id: \.offset) { index, record in
-                    HStack(alignment: .top, spacing: 0) {
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(verbatim: Self.mmdd(record.text("date"))).font(V3.sans(14, weight: .medium)).foregroundStyle(MockPalette.ink).frame(height: 22)
-                            Text(verbatim: record.text("title").nonEmptyValue ?? (record.text("kind") == "real" ? "真实面试" : "模拟练习"))
-                                .font(V3.sans(13)).foregroundStyle(MockPalette.fnt).lineLimit(1).frame(maxWidth: 146, alignment: .leading).frame(height: 20)
-                        }.frame(width: Self.metaW, alignment: .leading)
-                        MockRowVoiceprint(seed: "\(record.text("date")):\(index)", opacity: Self.rowOpacity[index]).padding(.trailing, 15).padding(.top, -9)
-                        Group {
-                            if let quote = record.text("quote").nonEmptyValue {
-                                Text(verbatim: "“\(quote)……”").font(V3.sans(13)).foregroundStyle(index == 0 ? MockPalette.ink : MockPalette.fnt).lineHeight(13, 20)
-                                    .fixedSize(horizontal: false, vertical: true)
+    private func openColumn(_ items: [OpenItem], openCount: Int, clearedCount: Int, clearedText: String) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text("还要补").font(V3.sans(14, weight: .medium)).foregroundStyle(MockPalette.ink)
+                Text(verbatim: "\(openCount) 处").font(V3.sans(14)).foregroundStyle(MockPalette.mute)
+            }.frame(height: 24)
+            if items.isEmpty {
+                Text("这几场没有留下要补的地方。").font(V3.sans(13)).foregroundStyle(MockPalette.fnt).padding(.top, 16)
+            }
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                let last = index == items.count - 1
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(verbatim: item.topic).font(V3.sans(16, weight: .medium)).foregroundStyle(MockPalette.ink).lineLimit(1).frame(height: 24)
+                    if let detail = item.detail {
+                        Text(verbatim: detail).font(V3.sans(13)).foregroundStyle(MockPalette.sub).lineHeight(13, 20).fixedSize(horizontal: false, vertical: true).padding(.top, 4)
+                    }
+                    if let quote = item.quote {
+                        Text(verbatim: quote).font(V3.sans(13)).foregroundStyle(MockPalette.fnt).lineHeight(13, 20).fixedSize(horizontal: false, vertical: true).padding(.top, 2)
+                    }
+                    if let meta = item.meta {
+                        Text(verbatim: meta).font(V3.sans(12)).foregroundStyle(MockPalette.mute).lineLimit(1).frame(height: 20).padding(.top, 2)
+                    }
+                }
+                .padding(.leading, 24).frame(width: 616, alignment: .leading)
+                .padding(.top, index == 0 ? 16 : 0).padding(.bottom, last ? 0 : 28)
+                .background(alignment: .topLeading) {
+                    if !last { Rectangle().fill(Self.lineGray).frame(width: 1).padding(.top, (index == 0 ? 16 : 0) + 12).padding(.leading, 4).padding(.bottom, -8) }
+                }
+                .overlay(alignment: .topLeading) {
+                    Group { if index == 0 { Circle().fill(MockPalette.orange).frame(width: 9, height: 9) } else { ring(Self.ringGray) } }
+                        .padding(.top, (index == 0 ? 16 : 0) + 7.5)
+                }
+            }
+            if clearedCount > 0 {
+                Rectangle().fill(MockPalette.line).frame(width: 616, height: 1).padding(.top, 32)
+                HStack(spacing: 10) {
+                    Text("已经掌握").font(V3.sans(14, weight: .medium)).foregroundStyle(MockPalette.ink)
+                    Text(verbatim: "\(clearedCount) 处 · 之后不再单独出题").font(V3.sans(14)).foregroundStyle(MockPalette.mute)
+                }
+                .padding(.leading, 24).frame(height: 24).padding(.top, 24)
+                .overlay(alignment: .topLeading) { ring(MockPalette.blue).padding(.top, 24 + 7.5) }
+                if !clearedText.isEmpty {
+                    Text(verbatim: clearedText).font(V3.sans(13)).foregroundStyle(MockPalette.sub).lineHeight(13, 20).fixedSize(horizontal: false, vertical: true)
+                        .frame(width: 592, alignment: .leading).padding(.leading, 24).padding(.top, 4)
+                }
+            }
+        }
+        .frame(width: 616, alignment: .topLeading)
+    }
+
+    /// 下一场计划卡片：标题跟着最近的面试日程走，列表是上面「还要补」的前几处。
+    private func nextCard(_ overview: JSONValue, items: [OpenItem], data: HomeData) -> some View {
+        let now = Date()
+        let target = MockMap.pickTarget(applications: data.applications, sessions: data.sessions, now: now, chosen: nil)
+        var title = "接着练卡住的地方", sub = "从上次停下的地方问起，答过去就不用再练了"
+        if target.kind != .general {
+            let company = MockMap.companyName(target)
+            let stage = target.session?.text("stage_label").nonEmptyValue ?? target.application?.text("current_stage_label") ?? ""
+            title = "按\(company)\(stage)准备"
+            if let start = target.session.flatMap({ CareerApplication.date($0.text("start_at")) }) {
+                let calendar = Beijing.calendar
+                let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: start)).day ?? 0
+                sub = "\(MockHomeV2.mmdd(target.session?.text("start_at") ?? "")) \(stage)，\(days <= 0 ? "就在今天" : "还有 \(days) 天")，先练最影响通过的"
+            } else {
+                sub = "先练最影响通过的"
+            }
+        }
+        let rows = Array(items.prefix(4))
+        let goal = overview["goal"].flatMap { $0 == .null ? nil : $0.stringValue }
+        let late = overview["tallies"]?["late"]
+        let lateCount = late?["count"]?.integer ?? 0, lateTotal = late?["total"]?.integer ?? 0
+        let tip = goal.map { $0 == "先说结论，再讲做法" ? "会提醒你先说结论再讲做法" : "这一场从「\($0)」问起" }
+        let dividerY = CGFloat(127 + 40 * rows.count)
+        return ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: 12).fill(.white)
+            RoundedRectangle(cornerRadius: 12).strokeBorder(MockPalette.cl)
+            ZStack(alignment: .topLeading) {
+                HStack {
+                    Text("下一场").font(V3.sans(12)).foregroundStyle(MockPalette.mute)
+                    Spacer(minLength: 0)
+                    Text(verbatim: rows.isEmpty ? "约 15 分钟" : "\(rows.count) 处 · 约 15 分钟").font(V3.sans(12)).foregroundStyle(MockPalette.mute)
+                }.frame(width: 343, height: 20).offset(x: 23, y: 23)
+                Text(verbatim: title).font(V3.sans(16, weight: .medium)).foregroundStyle(MockPalette.ink).lineLimit(1).frame(width: 343, height: 24, alignment: .leading).offset(x: 23, y: 47)
+                Text(verbatim: sub).font(V3.sans(13)).foregroundStyle(MockPalette.fnt).lineLimit(1).frame(width: 343, height: 20, alignment: .leading).offset(x: 23, y: 75)
+                Rectangle().fill(MockPalette.line).frame(width: 343, height: 1).offset(x: 23, y: 111)
+                ForEach(Array(rows.enumerated()), id: \.element.id) { index, item in
+                    let y = CGFloat(127 + 40 * index)
+                    Text(verbatim: "\(index + 1)").font(V3.sans(13)).foregroundStyle(MockPalette.mute).frame(height: 24).offset(x: 23, y: y)
+                    Text(verbatim: item.topic).font(V3.sans(14)).foregroundStyle(MockPalette.ink).lineLimit(1).frame(width: 210, height: 24, alignment: .leading).offset(x: 47, y: y)
+                    Text("上次停在这").font(V3.sans(12)).foregroundStyle(MockPalette.orange).frame(width: 343, height: 20, alignment: .trailing).offset(x: 23, y: y + 2)
+                }
+                if !rows.isEmpty { Rectangle().fill(MockPalette.line).frame(width: 343, height: 1).offset(x: 23, y: dividerY) }
+                let base = rows.isEmpty ? CGFloat(127) : dividerY + 16
+                if let tip {
+                    Text(verbatim: tip).font(V3.sans(13)).foregroundStyle(MockPalette.ink).lineLimit(1).frame(width: 343, height: 20, alignment: .leading).offset(x: 23, y: base)
+                }
+                if lateTotal > 0 && lateCount > 0 {
+                    Text(verbatim: "前 \(lateTotal) 场有 \(lateCount) 场是被追问才讲做法").font(V3.sans(12)).foregroundStyle(MockPalette.mute).lineLimit(1)
+                        .frame(width: 343, height: 20, alignment: .leading).offset(x: 23, y: base + 20)
+                }
+                HStack(spacing: 16) {
+                    Button(startLabel("开始这一场"), action: start).buttonStyle(MockPillStyle(height: 37, padding: 24, size: 14))
+                    Text("岗位、简历、音色开始后能改").font(V3.sans(12)).foregroundStyle(MockPalette.mute).lineLimit(1)
+                }.offset(x: 23, y: base + (tip == nil ? 0 : 51))
+            }
+            .padding(1)
+        }
+        .frame(width: 391, height: 448, alignment: .topLeading)
+    }
+
+    /// 最近几场（最多 4 场）：分数、日期和标题，最新一场旁边写比第一场多了多少。
+    private func recentScores(_ overview: JSONValue) -> some View {
+        let scored = (overview["records"]?.items ?? []).filter { $0["score"]?.numberValue != nil && $0.text("status") == "completed" }
+            .sorted { (CareerApplication.date($0.text("at")) ?? .distantPast) < (CareerApplication.date($1.text("at")) ?? .distantPast) }
+        let shown = Array(scored.suffix(4))
+        let score = overview["tallies"]?["score"].flatMap { $0 == .null ? nil : $0 }
+        let diff = (score?["latest"]?.integer ?? 0) - (score?["first"]?.integer ?? 0)
+        let showDiff = (score?["count"]?.integer ?? 0) >= 2 && shown.count >= 2
+        return ZStack(alignment: .topLeading) {
+            Rectangle().fill(MockPalette.line).frame(width: 1055, height: 1)
+            HStack(spacing: 14) {
+                Text(verbatim: "最近 \(shown.count) 场").font(V3.sans(14, weight: .medium)).foregroundStyle(MockPalette.ink)
+                if shown.count >= 2, let first = shown.first?["score"]?.integer, let last = shown.last?["score"]?.integer {
+                    Text(verbatim: "得分从 \(first) 到 \(last)").font(V3.sans(14)).foregroundStyle(MockPalette.mute)
+                }
+            }.fixedSize().frame(height: 20).offset(y: 24)
+            Button("全部记录 ›", action: showRecords).buttonStyle(MockLinkStyle()).frame(width: 200, height: 20, alignment: .trailing).offset(x: 1055 - 200, y: 24)
+            HStack(alignment: .top, spacing: 0) {
+                ForEach(Array(shown.enumerated()), id: \.offset) { index, record in
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(alignment: .lastTextBaseline, spacing: 6) {
+                            Text(verbatim: "\(record["score"]?.integer ?? 0)").font(V3.serif(26)).foregroundStyle(MockPalette.ink)
+                            Text("分").font(V3.sans(13)).foregroundStyle(MockPalette.fnt)
+                            if index == shown.count - 1 && showDiff {
+                                Text(verbatim: "比第一场 \(diff >= 0 ? "+" : "")\(diff)").font(V3.sans(13)).foregroundStyle(diff >= 0 ? MockPalette.blue : MockPalette.orange).padding(.leading, 8)
                             }
-                        }.frame(width: Self.quoteW, alignment: .topLeading).padding(.top, 11)
+                        }.frame(height: 36)
+                        Text(verbatim: "\(Self.mmdd(record.text("at"))) · \(record.text("title"))").font(V3.sans(12.5)).foregroundStyle(MockPalette.mute).lineLimit(1)
+                            .frame(width: 240, alignment: .leading).padding(.top, 4)
                     }
-                    .frame(height: rows == 3 && index == 2 ? 126 : runH, alignment: .top)
+                    .frame(width: 1055.0 / 4, alignment: .leading)
                 }
-                ForEach(0..<max(0, 3 - rows), id: \.self) { index in
-                    ghostRow(opacity: Self.ghostFade[index], shift: index, height: rows + index == 2 ? 126 : runH)
-                }
-            }
-            .padding(.top, 28)
-            if rows > 0 {
-                // 「停在这里」那条竖线：落在声纹右端与原话之间
-                Rectangle().fill(MockPalette.cl).frame(width: 1, height: runH * CGFloat(rows - 1) + 63)
-                    .padding(.top, 24).padding(.trailing, Self.quoteW + 7.5)
-                Text(verbatim: Self.stopLabel[rows]).font(V3.sans(12.5, weight: .medium)).foregroundStyle(MockPalette.sub).fixedSize()
-                    .frame(width: 0).padding(.trailing, Self.quoteW + 8).frame(height: 18)
-            }
+            }.offset(y: 58)
         }
-        .padding(.top, 12)
+        .frame(width: 1055, height: 130, alignment: .topLeading)
     }
 
-    // MARK: 摘要
-
-    private func tallies(_ title: String, items: [MockTally], width: CGFloat, records: Bool = false) -> some View {
-        let columns = width < 860 ? 2 : 4
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(verbatim: title).font(V3.sans(13)).foregroundStyle(MockPalette.fnt)
-                Spacer()
-                if records { Button("全部记录 ›", action: showRecords).buttonStyle(MockLinkStyle()) }
-            }.frame(height: 18)
-            Grid(alignment: .topLeading, horizontalSpacing: 24, verticalSpacing: 14) {
-                ForEach(Array(stride(from: 0, to: items.count, by: columns)), id: \.self) { start in
-                    GridRow {
-                        ForEach(start..<min(items.count, start + columns), id: \.self) { index in MockTallyCell(item: items[index]) }
-                        ForEach(0..<(columns - min(columns, items.count - start)), id: \.self) { _ in Color.clear.frame(height: 1) }
-                    }
-                }
+    /// 「还要补」最多三条：先是卡得最多的一处，再是还没答到位的其他考点，细节从各场记录里找。
+    static func openItems(_ overview: JSONValue, stuck: JSONValue?) -> [OpenItem] {
+        let records = (overview["records"]?.items ?? []).filter { $0.text("status") == "completed" && ($0["stuck"] ?? .null) != .null }
+            .sorted { (CareerApplication.date($0.text("at")) ?? .distantPast) > (CareerApplication.date($1.text("at")) ?? .distantPast) }
+        func key(_ text: String) -> String { text.lowercased().filter { !$0.isWhitespace } }
+        var names: [String] = []
+        if let topic = stuck?.text("topic").nonEmptyValue { names.append(topic) }
+        for name in (overview["tallies"]?["open"]?["examples"]?.items ?? []).compactMap(\.stringValue) where !name.isEmpty && !names.contains(where: { key($0) == key(name) }) { names.append(name) }
+        return names.prefix(3).enumerated().map { index, name in
+            let hits = records.filter { key($0["stuck"]?.text("topic") ?? "") == key(name) }
+            var item = OpenItem(topic: name)
+            item.detail = hits.first?["stuck"]?.text("detail").nonEmptyValue
+            if index == 0, let stuck, key(stuck.text("topic")) == key(name) {
+                let times = max(stuck["times"]?.integer ?? 0, hits.count)
+                if item.detail == nil, let detail = stuck.text("detail").nonEmptyValue { item.detail = "停在 \(detail)" }
+                if let quote = stuck["records"]?.items.last?.text("quote").nonEmptyValue { item.quote = "你上次说：“\(quote)……”" }
+                let latest = stuck["records"]?.items.last
+                let when = [latest.map { mmdd($0.text("date")) }, latest?.text("title").nonEmptyValue].compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: " ")
+                item.meta = "停过 \(max(times, 1)) 场" + (when.isEmpty ? "" : " · 最近 \(when)")
+            } else if let latest = hits.first {
+                let when = [mmdd(latest.text("at")), latest.text("title")].filter { !$0.isEmpty }.joined(separator: " ")
+                item.meta = "停过 \(hits.count) 场" + (when.isEmpty ? "" : " · \(when)")
             }
+            return item
         }
-        .padding(.top, 17)
-        .overlay(alignment: .top) { Rectangle().fill(MockPalette.line).frame(height: 1) }
     }
 
-    private static let emptyTallies = [
-        MockTally(value: "–", label: "不用再练", text: "答好的地方，之后就不再问。"),
-        MockTally(value: "–", label: "还要补", text: "卡住的地方，下一场接着问。"),
-        MockTally(value: "–", label: "回答习惯", text: "看你是先说结论，还是被追问才讲做法。"),
-        MockTally(value: "–", label: "分数变化", text: "每一场的分数都记在这里。"),
-    ]
+    // MARK: 摘要（旧版首页的四列，其他页面和测试还会用到文案）
 
     static func tallies(_ overview: JSONValue) -> [MockTally] {
         let counts = overview["counts"], t = overview["tallies"]
@@ -294,6 +490,7 @@ struct MockHomeV2: View {
         return String(format: "%02d-%02d", parts.month ?? 0, parts.day ?? 0)
     }
 
+
     // MARK: 命令
 
     private func startLabel(_ idle: String) -> String { active != nil ? "继续这一场" : evaluating != nil ? "看上一场" : idle }
@@ -308,7 +505,13 @@ struct MockHomeV2: View {
             async let overview = request("/api/mock-interviews/overview")
             async let list = request("/api/mock-interviews", query: ["limit": "100"])
             async let resumes = request("/api/resumes")
-            let next = HomeData(overview: try await overview, list: try await list["items"]?.items ?? [], resumes: try await resumes["resumes"]?.items ?? [])
+            // 下一场卡片的标题跟着最近的面试日程走；这两个读不到就用通用标题
+            let since = ISO8601DateFormatter().string(from: ReadCache.floor(Date(), minutes: 5).addingTimeInterval(-6 * 3600))
+            async let applications = try? request("/api/job-applications", query: ["scope": "active", "limit": "200"])
+            async let sessions = try? request("/api/interview-sessions", query: ["status": "scheduled", "start_at": since, "limit": "500"])
+            var next = HomeData(overview: try await overview, list: try await list["items"]?.items ?? [], resumes: try await resumes["resumes"]?.items ?? [])
+            next.applications = await applications?["items"]?.items ?? []
+            next.sessions = await sessions?["items"]?.items ?? []
             if Task.isCancelled { return }
             data = next; failed = false
         } catch { if !Task.isCancelled && data == nil { failed = true } }

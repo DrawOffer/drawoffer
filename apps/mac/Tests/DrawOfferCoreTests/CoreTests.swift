@@ -102,3 +102,16 @@ private actor DelayedIdentityAPI: APIClient {
     #expect(!CareerRequest.allowed(path: "/api/admin/job-pool/sources", method: "GET"))
     #expect(!CareerRequest.allowed(path: "/api/job-pool/abc", method: "GET"))
 }
+
+/// 模板卡片与预览：没有头像、显示系统默认头像的模板换成示例证件照，散列与 Web `templateSamplePhoto` 一致；隐藏头像的模板不动。
+@Test func templatePreviewUsesWebSamplePhoto() throws {
+    #expect(ResumeTemplate.samplePhoto("classic-tech") == "/templates/sample-photo-male.jpg")
+    #expect(ResumeTemplate.samplePhoto("swiss-orange") == "/templates/sample-photo-female.jpg")
+    let templates = try fixtureTemplates()
+    let campus = try #require(templates.first { $0.key == "featured-campus-cn" })
+    let avatar = campus.previewRequest().data["identity"]?["avatar"]
+    #expect(avatar?["src"]?.stringValue == ResumeTemplate.samplePhoto("featured-campus-cn"))
+    #expect(avatar?["system_fallback"] == .bool(false))
+    let hidden = try #require(templates.first { $0.key == "muse-code-cn" })
+    #expect(hidden.previewRequest().data["identity"]?["avatar"] == hidden.renderRequest().data["identity"]?["avatar"])
+}

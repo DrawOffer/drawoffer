@@ -1,5 +1,4 @@
 import AppKit
-import UniformTypeIdentifiers
 import DrawOfferCore
 import DrawOfferRender
 import SwiftUI
@@ -35,8 +34,8 @@ struct ResumesView: View {
     @State private var deleting: ResumeSummary?
     @State private var deleteBusy = false
     @State private var imports: [JSONValue] = []
-    @State private var importing = false
     @State private var importPoll: UUID?
+    @State private var importTries = 0
     private var atLimit: Bool { loaded && resumes.count >= ResumeRequest.maximumPerUser }
 
     private var account: String { if case .signedIn(let user) = session.phase { return user.id }; return "" }
@@ -60,8 +59,8 @@ struct ResumesView: View {
                             subtitle: atLimit ? "已达到 \(ResumeRequest.maximumPerUser) 份上限。删除不用的简历后，才能新建、导入或复制。" : "每份简历独立编辑，需要时复制一份按岗位修改。",
                             warn: atLimit) {
                     if !account.isEmpty {
-                        Button { importSheet = true } label: { Label(importing ? "正在上传…" : "导入简历", systemImage: "square.and.arrow.up") }
-                            .buttonStyle(ResumesPillStyle(dark: false)).disabled(importing || atLimit)
+                        Button { importSheet = true } label: { Label("导入简历", systemImage: "square.and.arrow.up") }
+                            .buttonStyle(ResumesPillStyle(dark: false)).disabled(atLimit)
                         Button(action: checkCapacityThenBrowse) { Label("新建简历", systemImage: "plus") }
                             .buttonStyle(ResumesPillStyle(dark: true))
                     }
@@ -71,15 +70,11 @@ struct ResumesView: View {
                 else if !loaded { skeleton }
                 else if resumes.isEmpty && imports.isEmpty { emptyList }
                 else { list }
-                if let notice {
-                    HStack(spacing: 10) {
-                        Text(notice.text).font(V3.sans(12.5)).foregroundStyle(notice.failed ? V3.red : V3.sub)
-                        Spacer()
-                        Button { self.notice = nil } label: { Image(systemName: "xmark").font(.system(size: 10)) }
-                            .buttonStyle(.plain).foregroundStyle(V3.fnt).accessibilityLabel("关闭提示")
-                    }.padding(.top, 16)
-                }
             }
+        }
+        .overlay(alignment: .top) {
+            TextNoticeToast(text: Binding(get: { notice?.text }, set: { if $0 == nil { notice = nil } }),
+                            kind: { text in notice?.text == text && notice?.failed == true ? .failed : .done })
         }
         .task(id: "\(account)|\(reload)") { await load() }
         .task(id: importPoll) { if importPoll != nil { await pollImports() } }
@@ -128,9 +123,9 @@ struct ResumesView: View {
 
     private var list: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // 02.1 工具行：距头部 32、高 30；「全部简历」13/500，数字 11 灰；搜索 220×30、圆角 7、#f4f4f2 底
+            // 02.1 工具行：距头部 32、高 30；「全部简历」16/600（Web `.hv3-toolbar-title` --ui-text-md），数字 11 灰；搜索 220×30、圆角 7、#f4f4f2 底
             HStack {
-                (Text("全部简历  ").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
+                (Text("全部简历  ").font(V3.sans(16, weight: .semibold)).foregroundStyle(V3.txt)
                  + Text("\(resumes.count)").font(V3.number(11, weight: .medium)).foregroundStyle(resumesHint))
                 Spacer()
                 HStack(spacing: 8) {
@@ -153,7 +148,7 @@ struct ResumesView: View {
                     }.buttonStyle(.plain).padding(.top, 27)
                 }.frame(maxWidth: .infinity).padding(.top, 160)
             } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 199), spacing: 20)], alignment: .leading, spacing: 37) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 199), spacing: 20, alignment: .top)], alignment: .leading, spacing: 37) {
                     if query.isEmpty {
                         ForEach(imports, id: \.self) { task in importCard(task) }
                     }
@@ -168,12 +163,15 @@ struct ResumesView: View {
                     if query.isEmpty {
                         // 02.1 ② 达到上限时这一格变成「已达 10 份上限」，不能点
                         Button(action: checkCapacityThenBrowse) {
-                            VStack(spacing: 12) {
-                                Image(systemName: "plus").font(.system(size: 14, weight: .light))
-                                Text(atLimit ? "已达 \(ResumeRequest.maximumPerUser) 份上限" : "新建空白简历").font(V3.sans(12))
-                            }.foregroundStyle(atLimit ? resumesHint.opacity(0.7) : resumesHint).frame(maxWidth: .infinity).aspectRatio(210.0 / 297, contentMode: .fit)
-                                .background(.white, in: RoundedRectangle(cornerRadius: 6))
+                            // 以虚线纸为底定尺寸（形状会占满列宽），和简历缩略图一样高；只靠文字时按钮会缩成一条
+                            RoundedRectangle(cornerRadius: 6).fill(.white).aspectRatio(210.0 / 297, contentMode: .fit)
                                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(hex: 0xC9C9C3), style: StrokeStyle(lineWidth: 1, dash: [4])))
+                                .overlay {
+                                    VStack(spacing: 12) {
+                                        Image(systemName: "plus").font(.system(size: 14, weight: .light))
+                                        Text(atLimit ? "已达 \(ResumeRequest.maximumPerUser) 份上限" : "新建空白简历").font(V3.sans(12))
+                                    }.foregroundStyle(atLimit ? resumesHint.opacity(0.7) : resumesHint)
+                                }
                                 .contentShape(Rectangle())
                         }.buttonStyle(.plain).disabled(atLimit).accessibilityLabel(atLimit ? "已达简历上限" : "新建空白简历")
                     }
@@ -263,42 +261,17 @@ struct ResumesView: View {
         let previousActive = imports.filter { $0.text("upload_status") != "failed" && $0.text("parse_status") != "failed" }.count
         imports = active + (overview["failed_imports"]?.items ?? [])
         // 有任务结束（成功生成简历或失败）时刷新简历列表
-        if previousActive > active.count { reload = UUID() }
-        if !active.isEmpty { importPoll = UUID() }
+        if previousActive > active.count { await session.api.purgeCache(); reload = UUID() }
+        if active.isEmpty { importTries = 0 } else { importPoll = UUID() }
     }
 
     private func pollImports() async {
         let owner = account
         guard !owner.isEmpty, !imports.isEmpty else { return }
-        try? await Task.sleep(for: .seconds(3))
-        guard !Task.isCancelled, owner == account else { return }
+        // 3 秒起逐步放慢到 20 秒；App 不在前台时暂停
+        guard await Polling.wait(importTries, first: 3, cap: 20, topic: "parse_task"), owner == account else { return }
+        importTries += 1
         await loadImports(owner: owner)
-    }
-
-    private func importFile() async {
-        guard !importing else { return }
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.pdf] + ["md", "docx"].compactMap { UTType(filenameExtension: $0) }
-        panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let file = panel.url else { return }
-        let owner = account
-        importing = true; notice = nil
-        defer { if owner == account { importing = false } }
-        do {
-            let templates = (try? await session.api.listResumeTemplates()) ?? []
-            // 导入默认模板由管理端顺序决定：接口已按 sort_order、id 升序返回启用且有效的模板，
-            // 首项即管理端标记「导入默认模板」的那一套，与 Web 使用同一条规则。
-            let template = templates.first
-            let upload = try ResumeImportUpload(file: file, templateID: template?.id)
-            _ = try await session.api.importResume(upload)
-            guard owner == account else { return }
-            notice = ("已开始导入「\(upload.fileName)」，解析完成后会出现在列表中。", false)
-            await loadImports(owner: owner)
-        } catch {
-            guard owner == account else { return }
-            if case APIError.unauthorized = error { session.reportAuthenticationFailure(); return }
-            notice = (ResumeImportUpload.errorMessage(error), true)
-        }
     }
 
     /// 02.1c 导入任务卡：#f4f4f2 圆角底里一张白纸，中间一个白色状态签（解析中带转圈）；失败时淡红底、红边、红字，右下「移除记录」。
@@ -460,10 +433,13 @@ private struct ResumeCard: View {
                     Button(exporting ? "正在导出…" : "导出 PDF", systemImage: "arrow.down.doc", action: export).disabled(exporting)
                     Divider()
                     Button("删除", systemImage: "trash", role: .destructive, action: delete)
-                } label: { Image(systemName: "ellipsis").font(.system(size: 12)).frame(width: 28, height: 28) }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                    .background(.white, in: RoundedRectangle(cornerRadius: 6))
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(V3.cl))
+                } label: {
+                    Image(systemName: "ellipsis").font(.system(size: 12)).foregroundStyle(V3.txt).frame(width: 28, height: 28)
+                        .background(.white, in: RoundedRectangle(cornerRadius: 6))
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(V3.cl))
+                        .contentShape(RoundedRectangle(cornerRadius: 6))
+                }
+                    .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
                     .padding(8).opacity(hovered || exporting ? 1 : 0)
                     .accessibilityLabel("更多简历操作 \(resume.title)")
             }
@@ -490,8 +466,7 @@ private struct ResumeThumbnail: View {
         GeometryReader { geometry in
             if let paper {
                 ResumePaperView(request: paper, onError: { _ in failed = true })
-                    .frame(width: 794, height: 1123)
-                    .scaleEffect(geometry.size.width / 794, anchor: .topLeading)
+                    .frame(width: geometry.size.width, height: geometry.size.width * 1123 / 794)
                     .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
                     .allowsHitTesting(false)
             } else if !failed { ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity) }
@@ -505,7 +480,8 @@ private struct ResumeThumbnail: View {
             .task(id: "\(resume.id)|\(resume.lockVersion)") {
                 paper = nil; failed = false
                 guard let request = resume.renderRequest() else { failed = true; return }
-                do { let result = try await session.api.preparePaper(request); try Task.checkCancellation(); paper = result.request }
+                // 同 Web 卡片：只画第一页；开着智能一页的也按不用智能一页时的第一页
+                do { let result = try await session.api.preparePaper(request.firstPage()); try Task.checkCancellation(); paper = result.request }
                 catch is CancellationError { }
                 catch { failed = true }
             }

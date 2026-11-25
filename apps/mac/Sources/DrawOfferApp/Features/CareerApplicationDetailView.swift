@@ -3,20 +3,6 @@ import DrawOfferCore
 import UniformTypeIdentifiers
 import SwiftUI
 
-struct CareerButtonStyle: ButtonStyle {
-    var primary = false
-    var radius: CGFloat = 6
-    var height: CGFloat = 32
-    func makeBody(configuration: Configuration) -> some View {
-        // macOS 稿：圆角 6，常规 28 / 大号 32
-        configuration.label.font(LibraryTypography.sans(12, weight: .medium))
-            .padding(.horizontal, 14).frame(height: height >= 32 ? 32 : 28)
-            .foregroundStyle(primary ? .white : Color(hex: 0x1D1D1B))
-            .background(primary ? Color(hex: 0x1D1D1B) : .white, in: RoundedRectangle(cornerRadius: radius))
-            .overlay(RoundedRectangle(cornerRadius: radius).stroke(primary ? .clear : Color.black.opacity(0.1)))
-            .opacity(configuration.isPressed ? 0.7 : 1)
-    }
-}
 struct CareerIcon: View {
     let name: String
     var size: CGFloat = 20
@@ -58,6 +44,7 @@ struct CareerApplicationDetailView: View {
     @State private var viewKey: String?
     @State private var details: [String: JSONValue] = [:]
     @State private var confirmDelete = false
+    @State private var delivering = false
     @State private var deciding = false
     @State private var reviewCost: String?
     @State private var prepCost: String?
@@ -68,8 +55,9 @@ struct CareerApplicationDetailView: View {
     private struct SplitJob { var running: Bool; var error: String? }
     @Environment(WorkspaceRouter.self) private var router: WorkspaceRouter?
     private var raw: JSONValue { current ?? application.raw }
+    /// 补充投递信息弹窗标题旁的阶段胶囊。
+    private var deliveryStage: String { item.stageLabel }
     private var item: CareerApplication { CareerApplication(raw).includingSessions(sessions) }
-    private var model: CareerDetailModel { CareerDetailModel(application: raw, sessions: sessions, now: now) }
     private var active: Bool { raw.text("lifecycle_status") != "terminated" && raw.text("status") == "active" && raw.text("archived_at").isEmpty }
 
     var body: some View {
@@ -175,12 +163,6 @@ struct CareerApplicationDetailView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     topBar(deck: deck, shown: shown, shownSession: shownSession)
                     if let error { HStack { Text(error).foregroundStyle(PD.red); Button("重试") { refreshed = UUID() }.buttonStyle(CareerActionStyle()) }.font(V3.sans(12)).padding(.top, 12) }
-                    if let notice {
-                        HStack(spacing: 10) {
-                            Text(notice).font(V3.sans(12.5)).foregroundStyle(PD.body)
-                            Button { self.notice = nil } label: { Image(systemName: "xmark").font(.system(size: 9)) }.buttonStyle(.plain).foregroundStyle(PD.mute).accessibilityLabel("关闭提示")
-                        }.padding(.top, 12)
-                    }
                     Spacer(minLength: 48)
                     let hero = CareerJourneyHero(job: item.company + " · " + item.title, step: step, files: files, sideHasBlack: sideHasBlack, disabled: busy || loading,
                                                  act: { journeyAction($0, shown: shown, session: shownSession) }, copy: copy, openFile: openAsset,
@@ -220,13 +202,16 @@ struct CareerApplicationDetailView: View {
             }
         }
         .foregroundStyle(PD.ink).font(V3.sans(13))
+        .overlay(alignment: .top) { TextNoticeToast(text: $notice, kind: { $0.contains("，但") ? .partial : $0.hasPrefix("已") ? .done : $0.contains("还没有") ? .info : .failed }) }
         .task(id: refreshed) { await load() }
         .task { await loadPrices() }
         .task(id: waiting) {
-            // 复盘或转写在后台跑：每 10 秒刷新，直到落定
+            // 复盘或转写在后台跑：5 秒起逐步放慢到 30 秒查一次，只查在跑的那几场；有一场落定才整页刷新。App 不在前台时暂停
+            var attempt = 0
             while waiting && !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(10))
-                if waiting && !Task.isCancelled { refreshed = UUID() }
+                guard await Polling.wait(attempt, first: 5, cap: 30, topic: "interview_session") else { return }
+                attempt += 1
+                if waiting { await checkWaiting() }
             }
         }
         .onExitCommand { if menuOpen { menuOpen = false } else if viewKey != nil { viewKey = nil } }
@@ -253,6 +238,10 @@ struct CareerApplicationDetailView: View {
                                   saved: { count in writtenAdding = nil; notice = "已导入 \(count) 道题。"; refreshed = UUID() })
         }
         .centeredSheet(isPresented: $deciding) { decideSheet }
+        .centeredSheet(isPresented: $delivering) {
+            CareerDeliverySheet(application: raw, stageLabel: deliveryStage, api: api, close: { delivering = false },
+                                saved: { delivering = false; refreshed = UUID(); notice = "已保存投递信息。" })
+        }
         .centeredConfirmation("删除这条投递？", isPresented: $confirmDelete) {
             Button("删除", role: .destructive) { perform("delete", item) }
             Button("取消", role: .cancel) {}
@@ -283,7 +272,8 @@ struct CareerApplicationDetailView: View {
         let ended = deck.ended != nil || !raw.text("archived_at").isEmpty
         let currentKind = deck.current?.kind
         let offerMenu = currentKind == .offer || currentKind == .oc || deck.ended?.kind == .accepted || deck.ended?.kind == .declined
-        var items: [CareerDetailMenu.Item] = [.init(title: "编辑投递信息") { perform("apply", item) }]
+        // 「编辑投递信息」只补投递本身的字段（09.09 / Web DeliveryDialog），不走「记录投递」加阶段
+        var items: [CareerDetailMenu.Item] = [.init(title: "编辑投递信息") { delivering = true }]
         if offerMenu { items.append(.init(title: "编辑 Offer 信息") { perform("offer", item) }) }
         items.append(.init(title: raw["is_favorite"]?.bool == true ? "取消收藏" : "收藏") { Task { await toggleFavorite() } })
         items.append(.init(title: "日历颜色", colors: true) {})
@@ -378,7 +368,7 @@ struct CareerApplicationDetailView: View {
             if let url = URL(string: raw["job_snapshot"]?.text("source_url") ?? ""), ["http", "https"].contains(url.scheme ?? "") { NSWorkspace.shared.open(url) }
         case .enter:
             if let url = URL(string: session?.text("meeting_url") ?? ""), url.scheme != nil { NSWorkspace.shared.open(url) }
-        case .mock: router?.jump(.mock(nil))
+        case .mock: router?.jump(.mockFor(application: application.id))
         case .generateReview: if let id = session?.text("id") { route = .stage(id) }
         case .openReview: openReview(session)
         case .openRecord: if let id = session?.text("id") { route = .record(id, paste: false, fromMaterials: nil) }
@@ -417,7 +407,25 @@ struct CareerApplicationDetailView: View {
     /// 复盘生成中或录音转写中。
     private var waiting: Bool {
         sessions.contains { $0.text("review_status") == "generating" }
-            || details.values.contains { ($0["session"]?["transcriptions"]?.items ?? []).contains { ["queued", "running"].contains($0.text("status")) } }
+            || details.values.contains(where: Self.transcribing)
+    }
+
+    private static func transcribing(_ detail: JSONValue) -> Bool {
+        (detail["session"]?["transcriptions"]?.items ?? []).contains { ["queued", "running"].contains($0.text("status")) }
+    }
+
+    /// 只读在跑的场次详情；有一场复盘或转写落定时作废读缓存并整页刷新，否则原地更新这几场。
+    private func checkWaiting() async {
+        let ids = Set(sessions.filter { $0.text("review_status") == "generating" }.map { $0.text("id") }
+                      + details.filter { Self.transcribing($0.value) }.map(\.key))
+        for id in ids.sorted() {
+            guard let fresh = try? await api.careerRequest(path: "/api/interview-sessions/\(id)", method: "GET", query: [:], body: nil),
+                  !Task.isCancelled else { continue }
+            if fresh["session"]?.text("review_status") != "generating" && !Self.transcribing(fresh) {
+                await api.purgeCache(); refreshed = UUID(); return
+            }
+            details[id] = fresh
+        }
     }
 
     private func loadPrices() async {

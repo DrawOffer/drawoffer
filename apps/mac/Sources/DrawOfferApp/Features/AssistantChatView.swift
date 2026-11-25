@@ -79,6 +79,10 @@ struct AssistantChatView: View {
     var initialDraft: String? = nil
     /// 生成状态回报给侧栏：生成中的对话不能删除（与 Web 一致）。
     var runningChanged: (String, Bool) -> Void = { _, _ in }
+    /// 从首页知识图谱「聊一聊」打开（Web `openHomeChat`）：新对话的第一条带 knowledge_point，由 AI 先开口。
+    var knowledge: HomeChatTopic? = nil
+    /// 首页右侧对话栏：窄栏，不画问候和模型行，消息用 16/26。
+    var panel = false
 
     /// 浮在输入框上方的弹层：同一时间只开一个。
     private enum Floating { case models, usage, materials }
@@ -125,6 +129,7 @@ struct AssistantChatView: View {
     @State private var previewFullscreen = false
     /// 额度拦截（Web `CreditNotice`）：额度用完，或当前模型不可用于当前额度；保留原消息以便重发。
     @State private var creditBlock: (kind: String, content: String)?
+    @State private var creditPlansTab: AccountPlansTab?
     @State private var notice: String?
     /// 每轮回复的准备过程，按 runId 保留（回复完成后折成回答上方一行）；`live` 是当前这一轮正在显示的步骤。
     @State private var processes: [String: AssistantProcessSnapshot] = [:]
@@ -134,6 +139,7 @@ struct AssistantChatView: View {
     /// 编辑最后一条消息（02B·08 E）：正在编辑的消息位置与草稿。
     @State private var editingIndex: Int?
     @State private var editDraft = ""
+    @State private var topicTagHidden = false
     /// 新建对话的标语与快捷输入（02B·02），按首页同一套场景规则挑选。
     @State private var greetingModel = HomeImproveModel()
     @State private var greetingTitle: String?
@@ -148,7 +154,21 @@ struct AssistantChatView: View {
     }
     private var isBlank: Bool { currentID == nil && messages.isEmpty && !sending }
     /// 正文列宽（02B·06）：720，右侧打开预览时收到 560。
-    private var columnWidth: CGFloat { previewOpen && !previewTabs.isEmpty ? 560 : 720 }
+    private var columnWidth: CGFloat { panel ? .infinity : previewOpen && !previewTabs.isEmpty ? 560 : 720 }
+    private var bodySize: CGFloat { panel ? 15 : 13.5 }
+    private var bodyLine: CGFloat { panel ? 26 : 24 }
+
+    /// 这段对话聊的知识点：从首页带来的，或打开旧对话时从第一条消息里读出。
+    private var topic: HomeChatTopic? {
+        if let knowledge { return knowledge }
+        for message in messages where message.text("role") == "user" {
+            if let point = message["knowledge_point"], !point.text("key").isEmpty {
+                return HomeChatTopic(key: point.text("key"), name: point.text("name"), state: "", tone: .plain)
+            }
+        }
+        return nil
+    }
+    private func isKickoff(_ message: JSONValue) -> Bool { message["knowledge_point"]?["kickoff"]?.bool == true }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -189,7 +209,7 @@ struct AssistantChatView: View {
     }
 
     @ViewBuilder private var chat: some View {
-        if isBlank { newChat } else { conversation }
+        if isBlank && !panel { newChat } else { conversation }
     }
 
     /// 关掉浮层的点击区：铺在消息区，点空白处收起。
@@ -235,7 +255,9 @@ struct AssistantChatView: View {
                     VStack(alignment: .leading, spacing: 28) {
                         ForEach(Array(messages.enumerated()), id: \.offset) { index, message in
                             if message.text("message_type") == "compaction" { compactionDivider(message) }
+                            else if isKickoff(message) { EmptyView() }
                             else if message.text("message_type") != "clarification" || !message.text("content").isEmpty { row(message, index: index) }
+                            if topicChoicesShown(after: index) { topicChoices }
                             ForEach(anchoredGroups[index] ?? [], id: \.key) { group in suggestionList(group.items) }
                         }
                         ForEach(looseGroups, id: \.key) { group in suggestionList(group.items) }
@@ -245,15 +267,15 @@ struct AssistantChatView: View {
                         if let currentID, !sending { MemoryReceipt(sessionID: currentID, refresh: messages.count) }
                         if let error { Text(error).font(V3.sans(12.5)).foregroundStyle(V3.red) }
                         Color.clear.frame(height: 1).id("bottom")
-                    }.frame(maxWidth: columnWidth, alignment: .leading).padding(.horizontal, 24).padding(.top, 48).padding(.bottom, 24).frame(maxWidth: .infinity)
+                    }.frame(maxWidth: columnWidth, alignment: .leading).padding(.horizontal, 24).padding(.top, panel ? 56 : 48).padding(.bottom, 24).frame(maxWidth: .infinity)
                 }
                 .overlay { dismissLayer }
                 .onChange(of: messages.count) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
                 .onChange(of: streaming) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
                 .onChange(of: live) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
             }
-            composer.frame(maxWidth: columnWidth).padding(.horizontal, 24).padding(.top, 8).padding(.bottom, 27).frame(maxWidth: .infinity)
-        }.frame(minWidth: 420)
+            composer.frame(maxWidth: columnWidth).padding(.horizontal, panel ? 16 : 24).padding(.top, 8).padding(.bottom, panel ? 16 : 27).frame(maxWidth: .infinity)
+        }.frame(minWidth: panel ? 0 : 420)
     }
 
     /// 等待回复（02B·03 / 04）：正文还没开始时是山茶花 + 当前一步 + 工具卡；正文开始后过程折成一行放在正文上方。
@@ -264,7 +286,7 @@ struct AssistantChatView: View {
         } else {
             VStack(alignment: .leading, spacing: 12) {
                 if let runID, let snapshot = processes[runID] { AssistantProcessFold(snapshot: snapshot) }
-                NativeMarkdownView(source: streaming, size: 13.5, line: 24).textSelection(.enabled)
+                NativeMarkdownView(source: streaming, size: bodySize, line: bodyLine).textSelection(.enabled)
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -364,8 +386,8 @@ struct AssistantChatView: View {
             if editingIndex == index {
                 editBox(message, index: index)
             } else {
-                // 气泡（02B·03）：#F4F4F2、圆角 12、内边距 14/11，13 号字
-                Text(Self.userSegments(message.text("content"), inline, active: activePreviewKey)).font(V3.sans(13)).lineHeight(13, 21).foregroundStyle(V3.txt).textSelection(.enabled)
+                // 气泡（02B·03）：#F4F4F2、圆角 12、内边距 14/11，13 号字，单行高 38（多行补行距到 21）
+                Text(Self.userSegments(message.text("content"), inline, active: activePreviewKey)).font(V3.sans(panel ? 15 : 13)).lineSpacing(panel ? 6 : 5.4).foregroundStyle(V3.txt).textSelection(.enabled)
                     .environment(\.openURL, OpenURLAction { url in
                         if let context = inline.first(where: { "drawoffer-context:" + Self.encoded($0.text("label")) == url.absoluteString }),
                            let tab = ChatPreviewTab.forContext(context), !unavailableFiles.contains(tab.key) { openPreview(tab) }
@@ -412,8 +434,9 @@ struct AssistantChatView: View {
             }
             let files = message["attachments"]?.items ?? []
             if !files.isEmpty { messageAttachments(files) }
-            NativeMarkdownView(source: message.text("content").nilIfEmpty ?? (message.text("message_type") == "clarification" ? "需要你补充一些信息。" : ""), size: 13.5, line: 24)
+            NativeMarkdownView(source: message.text("content").nilIfEmpty ?? (message.text("message_type") == "clarification" ? "需要你补充一些信息。" : ""), size: bodySize, line: bodyLine)
                 .textSelection(.enabled)
+                .environment(\.openURL, OpenURLAction { url in openDrawOfferLink(url) })
             if message.text("status") == "stopped" { Text("已停止生成").font(V3.sans(11)).foregroundStyle(V3.fnt).padding(.top, 6) }
             if message.text("status") == "failed" { Text("生成未完成").font(V3.sans(11)).foregroundStyle(V3.fnt).padding(.top, 6) }
             if !cards.isEmpty || document != nil {
@@ -720,6 +743,7 @@ struct AssistantChatView: View {
                     .shadow(color: .black.opacity(0.07), radius: 10, y: 6).padding(.bottom, 8)
             }
             if !screenshots.isEmpty { screenshotStrip(screenshots, removable: true).padding(.bottom, 8) }
+            if let topic, !topicTagHidden { topicTag(topic).padding(.leading, 4).padding(.bottom, 8) }
             if !contexts.isEmpty {
                 FlowLayout(spacing: 6) { ForEach(contexts, id: \.self) { contextChip($0) } }.padding(.leading, 4).padding(.bottom, 11)
             }
@@ -748,7 +772,7 @@ struct AssistantChatView: View {
                     }
                 }
                 .zIndex(1)
-            HStack(spacing: 10) {
+            if !panel { HStack(spacing: 10) {
                 Button { toggleFloating(.materials); Task { await loadContexts() } } label: {
                     HStack(spacing: 6) { Image(systemName: "plus").font(.system(size: 10, weight: .regular)); Text("添加资料") }
                         .font(V3.sans(12.5)).foregroundStyle(V3.sub).contentShape(Rectangle())
@@ -759,8 +783,8 @@ struct AssistantChatView: View {
                     AssistantUsageRing(usage: contextUsage) { toggleFloating(.usage) }
                     ModelPicker(models: models, selectedID: modelID, disabled: sending, externalToggle: { toggleFloating(.models) }) { _ in }
                 }
-            }.frame(height: 16).padding(.leading, 12).padding(.trailing, 12).padding(.top, 12)
-        }.frame(maxWidth: 720)
+            }.frame(height: 16).padding(.leading, 12).padding(.trailing, 12).padding(.top, 12) }
+        }.frame(maxWidth: panel ? .infinity : 720)
         .dropDestination(for: URL.self) { urls, _ in addFiles(urls); return !urls.isEmpty }
     }
 
@@ -768,7 +792,7 @@ struct AssistantChatView: View {
 
     private var inputBox: some View {
         HStack(alignment: .bottom, spacing: 12) {
-            ChatInputField(text: $draft, placeholder: ready == false ? "AI 助手暂未开放" : isBlank ? "有什么想问的？" : "继续提问或说明调整要求…",
+            ChatInputField(text: $draft, placeholder: ready == false ? "AI 助手暂未开放" : topic.map { "问点和\($0.name)有关的…" } ?? (isBlank ? "有什么想问的？" : "继续提问或说明调整要求…"),
                            submit: {
                                if let first = slashMatches.first { runSlash(first.id) }
                                else if let mention = mentionQuery, let first = contextGroups.flatMap({ $0["items"]?.items ?? [] })
@@ -789,7 +813,7 @@ struct AssistantChatView: View {
                 }
             if sending, runID != nil {
                 Button { Task { await cancel() } } label: {
-                    RoundedRectangle(cornerRadius: 2).fill(.white).frame(width: 9, height: 9).frame(width: 32, height: 32).background(V3.txt, in: Circle())
+                    RoundedRectangle(cornerRadius: 2).fill(.white).frame(width: 10, height: 10).frame(width: 32, height: 32).background(V3.txt, in: Circle())
                 }.buttonStyle(.plain).accessibilityLabel("停止生成")
             } else {
                 Button { Task { await send(draft) } } label: {
@@ -984,6 +1008,9 @@ struct AssistantChatView: View {
         if let initialMessage, !consumedInitial, !initialMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             consumedInitial = true
             await send(initialMessage)
+        } else if let knowledge, sessionID == nil, !consumedInitial {
+            consumedInitial = true
+            await send("聊聊\(knowledge.name)", kickoff: true)
         } else if let initialDraft, !consumedInitial, draft.isEmpty {
             consumedInitial = true
             draft = initialDraft
@@ -1018,16 +1045,19 @@ struct AssistantChatView: View {
         }
     }
 
-    private func ensureSession() async throws -> String {
+    private func ensureSession(title: String? = nil) async throws -> String {
         if let currentID { return currentID }
-        let result = try await api.careerRequest(path: "/api/agent/sessions", method: "POST", query: [:], body: modelID.map { .object(["modelId": .string($0)]) } ?? .object([:]))
+        var fields: [String: JSONValue] = [:]
+        if let modelID { fields["modelId"] = .string(modelID) }
+        if let title { fields["title"] = .string(title) }
+        let result = try await api.careerRequest(path: "/api/agent/sessions", method: "POST", query: [:], body: .object(fields))
         guard let id = result["session"]?.text("id").nilIfEmpty else { throw APIError.invalidResponse }
-        currentID = id; title = result["session"]?.text("title").nilIfEmpty ?? "新对话"
+        currentID = id; self.title = result["session"]?.text("title").nilIfEmpty ?? "新对话"
         created(id)
         return id
     }
 
-    private func send(_ text: String, replyTo: Int? = nil, clarificationAnswers: [JSONValue]? = nil) async {
+    private func send(_ text: String, replyTo: Int? = nil, clarificationAnswers: [JSONValue]? = nil, kickoff: Bool = false) async {
         let content = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if replyTo == nil, screenshots.contains(where: { $0.status != .ready }) {
             notice = screenshots.contains { $0.status == .uploading } ? "附件还在上传，请稍候。" : "有附件没有上传成功，请重试或移除。"
@@ -1038,8 +1068,14 @@ struct AssistantChatView: View {
         sending = true; error = nil; streaming = ""; status = nil; creditBlock = nil; floating = nil
         let attached = contexts
         do {
-            let id = try await ensureSession()
+            let id = try await ensureSession(title: knowledge?.name)
             var body: [String: JSONValue] = ["content": .string(content), "idempotency_key": .string(UUID().uuidString.lowercased())]
+            // 图谱节点的对话：只有第一条带知识点；kickoff 是打开动作本身，不显示
+            let knowledgeFirst = knowledge != nil && !messages.contains { $0.text("role") == "user" }
+            if let knowledge, knowledgeFirst {
+                body["knowledge_point"] = .string(knowledge.key)
+                if kickoff { body["knowledge_kickoff"] = .bool(true) }
+            }
             if !attached.isEmpty {
                 body["contexts"] = .array(attached.map { item in
                     var ref: [String: JSONValue] = ["type": .string(item.text("type")), "id": .string(item.text("id")), "presentation": .string("mention")]
@@ -1054,7 +1090,9 @@ struct AssistantChatView: View {
             draft = ""; contexts = []; answers = [:]
             if replyTo == nil { screenshots = [] }
             let sentFiles: [JSONValue] = files.map { .object(["file_name": .string($0.label), "kind": .string($0.kind), "file_size": .number(Double($0.size))]) }
-            messages.append(.object(["role": .string("user"), "content": .string(content), "contexts": .array(attached), "attachments": .array(sentFiles)]))
+            var local: [String: JSONValue] = ["role": .string("user"), "content": .string(content), "contexts": .array(attached), "attachments": .array(sentFiles)]
+            if let knowledge, knowledgeFirst { local["knowledge_point"] = .object(["key": .string(knowledge.key), "name": .string(knowledge.name), "kickoff": .bool(kickoff)]) }
+            messages.append(.object(local))
             await stream(path: "/api/agent/sessions/\(id)/messages", method: "POST", body: .object(body), sessionID: id)
         } catch {
             sending = false
@@ -1066,6 +1104,60 @@ struct AssistantChatView: View {
             }
             self.error = AgentRequest.errorMessage(error)
         }
+    }
+
+    // MARK: 首页知识图谱的对话（Figma 02A·10 ②–④）
+
+    /// AI 开场白后面：先学还是去模拟面试练；用户回了一句之后不再出现（Web `assistant-knowledge-opening`）。
+    private func topicChoicesShown(after index: Int) -> Bool {
+        guard topic != nil, !sending, index == messages.count - 1, messages[index].text("role") == "assistant",
+              messages[index].text("status").isEmpty,
+              let user = messages[..<index].last(where: { $0.text("role") == "user" }) else { return false }
+        return isKickoff(user)
+    }
+
+    private var topicChoices: some View {
+        HStack(spacing: 8) {
+            Button { Task { await send("先讲给我听") } } label: { Text("先讲给我听").padding(.horizontal, 18).frame(height: 36) }
+                .buttonStyle(TopicChoiceStyle())
+            Button { practiceTopic() } label: { Text("去模拟面试练 ↗").padding(.horizontal, 18).frame(height: 36) }
+                .buttonStyle(TopicChoiceStyle())
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 「去模拟面试练 ↗」：带着这个知识点去模拟面试设置页（接着练）。
+    private func practiceTopic() {
+        guard let topic else { return }
+        router.jump(.mock(PracticeFocus(kind: "topic", ref: topic.key, label: topic.name)))
+    }
+
+    /// 输入框上方的知识点标签：对话栏里是「● 名称 状态」，对话页是「名称 知识点 ×」，可以移除。
+    private func topicTag(_ topic: HomeChatTopic) -> some View {
+        HStack(spacing: 6) {
+            if panel {
+                Circle().fill(topic.tone == .hot ? V3.orange : topic.tone == .new ? V3.blue : V3.fnt).frame(width: 6, height: 6)
+            } else {
+                Image(systemName: "doc.text").font(.system(size: 9)).foregroundStyle(V3.sub)
+            }
+            Text(topic.name).font(V3.sans(12, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1)
+            if panel, !topic.state.isEmpty { Text(topic.state).font(V3.sans(11)).foregroundStyle(Color(hex: 0x96968F)) }
+            if !panel {
+                Text("知识点").font(V3.sans(11)).foregroundStyle(Color(hex: 0x96968F))
+                Button { topicTagHidden = true } label: { Image(systemName: "xmark").font(.system(size: 8, weight: .medium)).foregroundStyle(V3.fnt) }
+                    .buttonStyle(.plain).accessibilityLabel("移除知识点")
+            }
+        }
+        .padding(.horizontal, 7).frame(height: 24)
+        .background(.white, in: RoundedRectangle(cornerRadius: 6.5)).overlay(RoundedRectangle(cornerRadius: 6.5).stroke(V3.cl))
+    }
+
+    /// 回复里的 `drawoffer:mock/<id>`、`drawoffer:interview/<投递 id>/<场次 id>`：跳到那一场的报告或面试记录。
+    private func openDrawOfferLink(_ url: URL) -> OpenURLAction.Result {
+        guard url.scheme == "drawoffer" else { return .systemAction }
+        let parts = url.absoluteString.dropFirst("drawoffer:".count).split(separator: "/").map(String.init)
+        if parts.count >= 2, parts[0] == "mock" { router.jump(.mockSession(parts[1])) }
+        else if parts.count >= 2, parts[0] == "interview" { router.jump(.application(parts[1])) }
+        return .handled
     }
 
     /// 编辑最后一条消息（02B·08 E）：`POST …/messages/{seq}:edit`，这条之后的回复会被新的回复替换。
@@ -1181,27 +1273,22 @@ struct AssistantChatView: View {
 
     private var freeModel: JSONValue? { models.first { $0["isFreeTier"]?.bool == true && $0.text("id") != modelID } }
 
+    /// 05.01：积分不足的白卡；开通会员 / 购买积分打开会员与积分弹窗的对应标签。
     private func creditNotice(_ block: (kind: String, content: String)) -> some View {
         let title = block.kind == "exhausted" ? "本月额度已用完，未能生成回复"
             : currentModelName.map { "\($0) 暂不可用于当前额度" } ?? "这项功能暂不可用于当前额度"
         let body = block.kind == "exhausted" ? "你的消息已保留，额度恢复后可以直接重新发送。" : "当前额度只能使用基础模型，可以改用基础模型重新发送。"
-        return VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(V3.sans(13.5, weight: .semibold))
-            Text(body).font(V3.sans(12.5)).foregroundStyle(V3.sub)
-            HStack(spacing: 8) {
-                if block.kind == "model", let free = freeModel {
-                    Button("改用 \(free.text("name")) 重新发送") {
-                        Task { await chooseModel(free); creditBlock = nil; await send(block.content) }
-                    }.buttonStyle(V3ButtonStyle(kind: .ghost))
-                }
-                if block.kind == "exhausted" {
-                    Button("我的额度") { router.jump(.section(.account)) }.buttonStyle(V3ButtonStyle(kind: .ghost))
-                }
-                Button("把消息放回输入框") { draft = block.content; creditBlock = nil }.buttonStyle(.plain).font(V3.sans(12)).foregroundStyle(V3.link)
-            }
-        }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
-            .background(.white, in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(V3.cl))
-            .accessibilityElement(children: .contain).accessibilityLabel(title)
+        var fallback: (label: String, action: () -> Void)?
+        if block.kind == "model", let free = freeModel {
+            fallback = (label: "改用 \(free.text("name")) 重新发送", action: { Task { await chooseModel(free); creditBlock = nil; await send(block.content) } })
+        }
+        return AccountCreditsShortCard(title: title, message: body,
+                                       onPlans: { creditPlansTab = .init(id: "membership") },
+                                       onCredits: { creditPlansTab = .init(id: "pack") },
+                                       fallback: fallback,
+                                       restore: { draft = block.content; creditBlock = nil })
+            .centeredSheet(item: $creditPlansTab) { tab in PlansSheet(initialTab: tab.id) }
+            .accessibilityLabel(title)
     }
 
     // MARK: 修改建议（02B·11）
@@ -1319,6 +1406,16 @@ struct AssistantChatView: View {
     private func cancel() async {
         guard let runID else { return }
         _ = try? await api.careerRequest(path: "/api/agent/runs/\(runID)/cancel", method: "POST", query: [:], body: nil)
+    }
+}
+
+/// 开场白下面的白底细边胶囊按钮（`.v3-btn-ghost`）。
+private struct TopicChoiceStyle: ButtonStyle {
+    @State private var hovering = false
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.font(V3.sans(13.5, weight: .medium)).foregroundStyle(V3.txt)
+            .background(.white, in: Capsule()).overlay(Capsule().stroke(hovering || configuration.isPressed ? V3.txt : Color(hex: 0xDCDAD2)))
+            .contentShape(Capsule()).onHover { hovering = $0 }
     }
 }
 
@@ -1471,7 +1568,8 @@ struct ChatInputField: NSViewRepresentable {
             guard let view else { return }
             let label = hint ?? {
                 let field = NSTextField(labelWithString: "")
-                field.textColor = .tertiaryLabelColor
+                // Figma 02B 输入框占位 #A3A39C
+                field.textColor = NSColor(srgbRed: 0xA3 / 255, green: 0xA3 / 255, blue: 0x9C / 255, alpha: 1)
                 field.font = .systemFont(ofSize: 14)
                 view.addSubview(field)
                 hint = field

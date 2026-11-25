@@ -38,12 +38,10 @@ struct ResumeEditorView: View {
     @State private var lineTarget: ResumeLineChat.Target?
     /// 每次从纸面点一次就重开一轮对话。
     @State private var lineAsk = 0
-    @State private var showType = false
-    @State private var showOrder = false
+    /// 排版卡片刚被点空白处收起的时刻：点规格行入口时系统先收起再触发按钮，据此不把它又打开。
+    @State private var typeClosedAt = Date.distantPast
     @State private var zoom = 1.0
     @State private var zoomBadge: Double?
-    /// Web 存在 localStorage 的「页面排列」，只影响编辑时浏览方向。
-    @AppStorage("workbench.pageArrangement") private var pageArrangement = "vertical"
     @State private var uploading = false
     /// 右侧工具轨当前打开的面板（Web 大纲 / 模板 / 排版）。
     @State private var panel: String?
@@ -108,33 +106,28 @@ struct ResumeEditorView: View {
             Button("放弃修改", role: .destructive, action: close)
             Button("继续编辑", role: .cancel) {}
         }
-        .centeredSheet(isPresented: $showOrder) {
-            SectionOrderSheet(sections: sections, columns: ResumeLayout.columns(data: doc, style: style),
-                              apply: { order in channel.send(.reorder(order.map(\.nodeKey))) }, close: { showOrder = false },
-                              rename: { id, title in channel.send(.rename(id, title)) },
-                              remove: { id in channel.send(.remove(id)) })
-        }
     }
 
     // MARK: Canvas
 
     /// Figma 03 页 07.0：编辑器整页铺满窗口，#f3f3f0 画布，顶栏与红绿灯同一行、和画布同底。
     static let canvas = Color(hex: 0xF3F3F0)
-    /// 排版卡片（06.2）：从纸的右边出来。
-    private var drawerOpen: Bool { panel == "type" }
+    /// 排版卡片（06.2）：规格行左边点开，320 宽 NSPopover，箭头指向规格行。
     /// 检查简历（12.7–12.11）与改这一条（12.1–12.6）：纸右边一列对话，和引导一样不加卡片。
     private var checkOpen: Bool { panel == "check" }
     private var lineOpen: Bool { panel == "line" && lineTarget != nil }
     private var columnOpen: Bool { guideOpen || checkOpen || lineOpen }
-    /// 模板栏（07.1）：顶栏「模板」打开，贴编辑器左边一整列，纸往右让开。
+    /// 模板栏（07.1）：顶栏「模板」打开，贴编辑器右边一整列（跟 Web 分区 18 一样，和右上角“模板”按钮同侧），纸往左让开。
     private var templateOpen: Bool { panel == "template" }
-    /// 07.1 模板栏宽 356；12.x 对话列 400、距纸 52。
-    static let railWidth: CGFloat = 356
+    /// 07.1 模板栏宽 343（含左侧 1 的细线）；12.x 对话列 400、距纸 52。
+    static let railWidth: CGFloat = 343
     static let columnGap: CGFloat = 52
+    /// 编辑器里 100% 时纸面宽 560（稿 A4 Page 560、规格行 572 = 纸宽 + 12）。
+    static let paperWidth: CGFloat = 560
 
-    /// 纸与右边一列当成一组居中：纸面宽 794 × 缩放；放不下时对话列贴右 24。
+    /// 纸与右边一列当成一组居中：纸面宽 560 × 缩放（渲染器 EDITOR_PAGE_BASE_SCALE = 560 / 794，稿 A4 Page 560）；放不下时对话列贴右 24。
     private func columnLayout(width: CGFloat) -> (paperTrailing: CGFloat, columnX: CGFloat) {
-        let paper = 794 * zoom
+        let paper = Self.paperWidth * zoom
         let group = paper + Self.columnGap + ResumeTalk.columnWidth
         if width >= group + 80 {
             let left = (width - group) / 2
@@ -147,7 +140,7 @@ struct ResumeEditorView: View {
         GeometryReader { geometry in
             let layout = columnLayout(width: geometry.size.width - (templateOpen ? Self.railWidth : 0))
             VStack(spacing: 0) { specBar.padding(.top, 8); preview }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.trailing, columnOpen ? layout.paperTrailing : 0).padding(.leading, templateOpen ? Self.railWidth : 0)
+                .padding(.trailing, (columnOpen ? layout.paperTrailing : 0) + (templateOpen ? Self.railWidth : 0))
                 .animation(.timingCurve(0.2, 0, 0, 1, duration: 0.22), value: columnOpen || templateOpen)
                 .overlay(alignment: .topLeading) {
                     Group {
@@ -175,19 +168,17 @@ struct ResumeEditorView: View {
                     }
                     .frame(width: ResumeTalk.columnWidth).frame(maxHeight: .infinity, alignment: .top)
                     .padding(.top, 44)
-                    .offset(x: layout.columnX + (templateOpen ? Self.railWidth : 0))
+                    .offset(x: layout.columnX)
                 }
         }
         .background(Self.canvas)
-        .overlay(alignment: .leading) {
+        .overlay(alignment: .trailing) {
             if templateOpen {
+                // 稿：栏底色跟画布一样，不加白底；只有一条 #e4e4e0 竖线，从工具栏下 40 起一直到底
                 VStack(spacing: 0) { panelView }.frame(width: Self.railWidth).frame(maxHeight: .infinity, alignment: .top)
-                    .background(.white).overlay(alignment: .trailing) { Rectangle().fill(.black.opacity(0.08)).frame(width: 1) }
-                    .transition(.move(edge: .leading)).accessibilityElement(children: .contain)
+                    .overlay(alignment: .leading) { Rectangle().fill(V3.cl).frame(width: 1).padding(.top, 40) }
+                    .transition(.move(edge: .trailing)).accessibilityElement(children: .contain)
             }
-        }
-        .overlay(alignment: .topTrailing) {
-            if drawerOpen { drawerCard { panelView }.padding(.top, 44).padding(.trailing, 16).padding(.bottom, 16) }
         }
         .overlay(alignment: .top) { if saveFailed { saveNotice.padding(.top, 15) } }
         .overlay { if let zoomBadge { zoomFeedback(zoomBadge) } }
@@ -199,17 +190,6 @@ struct ResumeEditorView: View {
         let section = sections.first { $0.nodeKey == id || ($0["entries"]?.items ?? []).contains { $0.nodeKey == id } }
         guard let section else { return .experience }
         return ResumeCheck.kind(semantic: section.text("semantic_kind"), label: sectionLabel(section))
-    }
-
-    /// `.wb3-drawer`：380 宽、圆角 14、#e4e4e0 描边、白底、0 8 24 rgba(0,0,0,.08)。
-    private func drawerCard<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        VStack(spacing: 0) { content() }
-            .frame(width: 380).frame(maxHeight: .infinity, alignment: .top)
-            .background(.white, in: RoundedRectangle(cornerRadius: 14))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(V3.cl))
-            .shadow(color: .black.opacity(0.08), radius: 12, y: 8)
-            .accessibilityElement(children: .contain)
     }
 
     /// `.wb3-save-notice`：420×64 白卡，圆角 12，红色 16 圆圈「!」、标题与原因、重试保存。
@@ -258,28 +238,32 @@ struct ResumeEditorView: View {
 
     // MARK: Toolbar & preview
 
-    /// Figma macOS 稿 03 页 07.0「Editor Toolbar · NSToolbar」：52 高，与红绿灯同一行（左让出 84），和画布同底、不画分隔线。
-    /// 左：无边框 ← 我的简历、撤销 / 重做；中：简历标题居中（最宽 560，末尾省略）；右：无边框「模板」「导出 PDF」。
+    /// Figma macOS 稿 03 页 07.0「Editor Toolbar · NSToolbar」：52 高，和画布同底、不画分隔线。
+    /// 窗口是隐藏标题栏，红绿灯中线在顶上 16pt（与侧栏顶行一致）：整行控件放在顶上 32 高里与红绿灯同一中线，左让出 84，下面留 20 给画布上沿。
+    /// 左：← 我的简历（同 Web `BackCrumb`：灰字常规、悬停转墨黑，无底色）、撤销 / 重做；中：简历标题居中（最宽 560，末尾省略）；右：无边框「模板」「导出 PDF」。
     /// 「检查简历」在纸面上沿右边。
     /// 不显示“已保存”，自动保存失败才在画布上方出提示卡。
     private var toolbar: some View {
         ZStack {
-            HStack(spacing: 4) {
+            HStack(spacing: 6) {
                 Button { leave() } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: "arrow.left").font(.system(size: 13, weight: .medium))
-                        Text("我的简历").font(V3.sans(13, weight: .medium))
-                    }.padding(.horizontal, 8).frame(height: 28).contentShape(Rectangle())
-                }.buttonStyle(ToolbarPlainStyle(strong: true)).help("返回我的简历").accessibilityLabel("返回我的简历")
-                Button { channel.send(.undo) } label: { toolbarIcon("arrow.uturn.backward") }
-                    .buttonStyle(ToolbarPlainStyle()).disabled(!canUndo || busy).help("撤销（⌘Z）").accessibilityLabel("撤销")
-                    .keyboardShortcut("z", modifiers: .command).padding(.leading, 4)
-                Button { channel.send(.redo) } label: { toolbarIcon("arrow.uturn.forward") }
-                    .buttonStyle(ToolbarPlainStyle()).disabled(!canRedo || busy).help("重做（⇧⌘Z）").accessibilityLabel("重做")
-                    .keyboardShortcut("z", modifiers: [.command, .shift])
+                        Image(systemName: "arrow.left").font(.system(size: 13))
+                        Text("我的简历").font(V3.sans(14))
+                    }.frame(height: 28).contentShape(Rectangle())
+                }.buttonStyle(BackCrumbStyle()).help("返回我的简历").accessibilityLabel("返回我的简历")
+                // 稿：返回与撤销 / 重做相隔 14，撤销 / 重做各 26×26、间距 4
+                HStack(spacing: 4) {
+                    Button { channel.send(.undo) } label: { toolbarIcon("arrow.uturn.backward") }
+                        .buttonStyle(ToolbarPlainStyle()).disabled(!canUndo || busy).help("撤销（⌘Z）").accessibilityLabel("撤销")
+                        .keyboardShortcut("z", modifiers: .command)
+                    Button { channel.send(.redo) } label: { toolbarIcon("arrow.uturn.forward") }
+                        .buttonStyle(ToolbarPlainStyle()).disabled(!canRedo || busy).help("重做（⇧⌘Z）").accessibilityLabel("重做")
+                        .keyboardShortcut("z", modifiers: [.command, .shift])
+                }.padding(.leading, 8)
                 Spacer(minLength: 16)
                 if conflict { Button("重新载入") { Task { await load() } }.buttonStyle(ToolbarPlainStyle(strong: true)).padding(.trailing, 4) }
-                Button { togglePanel("template") } label: { toolbarLabel("模板", "square.grid.2x2") }
+                Button { togglePanel("template") } label: { toolbarLabel("模板", "square.grid.2x2", weight: .regular) }
                     .buttonStyle(ToolbarPlainStyle(pressed: panel == "template")).disabled(busy || conflict || record == nil)
                     .accessibilityLabel("简历模板").accessibilityAddTraits(panel == "template" ? .isSelected : [])
                 Button { Task { await exportPDF() } } label: { toolbarLabel(exporting ? "导出中…" : "导出 PDF", "square.and.arrow.up") }
@@ -287,18 +271,18 @@ struct ResumeEditorView: View {
             }
             TitleField(title: $title).frame(maxWidth: 560)
         }
-        .padding(.leading, 84).padding(.trailing, 16).frame(height: 52)
+        .padding(.leading, 84).padding(.trailing, 14).frame(height: 32).padding(.bottom, 20)
         .background(Self.canvas)
     }
 
     private func toolbarIcon(_ symbol: String) -> some View {
-        Image(systemName: symbol).font(.system(size: 13)).frame(width: 28, height: 28).contentShape(Rectangle())
+        Image(systemName: symbol).font(.system(size: 14)).frame(width: 26, height: 26).contentShape(Rectangle())
     }
 
-    private func toolbarLabel(_ title: String, _ symbol: String) -> some View {
+    private func toolbarLabel(_ title: String, _ symbol: String, weight: Font.Weight = .medium) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: symbol).font(.system(size: 12.5))
-            Text(title).font(V3.sans(13, weight: .medium))
+            Image(systemName: symbol).font(.system(size: 13))
+            Text(title).font(V3.sans(13, weight: weight))
         }.padding(.horizontal, 8).frame(height: 28).contentShape(Rectangle())
     }
 
@@ -316,27 +300,49 @@ struct ResumeEditorView: View {
                 }.foregroundStyle(V3.fnt).padding(.horizontal, 6).frame(height: 24)
                     .accessibilityElement(children: .combine).accessibilityAddTraits(.updatesFrequently)
             } else if let settings {
-                Button { togglePanel("type") } label: {
-                    HStack(spacing: 5) {
+                Button {
+                    // 点入口收起：系统在按下时已经把卡片收掉，这里不再重开
+                    if Date().timeIntervalSince(typeClosedAt) > 0.3 { panel = open ? nil : "type" }
+                } label: {
+                    HStack(spacing: 4) {
                         Text(specSummary(settings)).font(V3.sans(12.5)).lineLimit(1)
                         Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .medium))
                     }.padding(.horizontal, 6).frame(height: 24).contentShape(Rectangle())
-                }.buttonStyle(ToolbarPlainStyle(pressed: open)).disabled(busy)
+                }.buttonStyle(ToolbarPlainStyle(pressed: open, ink: Self.specInk, radius: 5)).disabled(busy)
+                    .popover(isPresented: typePopoverBinding, arrowEdge: .bottom) {
+                        if ResumeTypeSettings.read(style) != nil {
+                            TypeCard(settings: typeBinding, pageCount: pages, sections: sections,
+                                     columns: ResumeLayout.columns(data: doc, style: style), label: sectionLabel, disabled: busy,
+                                     reorder: { order in channel.send(.reorder(order.map(\.nodeKey))) },
+                                     rename: { id, title in channel.send(.rename(id, title)) },
+                                     remove: { id in channel.send(.remove(id)) })
+                        } else {
+                            Text("当前模板不支持调整排版").font(V3.sans(12.5)).foregroundStyle(V3.fnt).padding(24)
+                        }
+                    }
                     .accessibilityLabel("排版：\(specSummary(settings))").accessibilityAddTraits(open ? .isSelected : [])
             }
             Spacer(minLength: 0)
             if guide != nil && !guideOpen {
                 Button { togglePanel("guide") } label: { specLabel("引导", "bubble.left") }
-                    .buttonStyle(ToolbarPlainStyle()).disabled(busy).accessibilityLabel("引导创建简历")
+                    .buttonStyle(ToolbarPlainStyle(ink: Self.specInk, radius: 5)).disabled(busy).accessibilityLabel("引导创建简历")
             }
             Button { togglePanel("check") } label: {
                 // 12.7–12.10：检查中蓝字浅蓝底“检查中… / 检查 · 第 n / m 处”
                 checkTint(specLabel(checkLabel, "checkmark.circle"))
             }
-                .buttonStyle(ToolbarPlainStyle(pressed: checkOpen && !checkActive)).disabled(busy || conflict || record == nil)
+                .buttonStyle(ToolbarPlainStyle(pressed: checkOpen && !checkActive, ink: Self.specInk, radius: 5)).disabled(busy || conflict || record == nil)
                 .accessibilityLabel("检查简历").accessibilityAddTraits(checkOpen ? .isSelected : [])
         }
-        .frame(width: min(794 * zoom + 12, 900)).frame(height: 32)
+        .frame(width: Self.paperWidth * zoom + 12).frame(height: 32)
+    }
+
+    /// 规格行文字色（Figma Editor Spec Bar #3c3c3a）。
+    private static let specInk = Color(hex: 0x3C3C3A)
+
+    private var typePopoverBinding: Binding<Bool> {
+        Binding(get: { panel == "type" },
+                set: { if !$0, panel == "type" { panel = nil; typeClosedAt = Date() } })
     }
 
     @ViewBuilder private func checkTint<Label: View>(_ label: Label) -> some View {
@@ -361,7 +367,7 @@ struct ResumeEditorView: View {
 
     private func specLabel(_ title: String, _ symbol: String) -> some View {
         HStack(spacing: 5) {
-            Image(systemName: symbol).font(.system(size: 11.5, weight: .medium))
+            Image(systemName: symbol).font(.system(size: 12.5, weight: .medium))
             Text(title).font(V3.sans(12.5)).lineLimit(1)
         }.padding(.horizontal, 6).frame(height: 24).contentShape(Rectangle())
     }
@@ -380,32 +386,11 @@ struct ResumeEditorView: View {
 
     @ViewBuilder private var panelView: some View {
         switch panel {
-        case "type":
-            VStack(alignment: .leading, spacing: 0) {
-                WorkbenchPanelHeader(title: "设置", closeLabel: "关闭排版面板") { panel = nil }
-                if ResumeTypeSettings.read(style) != nil {
-                    ScrollView {
-                        TypeSettingsPanel(settings: typeBinding, arrangement: $pageArrangement, disabled: busy)
-                        // 06.2：排版卡片里含模块顺序
-                        Button { showOrder = true } label: {
-                            HStack { Text("模块顺序").font(V3.sans(13, weight: .medium)); Spacer(); Text("调整").font(V3.sans(12.5)).foregroundStyle(V3.link) }
-                                .padding(.horizontal, 24).frame(height: 44).contentShape(Rectangle())
-                        }.buttonStyle(.plain).disabled(busy || sections.isEmpty)
-                            .overlay(alignment: .top) { Rectangle().fill(V3.line).frame(height: 1).padding(.horizontal, 24) }
-                            .padding(.bottom, 12)
-                    }
-                }
-                else { Text("当前模板不支持调整排版").font(V3.sans(12.5)).foregroundStyle(V3.fnt).padding(24) }
-            }
         case "template":
             TemplateSwitchSheet(currentKey: templateKey, disabled: busy || conflict, apply: applyTemplate, close: { panel = nil },
                                 preview: previewTemplate)
         default: EmptyView()
         }
-    }
-
-    private func panelHeader(_ title: String, subtitle: String) -> some View {
-        WorkbenchPanelHeader(title: title, subtitle: subtitle, closeLabel: "关闭\(title)") { panel = nil }
     }
 
     private var typeBinding: Binding<ResumeTypeSettings> {
@@ -418,7 +403,7 @@ struct ResumeEditorView: View {
     @ViewBuilder private var preview: some View {
         if let paperSeed, let record {
             ResumeEditorPaperView(resumeID: resumeID, data: paperSeed["data"] ?? .null, style: paperSeed["style"] ?? .null, layoutPlan: record["layout_plan"],
-                                  liveStyle: style, styleRevision: styleRevision, zoom: zoom, horizontal: pageArrangement == "horizontal",
+                                  liveStyle: style, styleRevision: styleRevision, zoom: zoom, horizontal: false,
                                   channel: channel, api: session.api, onEvent: handlePaper)
                 .id(paperGeneration)
                 .overlay(alignment: .topLeading) { lineTrigger }
@@ -797,30 +782,30 @@ private struct LineChatTrigger: View {
     }
 }
 
-/// 顶栏 32 / 28 的图标钮：悬停 #f4f4f2 底、文字转 txt；禁用时 fnt2。
-private struct HeadIconStyle: ButtonStyle {
-    var radius: CGFloat
-    @Environment(\.isEnabled) private var enabled
+/// 统一工具栏里的无边框按钮（`.borderless`）：平时没有底色和描边，悬停或按下才出现 8% 黑底；`pressed` 是对应面板打开时的常亮态。
+/// Web `.v3-crumb-back`：常态 `--v3-fnt`，悬停 `--v3-txt`，没有底色。
+private struct BackCrumbStyle: ButtonStyle {
     @State private var hover = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundStyle(!enabled ? V3.fnt2 : hover ? V3.txt : V3.sub)
-            .background(enabled && (hover || configuration.isPressed) ? V3.field : .clear, in: RoundedRectangle(cornerRadius: radius))
+            .foregroundStyle(hover || configuration.isPressed ? V3.txt : V3.fnt)
             .onHover { hover = $0 }
     }
 }
 
-/// 统一工具栏里的无边框按钮（`.borderless`）：平时没有底色和描边，悬停或按下才出现 8% 黑底；`pressed` 是对应面板打开时的常亮态。
 private struct ToolbarPlainStyle: ButtonStyle {
     var strong = false
     var pressed = false
+    /// 平时的文字色（规格行 #3c3c3a）；悬停 / 按下仍转墨黑。
+    var ink: Color? = nil
+    var radius: CGFloat = 6
     @Environment(\.isEnabled) private var enabled
     @State private var hover = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundStyle(!enabled ? V3.fnt2 : strong || pressed || hover ? V3.txt : V3.sub)
+            .foregroundStyle(!enabled ? V3.fnt2 : strong || pressed || hover ? V3.txt : (ink ?? V3.sub))
             .background(pressed || configuration.isPressed ? Color.black.opacity(0.08) : enabled && hover ? Color.black.opacity(0.05) : .clear,
-                        in: RoundedRectangle(cornerRadius: 6))
+                        in: RoundedRectangle(cornerRadius: radius))
             .onHover { hover = $0 }
     }
 }
@@ -831,33 +816,15 @@ private struct TitleField: View {
     @FocusState private var focused: Bool
     @State private var hover = false
     var body: some View {
-        TextField("", text: $title).textFieldStyle(.plain).font(V3.sans(14, weight: .medium)).lineLimit(1).truncationMode(.tail).foregroundStyle(V3.txt)
-            .multilineTextAlignment(.center).focused($focused).accessibilityLabel("简历标题")
-            .padding(.horizontal, 6).frame(height: 28)
-            .frame(width: min(560, max(40, (title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 14, weight: .medium)]).width + 14)))
+        // 宽度按同一字体的隐藏文字量（系统字体量出来比随包字体窄，短标题也会被截成「我的…」）
+        Text(verbatim: title.isEmpty ? " " : title).font(V3.sans(14, weight: .medium)).lineLimit(1).padding(.horizontal, 2).hidden()
+            .overlay {
+                TextField("", text: $title).textFieldStyle(.plain).font(V3.sans(14, weight: .medium)).lineLimit(1).truncationMode(.tail).foregroundStyle(V3.txt)
+                    .multilineTextAlignment(.center).focused($focused).accessibilityLabel("简历标题")
+            }
+            .padding(.horizontal, 6).frame(minWidth: 40, maxWidth: 560).frame(height: 28).fixedSize(horizontal: true, vertical: false)
             .background(focused ? .white : hover ? V3.field : .clear, in: RoundedRectangle(cornerRadius: 7))
             .overlay(RoundedRectangle(cornerRadius: 7).stroke(focused ? V3.cl : .clear))
             .onHover { hover = $0 }
-    }
-}
-
-/// `WorkbenchPanelHeader`：73 高（含 1px 下边线）、内边距 20/24；标题 16/500 行高 19、说明 11.5 行高 14、间距 6；右上 28 关闭钮（-4/-6）。
-struct WorkbenchPanelHeader: View {
-    let title: String
-    var subtitle: String? = nil
-    var closeLabel: String
-    let close: () -> Void
-    var body: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(title).font(V3.sans(16, weight: .medium)).foregroundStyle(V3.txt).frame(height: 19)
-                if let subtitle { Text(subtitle).font(V3.sans(11.5)).foregroundStyle(V3.fnt).frame(height: 14) }
-            }
-            Spacer()
-            Button(action: close) { Image(systemName: "xmark").font(.system(size: 12, weight: .medium)).frame(width: 28, height: 28).contentShape(Rectangle()) }
-                .buttonStyle(HeadIconStyle(radius: 7)).accessibilityLabel(closeLabel).padding(.top, -4).padding(.trailing, -6)
-        }
-        .padding(.horizontal, 24).padding(.top, 20).frame(height: 72, alignment: .top)
-        .overlay(alignment: .bottom) { Rectangle().fill(V3.line).frame(height: 1) }.frame(height: 73, alignment: .top)
     }
 }

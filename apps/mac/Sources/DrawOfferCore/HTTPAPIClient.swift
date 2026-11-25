@@ -19,7 +19,10 @@ protocol DesktopRequesting: Sendable {
     func mockAudio(path: String, method: String, body: JSONValue?, access: String?) async throws -> Data
     func speechSocket(path: String, query: [String: String], access: String?) throws -> URLSessionWebSocketTask
     func career(path: String, method: String, query: [String: String], body: JSONValue?, access: String?) async throws -> JSONValue
+    /// 带 `If-None-Match` 的 GET：服务端回 304 时 `value` 为 nil，调用方用自己留着的那份。
+    func validated(path: String, query: [String: String], etag: String?, access: String?) async throws -> (value: JSONValue?, etag: String?)
     func send<T: Decodable & Sendable>(_ type: T.Type, path: String, body: [String: String]?, access: String?) async throws -> T
+    func events(access: String?, onEvent: @escaping @Sendable (UserEvent) async -> Void) async throws
 }
 
 extension DesktopRequesting {
@@ -33,6 +36,10 @@ extension DesktopRequesting {
     func importResume(_ upload: ResumeImportUpload, access: String?) async throws -> JSONValue { throw APIError.invalidResponse }
     func mockAudio(path: String, method: String, body: JSONValue?, access: String?) async throws -> Data { throw APIError.invalidResponse }
     func speechSocket(path: String, query: [String: String], access: String?) throws -> URLSessionWebSocketTask { throw APIError.invalidResponse }
+    func events(access: String?, onEvent: @escaping @Sendable (UserEvent) async -> Void) async throws { throw APIError.server(status: 404, code: "NOT_FOUND") }
+    func validated(path: String, query: [String: String], etag: String?, access: String?) async throws -> (value: JSONValue?, etag: String?) {
+        (try await career(path: path, method: "GET", query: query, body: nil, access: access), nil)
+    }
     func send<T: Decodable & Sendable>(_ type: T.Type, path: String, body: [String: String]? = nil) async throws -> T {
         try await send(type, path: path, body: body, access: nil)
     }
@@ -54,7 +61,7 @@ final class DesktopTransport: DesktopRequesting {
         configuration.httpShouldSetCookies = false
         configuration.httpCookieStorage = nil
         configuration.urlCache = nil
-        // 不带 If-None-Match：本地没有缓存体，304 会被当成失败（首页“暂时读不到”）。
+        // 不交给系统缓存：304 只在 `validated` 里由我们自己带 If-None-Match、自己留缓存体时处理。
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.protocolClasses = protocolClasses
         session = URLSession(configuration: configuration, delegate: RedirectBlocker(), delegateQueue: nil)
@@ -246,7 +253,7 @@ final class DesktopTransport: DesktopRequesting {
     }
 
     func career(path: String, method: String, query: [String: String], body: JSONValue?, access: String?) async throws -> JSONValue {
-        guard CareerRequest.allowed(path: path, method: method), !query.keys.contains(where: { !["scope", "cursor", "limit", "week_start", "timezone", "application_id", "include_archived", "v", "job_application_id", "resume_id", "status", "folder_id", "confirm_contents", "start_at", "end_at", "type", "q", "prefix", "session_id", "include_history", "keyword", "company_ids", "city", "job_category", "recruitment_type", "job_id"].contains($0) }) else { throw APIError.invalidResponse }
+        guard CareerRequest.allowed(path: path, method: method), !query.keys.contains(where: { !["scope", "cursor", "limit", "week_start", "timezone", "application_id", "include_archived", "v", "job_application_id", "resume_id", "status", "folder_id", "confirm_contents", "start_at", "end_at", "type", "q", "prefix", "session_id", "include_history", "keyword", "company_ids", "city", "job_category", "recruitment_type", "job_id", "page", "page_size", "sort", "industry", "direction"].contains($0) }) else { throw APIError.invalidResponse }
         var url = URLComponents(url: origin.appending(path: path), resolvingAgainstBaseURL: false)!
         url.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
         var request = URLRequest(url: url.url!)
@@ -324,6 +331,66 @@ final class DesktopTransport: DesktopRequesting {
         return try JSONDecoder().decode(JSONValue.self, from: data)
     }
 
+    /// `GET /api/events` SSE：`event: ready`（连上或服务端重连 MQ，期间事件可能丢）、`event: change` + `data: {"topic","ref"}`、`: ping` 心跳。
+    /// 系统的按行读取会跳过空行，所以 `ready` 在读到事件名时就回调，`change` 在读到 data 行时回调。心跳 25 秒，70 秒没有数据算断线。
+    func events(access: String?, onEvent: @escaping @Sendable (UserEvent) async -> Void) async throws {
+        var request = URLRequest(url: origin.appending(path: "/api/events"), cachePolicy: .reloadIgnoringLocalCacheData)
+        request.timeoutInterval = 70
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
+        if let access { request.setValue("Bearer \(access)", forHTTPHeaderField: "Authorization") }
+        let (bytes, response) = try await session.bytes(for: request)
+        defer { bytes.task.cancel() }
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        if http.statusCode == 401 { throw APIError.unauthorized }
+        guard http.statusCode == 200 else {
+            var data = Data()
+            for try await byte in bytes { guard data.count < 16 * 1024 else { break }; data.append(byte) }
+            let code = (try? JSONDecoder().decode(JSONValue.self, from: data))?["error"]?.stringValue
+            throw APIError.server(status: http.statusCode, code: code ?? "HTTP_\(http.statusCode)")
+        }
+        guard http.mimeType?.lowercased() == "text/event-stream" else { throw APIError.invalidResponse }
+        var name = ""
+        for try await line in bytes.lines {
+            try Task.checkCancellation()
+            guard line.count <= 16 * 1024, !line.hasPrefix(":") else { continue }
+            if line.hasPrefix("event:") {
+                name = line.dropFirst(6).trimmingCharacters(in: .whitespaces)
+                if name == "ready" { await onEvent(.ready); name = "" }
+            } else if line.hasPrefix("data:"), name == "change" {
+                name = ""
+                guard let value = try? JSONDecoder().decode(JSONValue.self, from: Data(line.dropFirst(5).utf8)),
+                      let topic = value["topic"]?.stringValue, !topic.isEmpty, topic.count <= 64 else { continue }
+                let ref = value["ref"]?.stringValue ?? value["ref"]?.numberValue.map { String(Int($0)) }
+                await onEvent(.change(topic: topic, ref: ref))
+            }
+        }
+    }
+
+    /// 简历列表与详情的条件读：服务端按版本列算弱 ETag，没变时回 304 不带正文。
+    func validated(path: String, query: [String: String], etag: String?, access: String?) async throws -> (value: JSONValue?, etag: String?) {
+        guard ReadCache.validates(path: path, query: query) else {
+            return (try await career(path: path, method: "GET", query: query, body: nil, access: access), nil)
+        }
+        var request = URLRequest(url: origin.appending(path: path), cachePolicy: .reloadIgnoringLocalCacheData)
+        request.timeoutInterval = 180
+        request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
+        if let access { request.setValue("Bearer \(access)", forHTTPHeaderField: "Authorization") }
+        if let etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        if http.statusCode == 401 { throw APIError.unauthorized }
+        if http.statusCode == 304 {
+            guard etag != nil else { throw APIError.invalidResponse }
+            return (nil, http.value(forHTTPHeaderField: "ETag") ?? etag)
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let code = (try? JSONDecoder().decode(JSONValue.self, from: data))?["error"]?.stringValue
+            throw APIError.server(status: http.statusCode, code: code ?? "HTTP_\(http.statusCode)")
+        }
+        return (try JSONDecoder().decode(JSONValue.self, from: data), http.value(forHTTPHeaderField: "ETag"))
+    }
+
     func send<T: Decodable & Sendable>(_ type: T.Type, path: String, body: [String: String]? = nil, access: String? = nil) async throws -> T {
         guard path.hasPrefix("/api/"), !path.contains(".."), !path.contains("?"), !path.contains("#") else { throw APIError.invalidResponse }
         var request = URLRequest(url: origin.appending(path: path), cachePolicy: .reloadIgnoringLocalCacheData)
@@ -372,7 +439,8 @@ public struct HTTPAPIClient: APIClient {
     public let coordinator: SessionCoordinator
 
     public init(baseURL: URL, tokens: any TokenStore, allowLocalHTTP: Bool = false) throws {
-        coordinator = SessionCoordinator(transport: try DesktopTransport(origin: baseURL, allowLocalHTTP: allowLocalHTTP), tokens: tokens)
+        coordinator = SessionCoordinator(transport: try DesktopTransport(origin: baseURL, allowLocalHTTP: allowLocalHTTP), tokens: tokens,
+                                         imageDisk: ImageDiskCache.standard())
     }
 
     init(coordinator: SessionCoordinator) { self.coordinator = coordinator }
@@ -412,5 +480,7 @@ public struct HTTPAPIClient: APIClient {
         try await coordinator.speechSocket(interviewID: interviewID, questionID: questionID, purpose: purpose, local: local)
     }
     public func accountAvatar(path: String) async throws -> Data { try await coordinator.accountAvatar(path: path) }
+    public func purgeCache() async { await coordinator.purgeCache() }
+    public func streamEvents(onEvent: @escaping @Sendable (UserEvent) async -> Void) async throws { try await coordinator.streamEvents(onEvent: onEvent) }
     public func resumeImage(path: String) async throws -> (data: Data, contentType: String) { try await coordinator.resumeImage(path: path) }
 }

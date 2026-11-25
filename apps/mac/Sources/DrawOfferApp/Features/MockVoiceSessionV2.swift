@@ -53,12 +53,12 @@ struct MockVoiceSession: View {
         .modifier(MockSessionDialogs(detail: local, dialog: $dialog, busy: busy, voice: true, skip: skip, end: end))
         .mockDialog($dialog, "back") {
             let preparing = local.text("status") == "preparing"
-            MockConfirmCard(title: "返回修改设置？", desc: preparing ? "题目还在准备，返回后这场记为已放弃，不扣积分。" : "返回后这场记为已放弃，改好设置再开始新的一场。",
+            MockSessionConfirm(title: "返回修改设置？", desc: preparing ? "题目还在准备，返回后这场记为已放弃，不扣积分。" : "返回后这场记为已放弃，改好设置再开始新的一场。",
                             confirm: "返回改设置", cancel: preparing ? "继续准备" : "继续面试", busy: busy == "back", busyLabel: "正在返回…",
                             onConfirm: { leaveCheck("back") }, onCancel: { dialog = nil })
         }
         .mockDialog($dialog, "text") {
-            MockConfirmCard(title: "改为文字面试？", desc: "沿用同一套题目，改成打字作答，也可以语音转文字。", confirm: "改为文字面试",
+            MockSessionConfirm(title: "改为文字面试？", desc: "沿用同一套题目，改成打字作答，也可以语音转文字。", confirm: "改为文字面试",
                             busy: busy == "text", busyLabel: "正在切换…", onConfirm: { leaveCheck("text") }, onCancel: { dialog = nil })
         }
         .onAppear {
@@ -107,7 +107,7 @@ struct MockVoiceSession: View {
                 MockSessionHead(detail: local, timer: MockSessionText.elapsed(local, now: timeline.date)) {
                     Button("跳过此题") { dialog = "skip" }.buttonStyle(MockLinkStyle()).disabled(skipLocked)
                     Button("放弃") { dialog = "abandon" }.buttonStyle(MockLinkStyle()).disabled(busy != nil || phase == .closing)
-                    Button("结束并评估") { dialog = "finish" }.buttonStyle(MockPillStyle(kind: .ghost)).disabled(busy != nil || phase == .closing || phase == .submitting)
+                    Button("结束并评估") { dialog = "finish" }.buttonStyle(MockBorderedPillStyle()).disabled(busy != nil || phase == .closing || phase == .submitting)
                 }
                 MockCenterLine(text: phase == .closing ? "面试结束" : MockSessionText.eyebrow(local, shownQuestion), top: 175)
                 MockBigQuestion(text: questionText, shown: phase == .asking && shown < spoken.count ? shown : .max)
@@ -150,7 +150,7 @@ struct MockVoiceSession: View {
     @ViewBuilder private func actions(speaking: Bool, intro: Bool) -> some View {
         Group {
             if phase == .asking && question != nil && !intro {
-                Button("打断并作答") { beginAnswer() }.buttonStyle(MockPillStyle(kind: .ghost)).offset(y: 543)
+                Button("打断并作答") { beginAnswer() }.buttonStyle(MockBorderedPillStyle()).offset(y: 547)
             } else if phase == .listening && speaking {
                 Button("说完了") { stopAndSubmit() }.buttonStyle(MockPillStyle()).offset(y: 577)
             } else if phase == .unclear {
