@@ -33,11 +33,11 @@ struct MockRecordsV2: View {
                 MockBackCrumb(label: "模拟面试", action: back).padding(.bottom, 20)
                 HStack(alignment: .bottom, spacing: 24) {
                     VStack(alignment: .leading, spacing: 0) {
-                        Text(verbatim: overview.map { heading(rows, $0["tallies"]?["score"]) } ?? "全部记录").font(V3.serif(28)).foregroundStyle(MockPalette.ink).lineHeight(28, 36)
+                        Text(verbatim: overview.map { heading(rows, $0["tallies"]?["score"]) } ?? "全部记录").font(V3.serif(28)).foregroundStyle(MockPalette.ink).lineHeight(28, 36, .serif)
                         Text("每一场卡在哪，都在这里。").font(V3.sans(14)).foregroundStyle(MockPalette.sub).frame(height: 22).padding(.top, 8)
                     }
                     Spacer(minLength: 0)
-                    Button("导入面试记录") { importing = true }.buttonStyle(MockPillStyle(kind: .ghost, height: 38))
+                    Button("导入面试记录") { importing = true }.buttonStyle(MockPillStyle(kind: .ghost, height: 32, padding: 21, size: 13))
                 }
                 if overview == nil && !failed {
                     V3Loading("正在加载练习记录…").frame(maxWidth: .infinity).padding(.top, 120)

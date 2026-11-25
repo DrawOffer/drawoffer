@@ -34,12 +34,6 @@ struct CareerWrittenPage: View {
                     // 有题时整页没有黑按钮；还没有题时「添加题目」是唯一的主操作
                     Button("添加题目") { adding = true }.buttonStyle(PDButtonStyle(kind: list.isEmpty ? .primary : .normal))
                 }
-                if let notice {
-                    HStack(spacing: 10) {
-                        Text(notice).font(V3.sans(12.5)).foregroundStyle(PD.body)
-                        Button { self.notice = nil } label: { Image(systemName: "xmark").font(.system(size: 9)) }.buttonStyle(.plain).foregroundStyle(PD.mute).accessibilityLabel("关闭提示")
-                    }.padding(.top, 12)
-                }
                 if let current {
                     Spacer(minLength: 40)
                     HStack(alignment: .top, spacing: 48) {
@@ -57,6 +51,7 @@ struct CareerWrittenPage: View {
             }
         }
         .foregroundStyle(V3.txt)
+        .overlay(alignment: .top) { TextNoticeToast(text: $notice, kind: { $0.hasPrefix("已") ? .done : $0.contains("已刷新") ? .attention : .failed }) }
         .onChange(of: session["lock_version"]?.integer ?? 0) { _, _ in marks = [:] }
         .onKeyPress(.leftArrow) { if index > 0 { index -= 1 }; return .handled }
         .onKeyPress(.rightArrow) { if index < list.count - 1 { index += 1 }; return .handled }
@@ -134,16 +129,18 @@ struct CareerWrittenPage: View {
         default: [("标为答对", "correct"), ("标为答错", "wrong"), ("不确定", "unsure")]
         }
         return VStack(alignment: .leading, spacing: 0) {
-            Text("结果").font(V3.sans(12.5)).foregroundStyle(PD.mute).frame(height: 16)
-            Text(headline).font(V3.serif(26)).foregroundStyle(color).frame(height: 36).padding(.top, 12)
+            // 稿 05.03：「结果」13/500 #6c6c65，结论衬线 24（框高 34，距上 13），下面一行 13；整列比题号低 38
+            Text("结果").font(V3.sans(13, weight: .medium)).foregroundStyle(Color(hex: 0x6C6C65)).frame(height: 16)
+            Text(headline).font(V3.serif(24)).foregroundStyle(color).frame(height: 34).padding(.top, 13)
             HStack(spacing: 14) {
-                if item.text("mark_source") == "recognized" { Text("导入时识别").font(V3.sans(12.5)).foregroundStyle(PD.mute) }
+                if item.text("mark_source") == "recognized" { Text("导入时识别").font(V3.sans(13)).foregroundStyle(Color(hex: 0x6C6C65)) }
                 ForEach(options, id: \.0) { option in
-                    CareerJourneyTextButton(title: option.0, size: 12.5, color: PD.body) { Task { await setMark(item, option.1) } }.disabled(busy)
+                    CareerJourneyTextButton(title: option.0, size: 13, color: PD.body) { Task { await setMark(item, option.1) } }.disabled(busy)
                 }
-                if !mark.isEmpty { CareerJourneyTextButton(title: "清除", size: 12.5, color: PD.mute) { Task { await setMark(item, nil) } }.disabled(busy) }
-            }.frame(height: 18).padding(.top, 6)
+                if !mark.isEmpty { CareerJourneyTextButton(title: "清除", size: 13, color: PD.mute) { Task { await setMark(item, nil) } }.disabled(busy) }
+            }.frame(height: 16).padding(.top, 5)
         }
+        .padding(.top, 38)
     }
 
     // MARK: 答题卡

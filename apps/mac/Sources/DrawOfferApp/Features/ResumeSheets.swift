@@ -344,8 +344,11 @@ struct ResumeCreateSheet: View {
                 stepTitle(2, "简历名称", active: false) {
                     Text("只给自己看，方便在列表里区分").font(V3.sans(11.5)).foregroundStyle(ResumeSheetStyle.hint)
                 }.padding(.top, 28)
-                TextField("", text: $title, prompt: Text("例如：后端工程师 · 字节跳动").foregroundStyle(V3.fnt2))
+                TextField("", text: $title)
                     .textFieldStyle(.plain).font(V3.sans(13.5)).foregroundStyle(V3.txt).focused($titleFocused).accessibilityLabel("简历名称")
+                    .overlay(alignment: .leading) {
+                        if title.isEmpty { Text("例如：后端工程师 · 字节跳动").font(V3.sans(13.5)).foregroundStyle(V3.fnt2).allowsHitTesting(false) }
+                    }
                     .padding(.horizontal, 13).frame(height: 43)
                     .background(.white, in: RoundedRectangle(cornerRadius: 9.25))
                     .overlay(RoundedRectangle(cornerRadius: 9.25).stroke(error != nil ? V3.red : titleFocused ? V3.txt : V3.cl))
@@ -751,8 +754,11 @@ struct ResumeSheetField: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             Text(label).font(V3.sans(11)).foregroundStyle(ResumeSheetStyle.hint).frame(height: 13)
-            TextField("", text: $text, prompt: Text(placeholder).foregroundStyle(V3.fnt2))
+            TextField("", text: $text)
                 .textFieldStyle(.plain).font(V3.sans(13)).foregroundStyle(V3.txt).focused($focused)
+                .overlay(alignment: .leading) {
+                    if text.isEmpty { Text(placeholder).font(V3.sans(13)).foregroundStyle(V3.fnt2).allowsHitTesting(false) }
+                }
                 .padding(.horizontal, 14).frame(height: 40)
                 .background(focused ? Color.white : V3.field, in: RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(error != nil ? V3.red : focused ? V3.cl : .clear))

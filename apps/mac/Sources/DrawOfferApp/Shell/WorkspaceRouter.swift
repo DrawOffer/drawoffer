@@ -6,7 +6,9 @@ import SwiftUI
 @MainActor @Observable
 final class WorkspaceRouter {
     /// `mock`：进模拟面试，带着练习重点（nil 为普通新建）；`mockSession`：直接打开某一场。
-    enum Jump: Equatable { case section(WorkspaceSection), draft(String), editResume(String), plans, application(String), mock(PracticeFocus?), mockSession(String) }
+    enum Jump: Equatable { case section(WorkspaceSection), draft(String), editResume(String), plans, application(String), mock(PracticeFocus?), mockSession(String), mockPractice(MockPracticePlan), job(JobTarget), mockFor(application: String) }
+    /// 按 id 打开一个岗位详情（Web `jobDetailPath(id, applicationId?)`）；带投递 id 时详情里显示该投递的阶段与简历。
+    struct JobTarget: Equatable { let id: String; var applicationID: String? = nil }
     private(set) var pending: Jump?
 
     func jump(_ target: Jump) { pending = target }

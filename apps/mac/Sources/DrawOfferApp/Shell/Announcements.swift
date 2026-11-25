@@ -206,7 +206,7 @@ struct AnnouncementBell: View {
             open = true
             Task { await center.refresh(api: session.api, force: true); center.viewList(api: session.api) }
         } label: {
-            Image(systemName: "bell").font(.system(size: 14))
+            SideIconView(icon: .bell)
                 .foregroundStyle(open || hover ? V3.txt : V3.sub).frame(width: 28, height: 28)
                 .background(open || hover ? V3.cl : .clear, in: RoundedRectangle(cornerRadius: 7))
                 .overlay(alignment: .topTrailing) {
@@ -270,10 +270,9 @@ private struct NoticeCenterList: View {
                 switch center.status {
                 case .ready, .error:
                     VStack(spacing: 8) {
-                        if center.status != .error { Image(systemName: "bell").font(.system(size: 20)).foregroundStyle(Color(hex: 0xB3B3AD)).padding(.bottom, 2) }
-                        Text(center.status == .error ? "通知暂时无法读取" : "暂时没有通知").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
+                        Text(center.status == .error ? "通知暂时无法读取" : "暂时没有通知").font(V3.sans(14, weight: .medium)).foregroundStyle(V3.txt)
                         Text(center.status == .error ? "稍后再打开试试" : "模拟面试出报告、面试前的提醒和产品更新，都会出现在这里。")
-                            .font(V3.sans(12)).foregroundStyle(V3Skeleton.faint).lineSpacing(4).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                            .font(V3.sans(12.5)).foregroundStyle(V3Skeleton.faint).lineSpacing(5).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                     }.frame(maxWidth: .infinity).padding(.horizontal, 24).padding(.top, 22).padding(.bottom, 28)
                 default:
                     // 15 页 03「加载中 · 公告列表」：三条占位，标题与时间一行、摘要一行
@@ -355,8 +354,8 @@ private struct NoticeCenterRow: View {
                             if arrow { Image(systemName: "arrow.right").font(.system(size: 10, weight: .medium)) }
                         }.foregroundStyle(V3.blue)
                     }
-                }.frame(height: 16).padding(.top, 8)
-            }.padding(.vertical, 10).contentShape(Rectangle())
+                }.frame(height: 16).padding(.top, 5)
+            }.padding(.vertical, 6.5).contentShape(Rectangle())
         }.buttonStyle(.plain)
             .overlay(alignment: .topTrailing) {
                 if hover {
@@ -410,7 +409,7 @@ struct AnnouncementDetailSheet: View {
                         if !item.dateText.isEmpty { Text("\(item.dateText)发布").font(V3.sans(12)).foregroundStyle(V3.sub) }
                     }
                     Spacer()
-                }.padding(.leading, 32).padding(.trailing, 24).padding(.vertical, 22).background(tone.soft)
+                }.padding(.leading, 32).padding(.trailing, 24).padding(.vertical, 24).background(tone.soft)
                 VStack(alignment: .leading, spacing: 14) {
                     Text(item.title).font(V3.serif(22)).foregroundStyle(V3.txt).fixedSize(horizontal: false, vertical: true)
                     ScrollView { NativeMarkdownView(source: item.body, size: 14, line: 24).foregroundStyle(Color(hex: 0x3D3D39)).frame(maxWidth: .infinity, alignment: .leading) }
@@ -428,13 +427,13 @@ struct AnnouncementDetailSheet: View {
                     }.animation(.easeOut(duration: 0.18), value: index)
                     Spacer()
                     if index < ids.count - 1 {
-                        Button("关闭") { center.detail = nil }.buttonStyle(V3ButtonStyle(kind: .ghost))
+                        Button("关闭") { center.detail = nil }.buttonStyle(V3ButtonStyle(kind: .ghost, width: 64, small: true))
                         Button { goTo(index + 1, ids: ids) } label: { Text("下一条"); Image(systemName: "arrow.right").font(.system(size: 11, weight: .semibold)) }
-                            .buttonStyle(V3ButtonStyle(kind: .dark, height: 36)).keyboardShortcut(.defaultAction)
+                            .buttonStyle(V3ButtonStyle(kind: .dark, height: 36, width: 80)).keyboardShortcut(.defaultAction)
                     } else {
-                        Button("知道了") { center.detail = nil }.buttonStyle(V3ButtonStyle(kind: .dark, height: 36)).keyboardShortcut(.defaultAction)
+                        Button("知道了") { center.detail = nil }.buttonStyle(V3ButtonStyle(kind: .dark, height: 36, width: 80)).keyboardShortcut(.defaultAction)
                     }
-                }.padding(.horizontal, 32).padding(.top, 30).padding(.bottom, 26)
+                }.padding(.leading, 32).padding(.trailing, 24).padding(.top, 30).padding(.bottom, 26)
             }
             .frame(width: 520)
             .background { Button("") { center.detail = nil }.keyboardShortcut(.cancelAction).opacity(0).accessibilityHidden(true) }

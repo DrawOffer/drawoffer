@@ -43,6 +43,21 @@ enum LocalSpeech {
         return await SenseVoiceTranscriber.make(inputFormat: inputFormat, onText: onText)
     }
 
+    /// 进入模拟面试时先在后台把本机识别资源装好，第一次录音就能用本机识别，不再回退云端。
+    /// 系统识别资源由系统下载；SenseVoice 模型约 240 MB，只在 App 带了识别库时才下。
+    static func prepare() async {
+        let forced = ProcessInfo.processInfo.environment["DRAWOFFER_LOCAL_ASR"] == "sensevoice"
+        if #available(macOS 26.0, *), !forced {
+            guard SpeechTranscriber.isAvailable,
+                  let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: "zh_CN")) else { return }
+            let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [.volatileResults],
+                                                attributeOptions: [.audioTimeRange])
+            if await AssetInventory.status(forModules: [transcriber]) != .installed { download(transcriber) }
+            return
+        }
+        if SenseVoiceModel.libraryPath != nil, !SenseVoiceModel.installed { downloadSenseVoice() }
+    }
+
     static func downloadSenseVoice() {
         guard !downloading else { return }
         downloading = true

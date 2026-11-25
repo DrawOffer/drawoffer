@@ -48,11 +48,11 @@ struct ResumeTalkAssistant<Extra: View>: View {
                 }
                 if let note, !note.isEmpty {
                     Text(note).font(V3.sans(12.5)).foregroundStyle(ResumeTalk.note).lineSpacing(5)
-                        .fixedSize(horizontal: false, vertical: true).padding(.top, 10)
+                        .fixedSize(horizontal: false, vertical: true).padding(.top, 11.5)
                 }
                 extra()
             }
-            .padding(.horizontal, 16).padding(.vertical, 12)
+            .padding(.horizontal, 16.5).padding(.vertical, 14.5)
             .background(faded ? ResumeTalk.oldFill : .white, in: RoundedRectangle(cornerRadius: 14))
             .overlay(RoundedRectangle(cornerRadius: 14).stroke(faded ? .clear : V3.cl))
             .opacity(faded ? 0.75 : 1)
@@ -76,7 +76,7 @@ struct ResumeTalkUser: View {
             Spacer(minLength: ResumeTalk.indent + 40)
             Text(text).font(V3.sans(14)).foregroundStyle(faded ? V3.fnt : V3.txt).lineSpacing(5)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 14).padding(.vertical, 8)
+                .padding(.horizontal, 14).padding(.vertical, 12.5)
                 .background(ResumeTalk.userFill, in: RoundedRectangle(cornerRadius: 12))
                 .opacity(faded ? 0.7 : 1)
         }
@@ -92,7 +92,7 @@ struct ResumeTalkChip: View {
     var body: some View {
         Button(action: action) {
             Text(title).font(V3.sans(13)).foregroundStyle(V3.txt).lineLimit(1)
-                .padding(.horizontal, 14).frame(height: 33)
+                .padding(.horizontal, 14.5).frame(height: 33)
                 .background(.white, in: Capsule())
                 .overlay(Capsule().stroke(hover && !disabled ? V3.sub.opacity(0.6) : ResumeTalk.line))
                 .contentShape(Capsule())
@@ -138,7 +138,7 @@ struct ResumeTalkInput: View {
                     .frame(width: 30, height: 30).background(ready ? V3.txt : ResumeTalk.line, in: Circle())
             }.buttonStyle(.plain).disabled(!ready).accessibilityLabel("发送")
         }
-        .padding(.leading, 16).padding(.trailing, 8).padding(.vertical, 8).frame(minHeight: 47)
+        .padding(.leading, 16.5).padding(.trailing, 8).padding(.vertical, 8).frame(minHeight: 47)
         .background(.white, in: RoundedRectangle(cornerRadius: 13.5))
         .overlay(RoundedRectangle(cornerRadius: 13.5).stroke(focused ? V3.sub.opacity(0.5) : ResumeTalk.fieldLine))
         .padding(.leading, ResumeTalk.indent)

@@ -24,7 +24,7 @@ let package = Package(
         .executableTarget(
             name: "DrawOfferApp",
             dependencies: ["DrawOfferCore", "DrawOfferRender", "CSherpaOnnx"],
-            resources: [.copy("Resources/Branding"), .copy("Resources/Home"), .copy("Resources/Library"), .copy("Resources/Career"), .copy("Resources/Models"), .copy("Resources/AppIcon.png")]
+            resources: [.copy("Resources/Branding"), .copy("Resources/Library"), .copy("Resources/Career"), .copy("Resources/Models"), .copy("Resources/AppIcon.png")]
         ),
         .testTarget(
             name: "DrawOfferCoreTests",

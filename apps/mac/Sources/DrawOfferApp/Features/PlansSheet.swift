@@ -26,6 +26,7 @@ struct PlansSheet: View {
     @State private var inviteError: String?
     @State private var checking = false
     @State private var appliedInitial = false
+    @State private var qrOpen = false
 
     private var groups: [JSONValue] { card?["groups"]?.items ?? [] }
     private var activeGroup: JSONValue? { groups.first { $0.text("id") == group } ?? groups.first }
@@ -39,6 +40,9 @@ struct PlansSheet: View {
     private var selected: JSONValue? { buyable.first { $0.text("id") == picks[pickKey] } ?? buyable.first { $0["featured"]?.bool == true } ?? buyable.first }
     private var phase: String { opened == nil ? "idle" : ticket.map { $0.text("state") == "pending" ? "waiting" : $0.text("state") } ?? "waiting" }
     private var locked: Bool { opened != nil && (phase == "waiting") }
+    /// 06.04 积分充值：三张卡矮一些（423），弹窗 779 高；其余标签 822。
+    private var isPack: Bool { extra == nil && activeGroup?.text("id") == "pack" }
+    private var sheetHeight: CGFloat { isPack ? 779 : 822 }
     private var notes: [String] { (activeGroup?["notes"]?.items ?? []).compactMap(\.stringValue) }
 
     var body: some View {
@@ -47,7 +51,8 @@ struct PlansSheet: View {
             if let card { content(card) } else { stateView }
         }
         .padding(.horizontal, 33).padding(.top, 43).padding(.bottom, 36)
-        .frame(width: 900, height: 822, alignment: .topLeading)
+        .frame(width: 900, height: sheetHeight, alignment: .topLeading)
+        .overlay { qrLayer }
         .task(id: retry) { await load() }
         .task(id: opened?.ticket ?? "") { await poll() }
         .onAppear {
@@ -62,9 +67,22 @@ struct PlansSheet: View {
         HStack(alignment: .center, spacing: 24) {
             Text(card?.text("title").nonEmptyValue ?? "会员与积分").font(V3.serif(28)).foregroundStyle(V3.txt).frame(height: 40)
             Spacer(minLength: 0)
-            if let card { Text(card.text("status")).font(V3.sans(14, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1) }
-            Button { dismiss() } label: { Image(systemName: "xmark").font(.system(size: 13, weight: .regular)).frame(width: 24, height: 24).contentShape(Rectangle()) }
-                .buttonStyle(.plain).foregroundStyle(V3.sub).keyboardShortcut(.cancelAction).accessibilityLabel("关闭")
+            // 会员等级与关闭：与标题不同高，整体比标题中线高 4（设计稿 32 高的容器），关闭 ✕ 10×10 距右缘 11
+            HStack(alignment: .center, spacing: 24) {
+                if let card { Text(card.text("status")).font(V3.sans(14, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1) }
+                Button { dismiss() } label: { Image(systemName: "xmark").font(.system(size: 11, weight: .regular)).frame(width: 24, height: 24).contentShape(Rectangle()) }
+                    .buttonStyle(.plain).foregroundStyle(V3.sub).keyboardShortcut(.cancelAction).accessibilityLabel("关闭").offset(x: -4)
+            }.offset(y: -4)
+        }
+    }
+
+    /// 06.13 客服微信二维码：整张弹窗盖一层 28% 的深色遮罩，二维码卡居中（Esc / 点遮罩 / ✕ 关闭）。
+    @ViewBuilder private var qrLayer: some View {
+        if qrOpen {
+            ZStack {
+                Color(red: 20 / 255, green: 20 / 255, blue: 18 / 255).opacity(0.28).onTapGesture { qrOpen = false }
+                SupportQR(api: session.api) { qrOpen = false }
+            }.clipShape(RoundedRectangle(cornerRadius: 16))
         }
     }
 
@@ -82,7 +100,7 @@ struct PlansSheet: View {
         tabs(card)
         switch extra {
         case "credits": CreditsPanel().frame(maxHeight: .infinity, alignment: .top)
-        case "invite": InvitePanel().frame(maxHeight: .infinity, alignment: .top)
+        case "invite": InvitePanel(qrOpen: $qrOpen).frame(maxHeight: .infinity, alignment: .top)
         default: plans(card)
         }
         if let error { Text(error).font(V3.sans(13)).foregroundStyle(V3.red).padding(.top, 10) }
@@ -96,8 +114,8 @@ struct PlansSheet: View {
             tab("积分明细", active: extra == "credits") { extra = "credits" }
             tab("邀请好友", active: extra == "invite") { extra = "invite" }
             Spacer(minLength: 0)
-            if extra != nil { explainLink.frame(height: 34) }
-        }.frame(height: 44).padding(.top, 29)
+            if extra != nil { explainLink.frame(height: 17) }
+        }.frame(height: 44).padding(.top, 33)
     }
 
     private var explainLink: some View {
@@ -118,7 +136,9 @@ struct PlansSheet: View {
         HStack(spacing: 6) {
             if !card.text("text").isEmpty { Text(card.text("text")).font(V3.sans(12)).foregroundStyle(V3.sub).lineLimit(1) }
             if !notes.isEmpty {
-                Image(systemName: "questionmark.circle").font(.system(size: 12)).foregroundStyle(V3.sub).help(notes.joined(separator: "\n"))
+                // 免费版说明：13 的细圈 + 9/500 的「?」（#55554F）
+                Text("?").font(V3.sans(9, weight: .medium)).foregroundStyle(V3.sub).frame(width: 13, height: 13)
+                    .overlay(Circle().stroke(V3.sub, lineWidth: 1)).help(notes.joined(separator: "\n"))
                     .accessibilityLabel(notes.joined(separator: "，"))
             }
             Spacer(minLength: 12)
@@ -126,7 +146,7 @@ struct PlansSheet: View {
         }.frame(height: 16).padding(.top, 13)
         HStack(alignment: .top, spacing: 17) {
             ForEach(Array(items.enumerated()), id: \.offset) { _, item in planCard(item) }
-        }.frame(height: 466).padding(.top, 32)
+        }.frame(height: isPack ? 423 : 466).padding(.top, 32)
         Spacer(minLength: 0)
         if let selected, let action = selected["action"], action != .null { checkout(card, selected, action) }
     }
@@ -152,18 +172,22 @@ struct PlansSheet: View {
                     Text(item.text("price")).font(.system(size: 38, weight: .medium)).foregroundStyle(V3.txt)
                     if !item.text("period").isEmpty { Text(item.text("period")).font(V3.sans(12.5)).foregroundStyle(Color(hex: 0x8F8F89)) }
                 }.frame(height: 46).padding(.top, 33)
-                HStack(spacing: 8) {
-                    if !item.text("original").isEmpty { Text(item.text("original")).font(.system(size: 12.5)).strikethrough().foregroundStyle(Color(hex: 0xB0B0AA)) }
-                    if !item.text("offTag").isEmpty { Text(item.text("offTag")).font(V3.sans(12)).foregroundStyle(Color(hex: 0xC0532B)) }
-                }.frame(height: 15).padding(.top, 5)
+                // 积分包没有原价 / 折扣行（06.04）：插画直接接在价格下面（间距 15），否则隔一行 20 + 14
+                let hasOriginal = !item.text("original").isEmpty || !item.text("offTag").isEmpty
+                if hasOriginal {
+                    HStack(spacing: 8) {
+                        if !item.text("original").isEmpty { Text(item.text("original")).font(.system(size: 12.5)).strikethrough().foregroundStyle(Color(hex: 0xB0B0AA)) }
+                        if !item.text("offTag").isEmpty { Text(item.text("offTag")).font(V3.sans(12)).foregroundStyle(Color(hex: 0xC0532B)) }
+                    }.frame(height: 15).padding(.top, 5)
+                }
                 if let analogy = item["analogy"], analogy != .null {
                     HStack(spacing: 12) {
                         AccountBillingArt(name: analogy.text("icon"), size: 72)
                         Text(analogy.text("text")).font(V3.sans(14, weight: .medium)).foregroundStyle(Color(hex: 0x8A5E36)).lineLimit(1)
-                    }.frame(height: 72).padding(.top, 14)
-                } else { Color.clear.frame(height: 86) }
+                    }.frame(height: 72).padding(.top, hasOriginal ? 14 : 15)
+                } else { Color.clear.frame(height: hasOriginal ? 86 : 87) }
             }
-            Rectangle().fill(Color(hex: 0xF0F0EC)).frame(height: 1).padding(.top, 10)
+            Rectangle().fill(Color(hex: 0xF0F0EC)).frame(height: 1).padding(.top, 24)
             if !item.text("headline").isEmpty {
                 Text(item.text("headline")).font(V3.sans(14, weight: .medium)).foregroundStyle(V3.txt).frame(height: 17).padding(.top, 22)
             }
@@ -227,16 +251,20 @@ struct PlansSheet: View {
     @ViewBuilder private func coupon(_ config: JSONValue) -> some View {
         let shape = RoundedRectangle(cornerRadius: 11.5)
         if let invite {
+            // 06.02 已使用：白底同款描边；「邀请码 已减 ¥5」都是 13.5/500 墨黑，右侧 54×36 的「移除」
             HStack(spacing: 10) {
-                Image(systemName: "ticket").font(.system(size: 13)).foregroundStyle(V3.fnt)
-                Text(invite.text("code")).font(.system(size: 14, weight: .medium)).tracking(0.8).foregroundStyle(V3.txt)
-                Text("已减 \(invite.text("discount"))").font(V3.sans(13, weight: .medium)).foregroundStyle(Color(hex: 0xC0532B)).frame(maxWidth: .infinity, alignment: .leading)
-                Button("移除") { self.invite = nil; inviteText = ""; inviteError = nil }.buttonStyle(.plain).font(V3.sans(12.5)).foregroundStyle(V3.fnt).disabled(busy != nil)
-            }.padding(.horizontal, 14).frame(width: 339, height: 47)
-                .background(Color(hex: 0xF6F3EC), in: shape).overlay(shape.stroke(Color(hex: 0xE3E3DF)))
+                Image(systemName: "ticket").font(.system(size: 15)).foregroundStyle(Color(hex: 0x8D8D87))
+                HStack(spacing: 7) {
+                    Text(invite.text("code")).font(.system(size: 13.5, weight: .medium))
+                    Text("已减 \(invite.text("discount"))").font(V3.sans(13.5, weight: .medium))
+                }.foregroundStyle(V3.txt).frame(maxWidth: .infinity, alignment: .leading)
+                Button("移除") { self.invite = nil; inviteText = ""; inviteError = nil }.buttonStyle(.plain).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
+                    .padding(.horizontal, 14).frame(height: 36).background(Color(hex: 0xF2F2EF), in: RoundedRectangle(cornerRadius: 8)).disabled(busy != nil)
+            }.padding(.leading, 14).padding(.trailing, 6).frame(width: 339, height: 47)
+                .background(Color.white, in: shape).overlay(shape.stroke(Color(hex: 0xE3E3DF)))
         } else {
             HStack(spacing: 10) {
-                Image(systemName: "ticket").font(.system(size: 13)).foregroundStyle(Color(hex: 0x8D8D87))
+                Image(systemName: "ticket").font(.system(size: 15)).foregroundStyle(Color(hex: 0x8D8D87))
                 ZStack(alignment: .leading) {
                     if inviteText.isEmpty {
                         (Text(config.text("label")) + Text(config.text("entry").isEmpty ? "" : "，") + Text(config.text("entry")).foregroundColor(V3.txt).fontWeight(.medium))
@@ -381,7 +409,7 @@ private struct CreditsPanel: View {
                 }
             } else if let summary { VStack(alignment: .leading, spacing: 0) { panel(summary) }.frame(maxHeight: .infinity, alignment: .top) }
             else { Text("正在加载…").font(V3.sans(14)).foregroundStyle(V3.sub) }
-        }.padding(.top, 20).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }.padding(.top, 9).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task(id: direction) { await load() }
     }
 
@@ -398,43 +426,47 @@ private struct CreditsPanel: View {
         let reset = member
             ? (balances["membership"]?.text("expireTime")).flatMap { $0.isEmpty ? nil : "\(monthDay($0))到期，未用完的清零" } ?? ""
             : "\(monthDay(balances["freeMonthly"]?.text("resetTime") ?? ""))重置为 \(BillingSummary.credits(balances["freeMonthly"]?.display("total") ?? ""))"
-        VStack(alignment: .leading, spacing: 14) {
+        // 06.07 会员 / 06.08 免费用户：一根 10 高的用量条，数字 40/600，下面一条 #E8E8E2 分隔线
+        VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .bottom, spacing: 16) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(member ? "会员积分" : "本月免费积分").font(V3.sans(13)).foregroundStyle(V3.sub).frame(height: 19)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(member ? "会员积分" : "本月免费积分").font(V3.sans(13)).foregroundStyle(Color(hex: 0x62625D)).frame(height: 16)
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(BillingSummary.credits(summary.display("available"))).font(.system(size: 46, weight: .medium)).foregroundStyle(V3.txt).frame(height: 54)
-                        Text("积分可用").font(V3.sans(14)).foregroundStyle(V3.sub)
+                        Text(BillingSummary.credits(summary.display("available"))).font(.system(size: 40, weight: .semibold)).foregroundStyle(Color(hex: 0x1B1B19)).frame(height: 48)
+                        Text("积分可用").font(V3.sans(14)).foregroundStyle(Color(hex: 0x62625D))
                     }
                 }
                 Spacer()
-                Text("已用 \(percent)%").font(V3.sans(13, weight: .medium)).foregroundStyle(warn ? Color(hex: 0xD47C28) : V3.txt).padding(.bottom, 4)
+                Text("已用 \(percent)%").font(V3.sans(14, weight: .medium)).foregroundStyle(warn ? Color(hex: 0xD47C28) : Color(hex: 0x1B1B19)).frame(height: 17)
             }
             GeometryReader { geometry in
                 Capsule().fill(Color(hex: 0xEEEEEA)).overlay(alignment: .leading) {
-                    Capsule().fill(warn ? Color(hex: 0xD47C28) : V3.txt).frame(width: max(6, geometry.size.width * share))
+                    Capsule().fill(warn ? Color(hex: 0xD47C28) : Color(hex: 0x2B2B28)).frame(width: max(10, geometry.size.width * share))
                 }
-            }.frame(height: 6).accessibilityLabel("已用积分").accessibilityValue("\(percent)%")
+            }.frame(height: 10).padding(.top, 16).accessibilityLabel("已用积分").accessibilityValue("\(percent)%")
             HStack {
                 Text("\(member ? "本期" : "本月")已用 \(BillingSummary.credits(String(used))) / \(BillingSummary.credits(String(total)))")
                 Spacer()
                 Text(reset)
-            }.font(V3.sans(12)).foregroundStyle(V3.sub).frame(height: 18)
-            if number(summary["overdraft"]) > 0 { Text("含透支 \(BillingSummary.credits(summary.display("overdraft"))) 积分，下次获得积分时先抵扣").font(V3.sans(12)).foregroundStyle(V3.fnt) }
-            else if !member && extra == 0 { Text("免费积分只能用基础模型；开通会员可用全部模型").font(V3.sans(12)).foregroundStyle(V3.fnt) }
-        }.padding(.bottom, 22).overlay(alignment: .bottom) { Rectangle().fill(V3.line).frame(height: 1) }
+            }.font(V3.sans(12.5)).foregroundStyle(Color(hex: 0x62625D)).frame(height: 15).padding(.top, 14)
+            if number(summary["overdraft"]) > 0 { Text("含透支 \(BillingSummary.credits(summary.display("overdraft"))) 积分，下次获得积分时先抵扣").font(V3.sans(12)).foregroundStyle(Color(hex: 0x9A9A94)).frame(height: 14).padding(.top, 14) }
+            else if !member && extra == 0 { Text("免费积分只能用基础模型；开通会员可用全部模型").font(V3.sans(12)).foregroundStyle(Color(hex: 0x9A9A94)).frame(height: 14).padding(.top, 14) }
+        }.padding(.bottom, 24).overlay(alignment: .bottom) { Rectangle().fill(Color(hex: 0xE8E8E2)).frame(height: 1) }
         HStack(spacing: 16) {
-            Text("积分变动").font(V3.sans(15, weight: .medium)).foregroundStyle(V3.txt).frame(height: 22)
+            Text("积分变动").font(V3.sans(15, weight: .medium)).foregroundStyle(Color(hex: 0x1B1B19)).frame(height: 18)
             HStack(spacing: 4) {
                 ForEach([("all", "全部"), ("use", "使用"), ("gain", "获得")], id: \.0) { item in
                     Button(item.1) { direction = item.0 }.buttonStyle(.plain).font(V3.sans(12.5, weight: direction == item.0 ? .medium : .regular))
-                        .foregroundStyle(direction == item.0 ? V3.txt : V3.fnt).padding(.horizontal, 6).frame(height: 26)
+                        .foregroundStyle(direction == item.0 ? Color(hex: 0x1B1B19) : Color(hex: 0x9A9A94)).padding(.horizontal, 5).frame(height: 26)
                         .accessibilityAddTraits(direction == item.0 ? .isSelected : [])
                 }
             }
             Spacer()
-            if let month { Text("本月使用 \(BillingSummary.credits(month.display("used"))) · 获得 \(BillingSummary.credits(month.display("gained")))").font(V3.sans(12)).foregroundStyle(V3.fnt) }
-        }.padding(.top, 18).padding(.bottom, 4)
+            if let month {
+                Text(member ? "本期已用 \(BillingSummary.credits(month.display("used"))) · 获得 \(BillingSummary.credits(month.display("gained")))" : "本月已用 \(BillingSummary.credits(month.display("used")))")
+                    .font(V3.sans(12)).foregroundStyle(Color(hex: 0x9A9A94))
+            }
+        }.padding(.top, 20).padding(.bottom, 1)
         if let rows {
             if rows.isEmpty { Text("还没有积分变动。").font(V3.sans(13)).foregroundStyle(V3.fnt).padding(.vertical, 12) }
             else {
@@ -454,11 +486,11 @@ private struct CreditsPanel: View {
     private func ledgerRow(_ row: JSONValue, first: Bool) -> some View {
         let points = number(row["points"]), muted = ["expire", "void"].contains(row.text("entryType"))
         return HStack(spacing: 16) {
-            Text(row.text("title")).font(V3.sans(14)).foregroundStyle(muted ? V3.fnt : V3.txt).lineLimit(1).frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
+            Text(row.text("title")).font(V3.sans(14)).foregroundStyle(muted ? V3.fnt : Color(hex: 0x1B1B19)).lineLimit(1).frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
             Text(stamp(row.text("occurTime"))).font(.system(size: 12.5)).monospacedDigit().foregroundStyle(Color(hex: 0x9A9A94))
             Text(points > 0 ? "+" + BillingSummary.credits(row.display("points")) : BillingSummary.credits(row.display("points")).replacingOccurrences(of: "-", with: "−"))
-                .font(.system(size: 14, weight: .semibold)).monospacedDigit().foregroundStyle(muted ? V3.fnt : points > 0 ? Color(hex: 0x2F7D4F) : V3.txt).frame(width: 72, alignment: .trailing)
-        }.padding(.vertical, 10).overlay(alignment: .top) { if !first { Rectangle().fill(V3.line).frame(height: 1) } }
+                .font(.system(size: 14, weight: .semibold)).monospacedDigit().foregroundStyle(muted ? V3.fnt : points > 0 ? Color(hex: 0x2F9A5B) : Color(hex: 0x1B1B19)).frame(width: 72, alignment: .trailing)
+        }.padding(.vertical, 10).overlay(alignment: .top) { if !first { Rectangle().fill(Color(hex: 0xE8E8E2)).frame(height: 1) } }
     }
 
     private func monthDay(_ value: String) -> String {
@@ -508,11 +540,11 @@ private struct CreditsPanel: View {
 
 private struct InvitePanel: View {
     @Environment(SessionStore.self) private var session
+    @Binding var qrOpen: Bool
     @State private var mine: JSONValue?
     @State private var records: [JSONValue] = []
     @State private var failed = false
     @State private var copied: String?
-    @State private var qrOpen = false
 
     var body: some View {
         Group {
@@ -523,8 +555,7 @@ private struct InvitePanel: View {
                 }
             } else if let mine { panel(mine) }
             else { Text("正在加载…").font(V3.sans(14)).foregroundStyle(V3.sub) }
-        }.padding(.top, 16).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .overlay { if qrOpen { SupportQR(api: session.api) { qrOpen = false } } }
+        }.padding(.top, 1).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task { await load() }
     }
 
@@ -544,14 +575,14 @@ private struct InvitePanel: View {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(row.text("title")).font(V3.sans(12)).foregroundStyle(Color(hex: 0x62625D)).frame(height: 14)
                                 Text(row.text("reward")).font(.system(size: 26, weight: .semibold)).foregroundStyle(V3.txt).frame(height: 31)
-                                Text("好友付 \(row.text("price"))").font(V3.sans(11.5)).foregroundStyle(Color(hex: 0x9A9A94)).frame(height: 14)
-                            }.padding(.leading, index > 0 ? 16 : 0).frame(maxWidth: .infinity, alignment: .leading)
+                                Text("好友付 \(row.text("price"))").font(V3.sans(11.5)).foregroundStyle(Color(hex: 0x9A9A94)).frame(height: 14).padding(.top, 2)
+                            }.padding(.leading, index > 0 ? 17 : 0).frame(width: index > 0 ? 128.3 : 111.4, alignment: .leading)
                                 .overlay(alignment: .leading) { if index > 0 { Rectangle().fill(Color(hex: 0xECECE8)).frame(width: 1) } }
                         }
                     }.padding(.top, 22)
                     Spacer(minLength: 10)
                     Text("返现按好友实际付款计算，核实后用微信或支付宝转给你").font(V3.sans(11.5)).foregroundStyle(Color(hex: 0x9A9A94)).frame(height: 14)
-                }.padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 21).frame(maxWidth: .infinity, alignment: .leading).frame(height: 184)
+                }.padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 21).frame(maxWidth: .infinity, alignment: .leading).frame(height: 183)
                     .overlay(RoundedRectangle(cornerRadius: 15.5).stroke(Color(hex: 0xECECE8)))
             }
             ledger(mine, rewards).frame(maxHeight: .infinity, alignment: .top)
@@ -563,20 +594,21 @@ private struct InvitePanel: View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
                 AccountBillingArt(name: "red-envelope", size: 56)
-                Text("好友开通会员").font(V3.sans(12)).foregroundStyle(Color(hex: 0x8F8F89)).frame(height: 14).padding(.top, 7)
+                Text("好友开通会员").font(V3.sans(12)).foregroundStyle(Color(hex: 0x8F8F89)).frame(height: 14).padding(.top, 8)
                 HStack(alignment: .firstTextBaseline, spacing: 2) {
                     Text("立减").font(V3.sans(14, weight: .medium))
                     Text("¥\(amount(mine.text("discountAmount")))").font(.system(size: 44, weight: .semibold))
-                }.foregroundStyle(V3.txt).frame(height: 53).padding(.top, 4)
+                }.foregroundStyle(V3.txt).frame(height: 53).padding(.top, 7)
             }.frame(width: 136).frame(maxHeight: .infinity)
                 .overlay(alignment: .trailing) { Rectangle().stroke(Color(hex: 0xCFC8B8), style: StrokeStyle(lineWidth: 1, dash: [4, 3])).frame(width: 1).padding(.vertical, 18) }
             VStack(alignment: .leading, spacing: 0) {
                 Text("我的邀请码").font(V3.sans(12)).foregroundStyle(Color(hex: 0x62625D)).frame(height: 14)
                 Text(mine.text("code")).font(.system(size: 30, weight: .semibold)).tracking(2).foregroundStyle(Color(hex: 0x1B1B19)).frame(height: 36).padding(.top, 5)
                 HStack(spacing: 8) {
-                    Button(copied == "code" ? "已复制" : "复制邀请码") { copy("code", mine) }.buttonStyle(AccountInviteButtonStyle(dark: true))
+                    Button(copied == "code" ? "已复制" : "复制邀请码") { copy("code", mine) }
+                        .buttonStyle(.borderedProminent).tint(Color(hex: 0x1B1B19)).controlSize(.large).buttonBorderShape(.roundedRectangle(radius: 8)).font(V3.sans(12.5, weight: .medium))
                     Button(copied == "text" ? "已复制" : "复制邀请文案") { copy("text", mine) }.buttonStyle(AccountInviteButtonStyle())
-                }.padding(.top, 18)
+                }.padding(.top, 17)
             }.padding(.leading, 24).padding(.trailing, 16).frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(height: 184).background(Color(hex: 0xF6F3EC))
@@ -622,11 +654,11 @@ private struct InvitePanel: View {
                     VStack(spacing: 0) {
                         ForEach(Array(rewards.prefix(4).enumerated()), id: \.offset) { index, row in
                             HStack(spacing: 12) {
-                                Circle().strokeBorder(Color(hex: 0xC9C9C3), style: StrokeStyle(lineWidth: 1, dash: [3, 2])).frame(width: 28, height: 28)
+                                Circle().strokeBorder(Color(hex: 0xC9C9C3), style: StrokeStyle(lineWidth: 1, dash: [3, 2])).frame(width: 27, height: 27)
                                 Text("好友 \(String(UnicodeScalar(65 + index)!)) 开通\(row.text("title"))").foregroundStyle(Color(hex: 0x9C9C96)).frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
                                 Capsule().fill(Color(hex: 0xF1F1EE)).frame(width: 40, height: 16)
                                 Text("+\(row.text("reward"))").font(.system(size: 13.5, weight: .semibold)).foregroundStyle(V3.txt)
-                            }.font(V3.sans(13.5)).padding(.vertical, 11)
+                            }.font(V3.sans(13.5)).padding(.vertical, 12)
                                 .overlay(alignment: .top) { if index > 0 { Rectangle().fill(V3.line).frame(height: 1) } }
                         }
                     }.mask(LinearGradient(stops: [.init(color: .black, location: 0.15), .init(color: .clear, location: 0.85)], startPoint: .top, endPoint: .bottom)).accessibilityHidden(true)
@@ -665,7 +697,7 @@ private struct InvitePanel: View {
             Text(date).font(.system(size: 12)).foregroundStyle(V3.fnt)
             Text(tag.0).font(V3.sans(11.5, weight: .medium)).foregroundStyle(tag.2).padding(.horizontal, 8).padding(.vertical, 1).background(tag.1, in: Capsule())
             Text(yuan(row.text("amount"))).font(.system(size: 13.5, weight: .medium)).strikethrough(status == "void").foregroundStyle(status == "void" ? V3.fnt : V3.txt).frame(width: 64, alignment: .trailing)
-        }.font(V3.sans(13.5)).padding(.vertical, 11).overlay(alignment: .top) { if !first { Rectangle().fill(V3.cl).frame(height: 1) } }
+        }.font(V3.sans(13.5)).padding(.vertical, 11.5).overlay(alignment: .top) { if !first { Rectangle().fill(V3.cl).frame(height: 1) } }
     }
 
     private func copy(_ kind: String, _ mine: JSONValue) {
@@ -708,23 +740,23 @@ private struct SupportQR: View {
     let close: () -> Void
     var body: some View {
         ZStack {
-            // macOS 稿：浮层无遮罩，点空白处关闭
-            Color.white.opacity(0.001).onTapGesture(perform: close)
+            // 遮罩由 PlansSheet 的 qrLayer 画（06.13：整张弹窗盖 28% 深色）
             VStack(spacing: 10) {
                 Text("添加客服微信").font(V3.sans(20, weight: .medium)).foregroundStyle(V3.txt)
-                Text("用微信扫码添加，发送邀请记录截图").font(V3.sans(14)).foregroundStyle(V3.fnt)
+                Text("用微信扫码添加，发送邀请记录截图").font(V3.sans(14)).foregroundStyle(Color(hex: 0x9A9A94))
                 AsyncImage(url: (api as? HTTPAPIClient).flatMap { URL(string: "/support-wechat-qr.png", relativeTo: $0.origin) }) { phase in
                     if let image = phase.image { image.resizable().scaledToFit() }
                     else if phase.error != nil { Text("二维码暂时无法显示，请稍后再试").font(V3.sans(12.5)).foregroundStyle(V3.fnt).padding(24) }
                     else { ProgressView() }
-                }.frame(width: 280, height: 280).overlay(RoundedRectangle(cornerRadius: 12).stroke(V3.cl)).padding(.vertical, 4)
-                Text("核实后用微信或支付宝把返现转给你").font(V3.sans(14)).foregroundStyle(V3.fnt)
+                }.frame(width: 278.6, height: 278.6).background(.white, in: RoundedRectangle(cornerRadius: 16))
+                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color(hex: 0xECECE8), lineWidth: 1.4))
+                Text("核实后用微信或支付宝把返现转给你").font(V3.sans(14)).foregroundStyle(Color(hex: 0x9A9A94))
             }
             .padding(.horizontal, 40).padding(.top, 32).padding(.bottom, 28).frame(width: 400)
             .background(.white, in: RoundedRectangle(cornerRadius: 20)).shadow(color: .black.opacity(0.16), radius: 20, y: 16)
             .overlay(alignment: .topTrailing) {
                 Button(action: close) { Image(systemName: "xmark").font(.system(size: 13)).frame(width: 32, height: 32).contentShape(Rectangle()) }
-                    .buttonStyle(.plain).foregroundStyle(V3.sub).keyboardShortcut(.cancelAction).accessibilityLabel("关闭").padding(16)
+                    .buttonStyle(.plain).foregroundStyle(Color(hex: 0x62625D)).keyboardShortcut(.cancelAction).accessibilityLabel("关闭").padding(.top, 14).padding(.trailing, 8)
             }
         }
     }

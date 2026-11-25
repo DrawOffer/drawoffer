@@ -23,6 +23,9 @@ struct JobsBoardView: View {
     let requireAccount: () -> Void
     /// 其他页面（岗位广场）要求打开的求职进程；加载完成后进入详情并清空。
     var openApplication: Binding<String?> = .constant(nil)
+    /// 对话预览等处按 id 打开的岗位详情（不经过某条投递卡片）。
+    var openJob: Binding<WorkspaceRouter.JobTarget?> = .constant(nil)
+    @State private var standaloneJob: WorkspaceRouter.JobTarget?
     @State private var applications: [CareerApplication] = []
     @State private var sessions: [JSONValue] = []
     @State private var overview: JSONValue = .null
@@ -41,7 +44,7 @@ struct JobsBoardView: View {
     @State private var selected: CareerApplication?
     @State private var action: JobAction?
     @State private var pendingAction: String?
-    @State private var notice: String?
+    @State private var notice: NoticeToastItem?
     @State private var hoveredCard: String?
     @State private var refreshing = UUID()
     /// 导入岗位成功后，等看板刷新完再打开的新求职进程。
@@ -58,6 +61,9 @@ struct JobsBoardView: View {
             needle.isEmpty || [item.company, item.title, CareerBoard.projection(item.raw).stageLabel].contains { $0.localizedCaseInsensitiveContains(needle) }
         }, earliest: earliest)
     }
+    private var boardCoach: CoachSlot { CoachSlot(id: "board-first", user: session.coachUser) }
+    /// K5（Figma 02A · 61:3082）：加入第一个岗位后第一次打开看板，压暗整页只亮这张卡
+    private var showBoardCoach: Bool { boardCoach.open && selected == nil && mode == "board" && !loading && failure == nil && visible.count == 1 }
     private func columnStage(_ column: String) -> String { applications.first { $0.column == column }?.stage ?? (column.hasPrefix("interview:") ? "interview" : column) }
     private func columnTitle(_ column: String) -> String { column.hasPrefix("interview:") ? String(column.dropFirst(10)) : CareerStage.label(column) }
     private func completed(_ item: CareerApplication) -> Bool { item.completedSchedule != nil }
@@ -66,7 +72,11 @@ struct JobsBoardView: View {
 
     var body: some View {
         Group {
-            if let selected {
+            if let standaloneJob {
+                JobDetailView(jobID: standaloneJob.id, application: standaloneJob.applicationID.flatMap { id in applications.first { $0.id == id }?.raw },
+                              back: { self.standaloneJob = nil; refreshing = UUID() }, deleted: { self.standaloneJob = nil; refreshing = UUID() })
+                    .id(standaloneJob.id + (standaloneJob.applicationID ?? ""))
+            } else if let selected {
                 CareerApplicationDetailView(application: selected, api: session.api, back: { self.selected = nil; refreshing = UUID() }, perform: { kind, app in
                     action = JobAction(kind: kind, application: app,
                         stage: kind == "apply" ? "screening" : kind == "schedule-current" ? app.stage : CareerStage.nextStages(app).first(where: { $0 == "interview" }) ?? CareerStage.nextStages(app).first ?? "screening",
@@ -83,13 +93,6 @@ struct JobsBoardView: View {
                         Button("导入岗位") { open("import") }.buttonStyle(V3ButtonStyle(kind: .dark, width: 100))
                     }
                     statistics.padding(.top, 29)
-                    if let notice {
-                        HStack(spacing: 10) {
-                            Text(notice).font(V3.sans(12.5)).foregroundStyle(V3.txt)
-                            Spacer()
-                            Button { self.notice = nil } label: { Image(systemName: "xmark").font(.system(size: 10)) }.buttonStyle(.plain).foregroundStyle(V3.fnt).accessibilityLabel("关闭提示")
-                        }.padding(.horizontal, 14).frame(height: 36).background(V3.orangeSoft, in: RoundedRectangle(cornerRadius: 8)).padding(.top, 14)
-                    }
                     if loading {
                         V3Loading("正在加载求职数据…").font(V3.sans(13)).frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else if let failure {
@@ -113,7 +116,9 @@ struct JobsBoardView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .task(id: account + refreshing.uuidString + (openApplication.wrappedValue ?? "")) { await load() }
+        .overlay(alignment: .top) { if selected == nil { NoticeToast(item: $notice).padding(.top, 20) } }
+        .task(id: account + refreshing.uuidString + (openApplication.wrappedValue ?? "") + (openJob.wrappedValue?.id ?? "")) { await load() }
+        .coachMarkHost()
         .centeredSheet(item: $action) { item in
             if let app = item.application, ["stage", "advance", "advance-offer"].contains(item.kind) {
                 // 11 · 推进流程：从详情打开时按进度预选，从看板拖动 / 推进时带上目标列
@@ -123,7 +128,7 @@ struct JobsBoardView: View {
                                    initialWrittenType: ["written_test", "assessment", "ai_interview"].contains(item.stage) ? item.stage : "written_test",
                                    initialInterviewLabel: preset && item.stage == "interview" ? item.label : preset && item.stage == "hr" ? "HR 面" : "",
                                    close: { action = nil },
-                                   completed: { message in action = nil; refreshing = UUID(); if let message { notice = message } })
+                                   completed: { message in action = nil; refreshing = UUID(); if let message { notice = .partial(message) } })
             } else if item.kind == "import" {
                 // 03A · 导入岗位：固定 640×600，创建后刷新看板并打开新求职进程
                 CareerJobImportSheet(api: session.api, close: { action = nil },
@@ -179,21 +184,22 @@ struct JobsBoardView: View {
         ]
         return HStack(spacing: 0) {
             ForEach(Array(values.enumerated()), id: \.offset) { index, item in
-                VStack(alignment: .leading, spacing: 5) {
+                // 02.1 提案 E：22 号数字，比率 10.5 号跟在数量旁（间距 8）；标签 11 号；分隔线 40 高、从数字顶部下移 4.5
+                VStack(alignment: .leading, spacing: 5.5) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(item.1).font(V3.number(28)).foregroundStyle(V3.txt)
+                        Text(item.1).font(V3.number(22)).foregroundStyle(V3.txt)
                         if let rate = item.2 {
-                            (Text(rate.0 + " ").foregroundStyle(V3.fnt) + Text(rate.1).font(V3.number(12, weight: .semibold)).foregroundStyle(V3.txt))
-                                .font(V3.sans(12, weight: .medium))
+                            (Text(rate.0 + " ").foregroundStyle(V3.fnt) + Text(rate.1).font(V3.number(10.5, weight: .semibold)).foregroundStyle(V3.txt))
+                                .font(V3.sans(10.5, weight: .medium))
                         }
-                    }.frame(height: 36)
-                    Text(item.0).font(V3.sans(12)).foregroundStyle(V3.fnt)
+                    }.frame(height: 27)
+                    Text(item.0).font(V3.sans(11)).foregroundStyle(V3.fnt)
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading).padding(.leading, index == 0 ? 0 : 20)
-                .overlay(alignment: .leading) { if index > 0 { Rectangle().fill(V3.line).frame(width: 1) } }
+                .overlay(alignment: .topLeading) { if index > 0 { Rectangle().fill(V3.line).frame(width: 1, height: 40).padding(.top, 4.5) } }
             }
         }
-        .frame(height: 59, alignment: .top).padding(.bottom, 13)
+        .frame(height: 66, alignment: .top)
         .overlay(alignment: .bottom) { Rectangle().fill(V3.line).frame(height: 1) }
         .accessibilityElement(children: .contain).accessibilityLabel("投递看板统计")
     }
@@ -202,9 +208,9 @@ struct JobsBoardView: View {
 
     private var controls: some View {
         HStack(spacing: 16) {
-            V3Segmented(options: [("board", "看板"), ("list", "列表")], selection: $mode, segmentWidth: 60).accessibilityLabel("显示方式")
+            V3Segmented(options: [("board", "看板"), ("list", "列表")], selection: $mode, segmentWidth: 48).accessibilityLabel("显示方式")
             Spacer()
-            HStack(spacing: 18) {
+            HStack(spacing: 30) {
                 V3SearchField(text: $query, placeholder: "搜索公司、岗位…", width: 180, height: 30)
                 Menu {
                     Button { earliest = false } label: { if !earliest { Label("最近排期", systemImage: "checkmark") } else { Text("最近排期") } }
@@ -212,17 +218,17 @@ struct JobsBoardView: View {
                     Divider()
                     Button("刷新岗位") { refreshing = UUID() }
                 } label: { toolbarLink("排序", icon: "list.bullet") }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
                 Button { filterOpen.toggle() } label: { toolbarLink(hidden.isEmpty && !grouped ? "筛选" : "筛选 · 已启用", icon: "line.3.horizontal.decrease") }
                     .buttonStyle(.plain).accessibilityLabel("视图设置")
                     .popover(isPresented: $filterOpen, arrowEdge: .bottom) { filterPanel }
-            }
+            }.padding(.trailing, 16)
         }.frame(height: 30)
     }
     private func toolbarLink(_ title: String, icon: String) -> some View {
         HStack(spacing: 5) {
-            Image(systemName: icon).font(.system(size: 12)).foregroundStyle(V3.fnt)
-            Text(title).font(V3.sans(14)).foregroundStyle(V3.sub)
+            Image(systemName: icon).font(.system(size: 10)).foregroundStyle(V3.fnt)
+            Text(title).font(V3.sans(12)).foregroundStyle(V3.sub)
         }.frame(height: 28).contentShape(Rectangle())
     }
     private var filterPanel: some View {
@@ -262,7 +268,7 @@ struct JobsBoardView: View {
 
     private var boardArea: some View {
         GeometryReader { viewport in
-            let width = min(280, max(220, (viewport.size.width - 40) / 5))
+            let width = min(280, max(164, (viewport.size.width - 40) / 5))
             ScrollView(grouped ? [.horizontal, .vertical] : .horizontal) {
                 if grouped {
                     VStack(alignment: .leading, spacing: 24) {
@@ -289,7 +295,7 @@ struct JobsBoardView: View {
                     HStack(spacing: 7) {
                         Circle().fill(columnTone(column)).frame(width: 7, height: 7)
                         Text(columnTitle(column)).font(V3.sans(12, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1)
-                        Text("\(matches.count)").font(V3.sans(11, weight: .medium)).foregroundStyle(V3.fnt)
+                        Text("\(matches.count)").font(V3.number(11, weight: .medium)).foregroundStyle(V3.fnt).padding(.leading, 1)
                     }
                     .padding(.horizontal, 6).frame(height: 40).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                     .help("拖动调整栏目位置")
@@ -297,8 +303,14 @@ struct JobsBoardView: View {
                     .contextMenu { Button("向左移动") { moveColumn(column, -1) }; Button("向右移动") { moveColumn(column, 1) } }
                     ScrollView(.vertical) {
                         VStack(spacing: 8) {
-                            if matches.isEmpty { Text("暂无进程").font(V3.sans(11)).foregroundStyle(V3.fnt2).frame(maxWidth: .infinity, alignment: .leading).padding(.top, 12).padding(.horizontal, 2) }
-                            ForEach(matches) { item in card(item).draggable(item.movable ? "job:" + item.id : "locked:" + item.id) }
+                            if matches.isEmpty { Text("暂无进程").font(V3.sans(11)).foregroundStyle(V3.fnt2).frame(maxWidth: .infinity, alignment: .center).padding(.top, 12).padding(.horizontal, 2) }
+                            ForEach(matches) { item in
+                                card(item)
+                                    .coachTarget(showBoardCoach && item.id == visible.first?.id, label: "投递看板引导",
+                                                 message: "加入的岗位都在这儿。投出去后把它拖到「筛选中」，\n笔试、面试的时间也记在这张卡上。",
+                                                 actions: [CoachAction(label: "知道了")], padding: 6, corner: 10) { boardCoach.dismiss() }
+                                    .draggable(item.movable ? "job:" + item.id : "locked:" + item.id)
+                            }
                         }
                     }.scrollIndicators(.hidden).scrollDisabled(height == nil)
                 }
@@ -319,7 +331,7 @@ struct JobsBoardView: View {
         }
         let id = value.hasPrefix("job:") ? String(value.dropFirst(4)) : value.hasPrefix("locked:") ? String(value.dropFirst(7)) : ""
         guard let item = applications.first(where: { $0.id == id }), item.column != column else { return false }
-        if let reason = dropBlockReason(item, column: column) { notice = reason; return false }
+        if let reason = dropBlockReason(item, column: column) { notice = .attention(reason); return false }
         let target = columnStage(column)
         if column == "ended" { action = JobAction(kind: "terminate", application: item); return true }
         action = JobAction(kind: item.stage == "pending" ? "apply" : "stage", application: item, stage: target,
@@ -369,7 +381,7 @@ struct JobsBoardView: View {
             Text(item.company + " · " + item.title).font(V3.sans(12, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1)
                 .padding(.trailing, 22).frame(height: 14).help(item.company + " · " + item.title)
             if !item.category.isEmpty, let label = categories.first(where: { $0.0 == item.category })?.1 {
-                V3Chip(label: label).offset(y: 24)
+                V3Chip(label: label, height: 20, size: 10).offset(y: 25)
             }
             HStack(spacing: 6) {
                 if let today {
@@ -387,16 +399,16 @@ struct JobsBoardView: View {
                     Text(status).font(V3.sans(10.5)).foregroundStyle(tone == .red ? V3.red : V3.fnt).lineLimit(1)
                 }
                 Spacer(minLength: 26)
-            }.frame(height: 20).frame(maxHeight: .infinity, alignment: .bottom).padding(.bottom, -6).help(time ?? "")
+            }.frame(height: 20).frame(maxHeight: .infinity, alignment: .bottom).padding(.bottom, -3.5).help(time ?? "")
         }
-        .padding(11).frame(maxWidth: .infinity, alignment: .topLeading).frame(height: 86)
+        .padding(11).frame(maxWidth: .infinity, alignment: .topLeading).frame(height: 88)
         .overlay(alignment: .bottomTrailing) { logo(item).padding(.trailing, 11).padding(.bottom, 7) }
         .overlay(alignment: .topTrailing) {
             Menu { cardMenu(item) } label: {
                 Image(systemName: "ellipsis").font(.system(size: 13, weight: .medium)).foregroundStyle(V3.fnt)
                     .frame(width: 22, height: 22).contentShape(Rectangle())
             }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
             .opacity(hovering ? 1 : 0).padding(6)
             .accessibilityLabel("更多求职操作 \(item.company) \(item.title)")
         }
@@ -584,6 +596,7 @@ struct JobsBoardView: View {
             try Task.checkCancellation()
             applications = result.map { $0.includingSessions(arrangements) }; sessions = arrangements; overview = metrics
             if let target = openApplication.wrappedValue { selected = applications.first { $0.id == target }; openApplication.wrappedValue = nil }
+            if let target = openJob.wrappedValue { selected = nil; standaloneJob = target; openJob.wrappedValue = nil }
             if let target = pendingOpen { pendingOpen = nil; if let app = applications.first(where: { $0.id == target }) { selected = app } }
         } catch is CancellationError { return }
         catch APIError.unauthorized { session.reportAuthenticationFailure(); failure = "登录已失效，请重新登录。" }
@@ -713,12 +726,6 @@ struct CareerForm: View {
     private var heading: String { ["import": "导入岗位", "arranged": "已有面试安排", "stage": "添加求职阶段", "category": "修改求职分类", "terminate": "终止求职", "delete": "删除岗位", "detail": "求职详情", "plugin": "安装浏览器插件", "offer": "记录正式 Offer", "apply": "记录投递", "schedule-current": "安排时间", "accept": "接受 Offer", "decline": "婉拒 Offer", "archive": "归档岗位", "restore": "恢复岗位", "notes": "编辑备注", "schedule": "新建面试"][kind] ?? "岗位" }
     private var needsStage: Bool { ["stage", "apply", "schedule-current", "arranged", "schedule"].contains(kind) }
     private var creation: Bool { kind == "import" || (["arranged", "schedule"].contains(kind) && selectedExisting.isEmpty) }
-    private var stageOptions: [String] {
-        if kind == "offer" { return ["offer"] }
-        if staged || reuseCurrentStage { return [stage] }
-        let options = CareerStage.nextStages(current ?? applications.first { $0.id == selectedExisting })
-        return kind == "schedule" ? options.filter { ["assessment", "written_test", "ai_interview", "interview"].contains($0) } : options
-    }
     private var showSchedule: Bool { ["assessment", "written_test", "ai_interview", "interview"].contains(stage) }
     private var startsPending: Bool { current?.stage == "pending" || creation }
     private var isHR: Bool { stage == "interview" && label == "HR 面" }

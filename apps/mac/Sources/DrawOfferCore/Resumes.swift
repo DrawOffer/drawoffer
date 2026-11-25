@@ -134,6 +134,11 @@ public struct ResumeImportUpload: Sendable {
         self.templateID = templateID; self.idempotencyKey = idempotencyKey
     }
 
+    init(fileName: String, contentType: String, content: Data, templateID: String?, idempotencyKey: String) {
+        self.fileName = fileName; self.contentType = contentType; self.content = content
+        self.templateID = templateID; self.idempotencyKey = idempotencyKey
+    }
+
     /// 与 Web `validateImportTitle` 相同：不能为空，不能含路径符号或控制字符。
     public static func titleError(_ title: String) -> String? {
         let value = title.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -10,12 +10,14 @@ private final class HTTPFixture: @unchecked Sendable {
     private let images: Bool
     private let interview: Bool
     private let library: Bool
+    private let events: Bool
     private let lock = NSLock()
     private var received: [String] = []
     var requests: [String] { lock.withLock { received } }
 
-    init(images: Bool = false, interview: Bool = false, library: Bool = false) throws {
+    init(images: Bool = false, interview: Bool = false, library: Bool = false, events: Bool = false) throws {
         self.library = library
+        self.events = events
         self.interview = interview
         self.images = images
         let descriptor = socket(AF_INET, SOCK_STREAM, 0)
@@ -63,7 +65,15 @@ private final class HTTPFixture: @unchecked Sendable {
                 while request[head.upperBound...].utf8.count < count { let size = read(client, &bytes, bytes.count); if size <= 0 { break }; request += String(decoding: bytes.prefix(size), as: UTF8.self) }
             }
             lock.withLock { received.append(request) }
-            if library {
+            if events {
+                let body = index == 0
+                    ? "retry: 3000\nevent: ready\ndata: {}\n\n: ping\n\nevent: change\ndata: {\"topic\":\"interview_session\",\"ref\":\"42\"}\n\nevent: change\ndata: {\"topic\":\"parse_task\",\"ref\":null}\n\n"
+                    : "{\"error\":\"NOT_FOUND\"}"
+                let status = ["200 OK", "401 Unauthorized", "404 Not Found"][index]
+                let type = index == 0 ? "text/event-stream" : "application/json"
+                let response = "HTTP/1.1 \(status)\r\nContent-Type: \(type)\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n" + body
+                response.withCString { _ = write(client, $0, response.utf8.count) }
+            } else if library {
                 let body = index < 2 ? Data("{\"id\":\"1\"}".utf8) : Data("fictional-source".utf8)
                 let status = index == 1 ? "302 Found\r\nLocation: \(origin.absoluteString)api/redirect-target" : "200 OK"
                 var response = Data("HTTP/1.1 \(status)\r\nSet-Cookie: library-fixture=secret; Path=/\r\nContent-Type: \(index < 2 ? "application/json" : "text/plain")\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8)
@@ -174,4 +184,20 @@ private final class HTTPFixture: @unchecked Sendable {
     #expect(fixture.requests.count == 4)
     for request in fixture.requests { #expect(!request.lowercased().contains("\r\ncookie:")); #expect(request.contains("Bearer fixture-access")) }
     for request in fixture.requests.prefix(2) { #expect(request.contains(upload.id)); #expect(request.contains("# fictional bytes")); #expect(request.contains("folder_id")); #expect(request.contains("fictional.md")) }
+}
+
+
+private actor EventLog { var items: [UserEvent] = []; func add(_ event: UserEvent) { items.append(event) } }
+
+@Test func eventStreamParsesReadyAndChangesAndMapsErrors() async throws {
+    let fixture = try HTTPFixture(events: true)
+    let transport = try DesktopTransport(origin: fixture.origin, allowLocalHTTP: true)
+    let log = EventLog()
+    try await transport.events(access: "fixture-access") { await log.add($0) }
+    #expect(await log.items == [.ready, .change(topic: "interview_session", ref: "42"), .change(topic: "parse_task", ref: nil)])
+    await #expect(throws: APIError.unauthorized) { try await transport.events(access: "fixture-access") { _ in } }
+    await #expect(throws: APIError.server(status: 404, code: "NOT_FOUND")) { try await transport.events(access: "fixture-access") { _ in } }
+    #expect(fixture.requests[0].contains("GET /api/events"))
+    #expect(fixture.requests[0].contains("Bearer fixture-access"))
+    #expect(fixture.requests.allSatisfy { !$0.lowercased().contains("\r\ncookie:") })
 }

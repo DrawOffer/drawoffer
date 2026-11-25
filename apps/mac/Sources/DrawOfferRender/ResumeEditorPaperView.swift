@@ -290,7 +290,7 @@ final class PaperSchemeHandler: NSObject, WKURLSchemeHandler, @unchecked Sendabl
         if path.hasPrefix("/templates/"), method == "GET" {
             let name = String(path.dropFirst("/templates/".count))
             let ext = (name as NSString).pathExtension
-            if PaperAssets.isBundledTemplate(path), let file = Bundle.module.url(forResource: (name as NSString).deletingPathExtension, withExtension: ext, subdirectory: "templates"),
+            if PaperAssets.isBundledTemplate(path) || PaperAssets.isTemplateStyleImage(path), let file = Bundle.module.url(forResource: (name as NSString).deletingPathExtension, withExtension: ext, subdirectory: "templates"),
                let data = try? Data(contentsOf: file) {
                 finish(task, id, status: 200, body: data, type: ["png": "image/png", "jpg": "image/jpeg", "svg": "image/svg+xml"][ext] ?? "application/octet-stream")
             } else { finish(task, id, status: 404, body: Data(), type: "text/plain") }

@@ -102,5 +102,10 @@ struct RootView: View {
 
     var body: some View {
         WorkspaceView()
+            // 回到前台时作废读缓存：用户可能刚在网页或手机上改过，切回来看到的应是最新数据。
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                let api = session.api
+                Task { await api.purgeCache() }
+            }
     }
 }

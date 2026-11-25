@@ -22,9 +22,10 @@ struct WorkspaceView: View {
     @State private var focusResumeID: String?
     @State private var editResumeID: String?
     @State private var featureNotice = false
-    @State private var homeDraft = ""
     @State private var pluginNotice = false
     @State private var router = WorkspaceRouter()
+    @State private var network = NetworkStatus()
+    @State private var networkNotice: NoticeToastItem?
     @State private var announcements = AnnouncementCenter()
     @State private var plansPresented = false
     @State private var careerProfile = false
@@ -33,6 +34,9 @@ struct WorkspaceView: View {
     @State private var mockFullScreen = false
     /// 首页点开某一场模拟面试（面试纸 / 报告纸 / “看这一场的报告”）
     @State private var mockSession: String?
+    @State private var mockPlan: MockPracticePlan?
+    @State private var mockApplication: String?
+    @State private var openJob: WorkspaceRouter.JobTarget?
     /// 首页“选择文件”导入简历：我的简历页收到后打开导入。
     @State private var importRequest: UUID?
     @State private var openApplication: String?
@@ -81,8 +85,7 @@ struct WorkspaceView: View {
                 mainContent
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(.white)
-                // 模拟面试场次画面不显示侧栏：顶部让出红绿灯一行；其余内容直接铺满窗口，不再套圆角描边卡片。
-                .padding(.top, bare && !edge ? 40 : 0)
+                // 模拟面试场次画面不显示侧栏、直接铺满窗口：顶行和红绿灯同一行（Figma 09 · 05），左边从 x 80 起让开红绿灯。
                 .overlay(alignment: .topLeading) {
                     if !bare && !sidebarVisible {
                         SidebarToggleButton { withAnimation(.easeOut(duration: 0.18)) { sidebarVisible = true } }
@@ -107,8 +110,22 @@ struct WorkspaceView: View {
             AnnouncementDetailSheet().environment(announcements)
         }
         .centeredSheet(isPresented: $plansPresented) { PlansSheet() }
+        // 断网时窗口顶部 20pt 常驻一枚警告胶囊（第 16 页 E 组 / Web `PageUpdateNotice`），网络恢复自动消失。
+        // 恢复后换成一闪而过的「网络已恢复」（E2 → A1）。
+        .overlay(alignment: .top) {
+            VStack(spacing: 12) {
+                if network.offline { StatusPill(tone: .warn, title: "网络断开了").transition(.opacity) }
+                NoticeToast(item: $networkNotice)
+            }.padding(.top, 20)
+        }
+        .animation(.easeOut(duration: 0.18), value: network.offline)
+        .onChange(of: network.offline) { wasOffline, offline in
+            networkNotice = wasOffline && !offline ? .done("网络已恢复") : nil
+        }
         // 所有弹窗与确认框画在整个窗口正中（设计稿 11-16）；浮层也要拿到 router 与公告，所以宿主放在这两个 environment 里面
         .modalHost()
+        // 新手引导的压暗蒙层盖住整个窗口（含侧栏）；各页自己的 host 见到外层宿主后只登记目标、不重复绘制
+        .environment(\.coachMarkExternalHost, true).coachMarkHost()
         .environment(router)
         .environment(announcements)
         .onAppear { if fixture { selection = .mock } }
@@ -119,6 +136,11 @@ struct WorkspaceView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await announcements.refresh(api: session.api); announcements.autoOpenImportant(api: session.api) }
+        }
+        // 实时事件：后台任务状态变了就唤醒对应页面，新站内消息直接刷新消息中心；换账号或退出时断开重连
+        .task(id: user?.id ?? "") {
+            guard user != nil else { return }
+            await EventHub.shared.run(api: session.api) { Task { await announcements.refresh(api: session.api, force: true) } }
         }
         .onChange(of: selection) { old, new in
             // 未登录只开放首页：点其他栏目留在原处，直接弹出整窗登录页
@@ -139,6 +161,9 @@ struct WorkspaceView: View {
             case .application(let id): openApplication = id; selection = .jobs
             case .mock(let focus): mockFocus = focus; selection = .mock
             case .mockSession(let id): mockSession = id; selection = .mock
+            case .mockPractice(let plan): mockPlan = plan; selection = .mock
+            case .mockFor(let application): mockApplication = application; selection = .mock
+            case .job(let target): openJob = target; selection = .jobs
             case nil: break
             }
         }
@@ -151,7 +176,6 @@ struct WorkspaceView: View {
                     editResumeID = nil
                     chat = nil
                     loginRequest = nil
-                    homeDraft = ""
                     selection = .home
                 }
                 let template = loginRequest?.template
@@ -164,7 +188,6 @@ struct WorkspaceView: View {
                 editResumeID = nil
                 chat = nil
                 loginRequest = nil
-                homeDraft = ""
                 selection = .home
             }
         }
@@ -178,14 +201,17 @@ struct WorkspaceView: View {
                 HomeMemoryView(editResume: { editResumeID = $0; selection = .resumes },
                                practice: { focus in mockFocus = focus; selection = .mock },
                                openMock: { id, _ in mockSession = id; selection = .mock },
-                               navigate: { selection = $0 })
+                               navigate: { selection = $0 },
+                               // 知识图谱「聊一聊」侧栏：↗ 在对话页接着聊同一条；新建对话后刷新侧栏「最近对话」
+                               openChat: { id in chat = ChatTarget(sessionID: id, initial: nil); selection = .assistant },
+                               chatsChanged: { Task { await agentSessions.load(api: session.api, account: user?.id ?? "") } })
             } else {
                 GuestHomeView(requireAccount: { requestLogin(reason: "登录 DrawOffer，开始你的第一份简历。") })
             }
         case .datasets: DatasetLibraryView(requireAccount: { requestLogin(reason: "登录后管理你的资料库。") })
-                case .mock: MockInterviewView(requireAccount: { requestLogin(reason: "登录后开始模拟面试。") }, showSchedule: { selection = .schedule }, navigate: { selection = $0 }, incomingFocus: $mockFocus, incomingSession: $mockSession, fullScreen: $mockFullScreen)
+                case .mock: MockInterviewView(requireAccount: { requestLogin(reason: "登录后开始模拟面试。") }, showSchedule: { selection = .schedule }, navigate: { selection = $0 }, incomingFocus: $mockFocus, incomingSession: $mockSession, incomingPlan: $mockPlan, incomingApplication: $mockApplication, fullScreen: $mockFullScreen)
         case .schedule: InterviewScheduleView(requireAccount: { requestLogin(reason: "登录后管理面试安排。") })
-        case .jobs: JobsBoardView(requireAccount: { requestLogin(reason: "登录后管理岗位和求职进度。") }, openApplication: $openApplication)
+        case .jobs: JobsBoardView(requireAccount: { requestLogin(reason: "登录后管理岗位和求职进度。") }, openApplication: $openApplication, openJob: $openJob)
         case .templates:
             TemplatesView(pendingCreateKey: $pendingCreateKey,
                           requireLogin: { loginRequest = LoginRequest(template: $0) },
@@ -211,12 +237,6 @@ struct WorkspaceView: View {
             if user != nil { AccountSection(career: $careerProfile) } else { PlaceholderView(section: .account) }
         case let section?: PlaceholderView(section: section)
         }
-    }
-
-    private func startChat(_ text: String, _ model: String?) {
-        chat = ChatTarget(sessionID: nil, initial: text, model: model)
-        homeDraft = ""
-        selection = .assistant
     }
 
     private func requestLogin(reason: String? = nil) {

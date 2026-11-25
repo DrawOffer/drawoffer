@@ -86,7 +86,7 @@ struct ResumeLineChat: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) { content }
+            VStack(alignment: .leading, spacing: 17) { content }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 12).padding(.bottom, 40)
         }
@@ -155,7 +155,7 @@ struct ResumeLineChat: View {
             let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
             draft = ""
             send(text, shown: text)
-        }.padding(.top, 6)
+        }.padding(.top, 8)
     }
 
     /// 12.6：都换上，或只换其中一条。

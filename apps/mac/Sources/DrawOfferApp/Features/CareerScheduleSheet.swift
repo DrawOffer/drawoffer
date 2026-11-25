@@ -67,11 +67,15 @@ struct CareerScheduleSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            crumbs.padding(.horizontal, 20).padding(.top, 18)
+            crumbs.padding(.horizontal, 25).padding(.top, 19)
             VStack(alignment: .leading, spacing: 6) {
                 Text(title).font(V3.serif(24)).foregroundStyle(V3.txt).frame(height: 34)
-                TextField("", text: $note, prompt: Text(notePlaceholder).foregroundStyle(V3.fnt), axis: .vertical)
+                // macOS 26 上字段带 foregroundStyle 时 prompt 颜色会被盖掉：占位字自己叠
+                TextField("", text: $note, axis: .vertical)
                     .textFieldStyle(.plain).font(V3.sans(14)).foregroundStyle(V3.txt).lineLimit(1...4).accessibilityLabel("备注")
+                    .overlay(alignment: .topLeading) {
+                        if note.isEmpty { Text(notePlaceholder).font(V3.sans(14)).foregroundStyle(V3.fnt).allowsHitTesting(false) }
+                    }
                     .onChange(of: note) { _, _ in touched() }
                 if conflict {
                     HStack(alignment: .top, spacing: 8) {
@@ -79,18 +83,20 @@ struct CareerScheduleSheet: View {
                         Text("这个时间和其他安排重叠。可以改时间，或仍然保存。").font(V3.sans(12.5)).foregroundStyle(V3.sub)
                     }.padding(.top, 4).accessibilityElement(children: .combine)
                 }
-            }.padding(.horizontal, 20).padding(.top, 22)
-            props.padding(.horizontal, 20).padding(.top, 18)
-            if let error { Text(error).font(V3.sans(12.5)).foregroundStyle(V3.red).padding(.horizontal, 20).padding(.top, 12) }
+            }.padding(.horizontal, 25).padding(.top, 23)
+            props.padding(.horizontal, 25).padding(.top, 20)
+            if let error { Text(error).font(V3.sans(12.5)).foregroundStyle(V3.red).padding(.horizontal, 25).padding(.top, 12) }
             Rectangle().fill(V3.line).frame(height: 1).padding(.top, 20)
             HStack(spacing: 10) {
                 Spacer(minLength: 0)
                 Button("取消", action: close).buttonStyle(V3ButtonStyle(kind: .ghost)).disabled(busy).keyboardShortcut(.cancelAction)
                 Button(busy ? "正在保存…" : conflict ? "仍然保存" : submitLabel) { Task { await save() } }
                     .buttonStyle(V3ButtonStyle(kind: .dark)).disabled(busy || (session != nil && !changed))
-            }.padding(.horizontal, 20).padding(.vertical, 14)
+            }.padding(.horizontal, 25).padding(.vertical, 15)
         }
         .frame(width: 640, alignment: .leading)
+        // 12.01–12.03 属性格按稿定宽（212 / 88 / 130）；推进弹窗那边按内容撑开
+        .environment(\.careerPropFixedWidth, true)
         .interactiveDismissDisabled(busy)
         .onAppear(perform: prepare)
     }
@@ -118,15 +124,15 @@ struct CareerScheduleSheet: View {
                 Text(String(company.prefix(1)).nonEmptyValue ?? "企").font(V3.sans(9, weight: .semibold)).foregroundStyle(.white)
                     .frame(width: 16, height: 16).background(V3.txt, in: RoundedRectangle(cornerRadius: 4))
                 Text(job.nonEmptyValue ?? label).font(V3.sans(12.5)).foregroundStyle(V3.sub).lineLimit(1).truncationMode(.tail)
-                Text("\(label) · \(state)").font(V3.sans(11.5)).foregroundStyle(V3.fnt).lineLimit(1).fixedSize()
+                Text("\(label) · \(state)").font(V3.sans(11, weight: .medium)).foregroundStyle(V3.fnt).lineLimit(1).fixedSize()
             }
-            .padding(.horizontal, 8).frame(height: 26).frame(maxWidth: 320, alignment: .leading)
+            .padding(.horizontal, 8).frame(height: 28).frame(maxWidth: 320, alignment: .leading)
             .background(V3.field, in: RoundedRectangle(cornerRadius: 6)).help(job)
             Text("›").font(V3.sans(13)).foregroundStyle(V3.fnt2)
             HStack(spacing: 5) {
                 Image(systemName: step == "编辑信息" ? "pencil" : "calendar").font(.system(size: 11))
                 Text(step).font(V3.sans(12.5, weight: .medium))
-            }.foregroundStyle(V3.blue).padding(.horizontal, 8).frame(height: 26).background(V3.blueSoft, in: RoundedRectangle(cornerRadius: 6))
+            }.foregroundStyle(V3.blue).padding(.horizontal, 8).frame(height: 28).background(V3.blueSoft, in: RoundedRectangle(cornerRadius: 6))
             Spacer(minLength: 0)
         }
     }
@@ -153,7 +159,7 @@ struct CareerScheduleSheet: View {
                 } label: {
                     CareerAdvancePropLabel(icon: mode == "phone" ? "phone" : usesLocation ? "mappin" : "video",
                                            text: Self.modes.first { $0.0 == mode }?.1 ?? "视频", empty: false, width: 88, chevron: true)
-                }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("方式")
+                }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().accessibilityLabel("方式")
             }
             if !readOnlySchedule || !usesLocation {
                 CareerAdvanceTextProp(icon: usesLocation ? "mappin" : "link", label: linkLabel, text: Binding(get: { link }, set: { link = $0; touched() }),
@@ -418,7 +424,7 @@ struct CareerTimePop: View {
                 if let hint { Text(hint).font(V3.sans(11.5)).foregroundStyle(V3.fnt) }
             }
         }
-        .padding(14).frame(width: 278)
+        .padding(15).frame(width: 280)
         .onAppear { month = (byDay ? slots.last?.value.wrappedValue ?? slots.first?.value.wrappedValue : slots.first?.value.wrappedValue) ?? Date() }
     }
 
@@ -527,7 +533,7 @@ struct CareerMiniCalendar: View {
         let days = Self.grid(month)
         VStack(spacing: 0) {
             HStack {
-                Text(CareerMiniCalendar.title(month)).font(V3.sans(13.5, weight: .medium)).foregroundStyle(V3.txt)
+                Text(CareerMiniCalendar.title(month)).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
                 Spacer()
                 Button { shift(-1) } label: { Image(systemName: "chevron.left").font(.system(size: 11, weight: .medium)).frame(width: 22, height: 22).contentShape(Rectangle()) }
                     .buttonStyle(.plain).foregroundStyle(V3.sub).accessibilityLabel("上个月")
@@ -535,7 +541,7 @@ struct CareerMiniCalendar: View {
                     .buttonStyle(.plain).foregroundStyle(V3.sub).accessibilityLabel("下个月")
             }.frame(height: 28).padding(.leading, 4)
             HStack(spacing: 0) {
-                ForEach(Self.weekdays, id: \.self) { Text($0).font(V3.sans(11)).foregroundStyle(V3.fnt).frame(maxWidth: .infinity) }
+                ForEach(Self.weekdays, id: \.self) { Text($0).font(V3.sans(11.5)).foregroundStyle(V3.fnt).frame(maxWidth: .infinity) }
             }.frame(height: 22).padding(.top, 6)
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: 7), spacing: 0) {
                 ForEach(days, id: \.self) { day in
@@ -546,13 +552,13 @@ struct CareerMiniCalendar: View {
                     let today = calendar.isDateInToday(day)
                     let past = calendar.startOfDay(for: day) < calendar.startOfDay(for: Date())
                     Button { pick(day); if !inMonth { month = day } } label: {
-                        Text("\(calendar.component(.day, from: day))").font(V3.number(13, weight: isSelected || ends ? .medium : .regular))
+                        Text("\(calendar.component(.day, from: day))").font(V3.number(12.5, weight: isSelected || ends ? .medium : .regular))
                             .foregroundStyle(isSelected || ends ? .white : !inMonth ? V3.fnt2 : past ? V3.fnt : V3.txt)
-                            .frame(width: 32, height: 32)
-                            .background { if isSelected || ends { Circle().fill(V3.blue) } }
-                            .overlay { if today && !(isSelected || ends) { Circle().stroke(V3.blue, lineWidth: 1) } }
-                            .frame(maxWidth: .infinity).frame(height: 38)
-                            .background { if inside { V3.blueSoft.frame(height: 32) } }
+                            .frame(width: 36, height: 30)
+                            .background { if isSelected || ends { Capsule().fill(V3.blue) } }
+                            .overlay { if today && !(isSelected || ends) { Capsule().stroke(V3.blue, lineWidth: 1) } }
+                            .frame(maxWidth: .infinity).frame(height: 40)
+                            .background { if inside { V3.blueSoft.frame(height: 30) } }
                             .contentShape(Rectangle())
                     }.buttonStyle(.plain).accessibilityLabel(CareerTimeFormat.day(day)).accessibilityAddTraits(isSelected || ends ? .isSelected : [])
                 }
@@ -600,12 +606,12 @@ struct CareerClockField: View {
         VStack(alignment: .trailing, spacing: 4) {
             HStack(spacing: compact ? 1 : 4) {
                 part($hour, .hour)
-                Text(":").font(V3.number(compact ? 13 : 17, weight: .regular)).foregroundStyle(V3.fnt)
+                Text(":").font(V3.number(compact ? 13 : 16, weight: .regular)).foregroundStyle(V3.fnt)
                 part($minute, .minute)
             }
-            .padding(.horizontal, compact ? 8 : 14).frame(width: compact ? 72 : 148, height: compact ? 30 : 40)
-            .background(.white, in: RoundedRectangle(cornerRadius: compact ? 6 : 8))
-            .overlay(RoundedRectangle(cornerRadius: compact ? 6 : 8).stroke(invalid ? V3.red : focus != nil || listOpen ? V3.blue : V3.cl, lineWidth: invalid || focus != nil ? 1.2 : 1))
+            .padding(.horizontal, compact ? 8 : 14).frame(width: compact ? 71 : 147, height: compact ? 29 : 39)
+            .background(.white, in: RoundedRectangle(cornerRadius: compact ? 5.5 : 7.5))
+            .overlay(RoundedRectangle(cornerRadius: compact ? 5.5 : 7.5).stroke(invalid ? V3.red : focus != nil || listOpen ? V3.blue : V3.cl, lineWidth: invalid || focus != nil ? 1.2 : 1))
             .contentShape(Rectangle())
             .onTapGesture { listOpen.toggle(); if focus == nil { focus = .hour } }
             .overlay(alignment: .bottomLeading) { if listOpen { lists.offset(y: -(compact ? 34 : 44)).zIndex(10) } }
@@ -621,7 +627,7 @@ struct CareerClockField: View {
 
     private func part(_ text: Binding<String>, _ which: Part) -> some View {
         TextField("--", text: text).textFieldStyle(.plain).multilineTextAlignment(.center)
-            .font(V3.number(compact ? 13 : 17, weight: .regular)).foregroundStyle(focus == which ? V3.blue : V3.txt)
+            .font(V3.number(compact ? 13 : 18, weight: compact ? .regular : .medium)).foregroundStyle(focus == which ? V3.blue : V3.txt)
             .frame(width: compact ? 20 : 30).focused($focus, equals: which)
             .onChange(of: text.wrappedValue) { _, new in
                 let digits = String(new.filter(\.isNumber).prefix(2))

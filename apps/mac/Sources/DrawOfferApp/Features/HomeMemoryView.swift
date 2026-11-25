@@ -13,6 +13,10 @@ struct HomeMemoryView: View {
     let practice: (PracticeFocus?) -> Void
     let openMock: (String, Bool) -> Void
     let navigate: (WorkspaceSection) -> Void
+    /// 图谱「聊一聊」侧栏右上 ↗：在对话页打开这条对话（`WorkspaceView` 里设 `ChatTarget(sessionID:)` 再切到助手）；nil 时侧栏不显示 ↗
+    var openChat: ((String) -> Void)? = nil
+    /// 侧栏里新建或更新了对话：让侧栏“最近对话”重新读取
+    var chatsChanged: (() -> Void)? = nil
 
     @State private var graph: HomeGraph?
     @State private var mocks: HomeMockProgress?
@@ -33,7 +37,7 @@ struct HomeMemoryView: View {
             } else if let graph, loaded {
                 switch HomeStage.pick(graph: graph, mocks: mocks, reportSeen: UserDefaults.standard.bool(forKey: reportSeenKey)) {
                 case .newUser:
-                    HomeCanvas { NewUserHome(reload: { Task { await load() } }, editResume: editResume) }
+                    HomeCanvas { NewUserHome(reload: { Task { await load() } }, editResume: { id in HomePaperHandoff.armed = true; editResume(id) }) }
                 case .firstSteps(let mode):
                     HomeCanvas {
                         FirstStepsHome(graph: graph, mode: mode, mockID: mocks?.firstID,
@@ -49,7 +53,8 @@ struct HomeMemoryView: View {
                                        jobs: { navigate(.opportunities) }, changed: { Task { await load() } })
                     }
                 case .feedback:
-                    FeedbackHome(graph: graph, editResume: editResume, practice: practice, openMock: openMock, navigate: navigate)
+                    FeedbackHome(graph: graph, editResume: editResume, practice: practice, openMock: openMock, navigate: navigate,
+                                 openChat: openChat, chatsChanged: chatsChanged)
                 }
             } else {
                 V3Loading("正在读取首页…").frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -88,7 +93,8 @@ private struct HomeCanvas<Content: View>: View {
     @ViewBuilder let content: Content
     var body: some View {
         GeometryReader { geometry in
-            let scale = min(geometry.size.width / Self.size.width, geometry.size.height / Self.size.height, 1.3)
+            // 只缩不放：scaleEffect 是位图缩放，放大会把字拉糊；窗口比设计画布大时居中留白。
+            let scale = min(geometry.size.width / Self.size.width, geometry.size.height / Self.size.height, 1)
             content.frame(width: Self.size.width, height: Self.size.height, alignment: .topLeading)
                 .scaleEffect(scale)
                 .frame(width: geometry.size.width, height: geometry.size.height)
@@ -100,14 +106,29 @@ private struct HomeCanvas<Content: View>: View {
 private struct HomePillStyle: ButtonStyle {
     var height: CGFloat = 44
     var font: CGFloat = 15
+    /// 设计稿里固定宽度的胶囊（新用户首页「导入简历」128×44）
+    var width: CGFloat? = nil
+    var leading: CGFloat = 22
+    var trailing: CGFloat = 20
     @Environment(\.isEnabled) private var enabled
     @State private var hovering = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.font(V3.sans(font, weight: .medium))
             .foregroundStyle(enabled ? .white : Color(hex: 0x87867F))
-            .padding(.leading, 22).padding(.trailing, 20).frame(height: height)
+            .padding(.leading, width == nil ? leading : 0).padding(.trailing, width == nil ? trailing : 0).frame(width: width, height: height)
             .background(enabled ? (hovering || configuration.isPressed ? Color(hex: 0x2F2F2C) : V3.txt) : Color(hex: 0xE7E6E0), in: Capsule())
             .onHover { hovering = $0 }
+    }
+}
+
+private extension View {
+    /// 设计稿里的文字框：左上角在 (x, y)，高度 = 字号 × 1.2，文字在框里垂直居中；给了宽度就在框里居中或靠左。
+    func slot(_ x: CGFloat, _ y: CGFloat, size: CGFloat, width: CGFloat? = nil, center: Bool = false) -> some View {
+        fixedSize().frame(width: width, height: (size * 1.2).rounded(), alignment: center ? .center : .leading).offset(x: x, y: y)
+    }
+    /// 同上，但给的是文字框的竖直中心。
+    func slotC(_ x: CGFloat, _ cy: CGFloat, size: CGFloat, width: CGFloat? = nil, center: Bool = false) -> some View {
+        slot(x, cy - (size * 1.2).rounded() / 2, size: size, width: width, center: center)
     }
 }
 
@@ -154,26 +175,27 @@ private struct NewUserHome: View {
             HStack(spacing: 10) {
                 BrandMark().frame(width: 28, height: 28)
                 Text("欢迎来到职绘").font(V3.sans(18, weight: .medium)).foregroundStyle(V3.txt)
-            }.offset(x: 146, y: 210)
+            }.offset(x: 120, y: 210)
             Text(readingID != nil ? "正在读你的简历" : "从第一份简历开始")
-                .font(V3.sans(52, weight: .medium)).tracking(-0.52).foregroundStyle(V3.txt).fixedSize()
-                .offset(x: 146, y: 258)
-            Text(readingID != nil ? "读完以后，经历和技术都会记下来，\n可以先去别处看看，这里会自动更新。" : "职绘会记住你写过的经历、练过的题、面过的每一场，\n之后改简历、练面试、复盘，都接着这些往下帮你。")
-                .font(V3.sans(17)).lineSpacing(7).foregroundStyle(V3.sub).fixedSize()
-                .offset(x: 146, y: 346)
+                .font(V3.sans(52, weight: .medium)).foregroundStyle(V3.txt).slot(120, 261.8, size: 52)
+            Text(readingID != nil ? "读完以后，经历和技术都会记下来，" : "职绘会记住你写过的经历、练过的题、面过的每一场，")
+                .font(V3.sans(17)).foregroundStyle(V3.sub).slot(120, 350.8, size: 17)
+            Text(readingID != nil ? "可以先去别处看看，这里会自动更新。" : "之后改简历、练面试、复盘，都接着这些往下帮你。")
+                .font(V3.sans(17)).foregroundStyle(V3.sub).slot(120, 380.8, size: 17)
             if readingID == nil {
                 HStack(spacing: 24) {
                     Button { if let guest { guest(); return }; importFile = nil; importOpen = true } label: {
-                        HStack(spacing: 8) { Text("导入简历"); Image(systemName: "arrow.right").font(.system(size: 13, weight: .medium)) }
-                    }.buttonStyle(HomePillStyle())
+                        HStack(spacing: 1) { Text("导入简历"); Image(systemName: "arrow.right").font(.system(size: 11, weight: .semibold)) }
+                            .padding(.leading, 12)
+                    }.buttonStyle(HomePillStyle(width: 128))
                     Button(action: writeOne) {
-                        HStack(spacing: 3) { Text("没有现成的，写一份"); Image(systemName: "chevron.right").font(.system(size: 12)) }
+                        HStack(spacing: 8) { Text("没有现成的，写一份"); Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)) }
                     }.buttonStyle(HomeTextLinkStyle()).disabled(busy)
-                }.offset(x: 146, y: 446)
+                }.offset(x: 120, y: 446)
             }
-            stack.frame(width: 460, height: 600).offset(x: 600, y: 100)
+            stack.frame(width: 460, height: 600, alignment: .topLeading).offset(x: 600, y: 100)
             if let notice {
-                Text(notice).font(V3.sans(13)).foregroundStyle(V3.sub).offset(x: 146, y: 520)
+                Text(notice).font(V3.sans(13)).foregroundStyle(V3.sub).slot(120, 510, size: 13)
             }
         }
         .frame(width: 1151, height: 828, alignment: .topLeading)
@@ -188,26 +210,25 @@ private struct NewUserHome: View {
         .task(id: readingID) { await pollReading() }
     }
 
-    // 右边的纸：默认两张叠着略斜；悬停摆正抬起；点开变两个选项；拖文件变蓝色虚线；正在读按分区依次变深。
+    // 右边的纸（P1–P5，设计稿坐标减去 (600,100)）：默认后面一张、前面一张空白纸；悬停摆正抬起；点开变两个选项；
+    // 拖文件变蓝色虚线；正在读按分区依次变深。纸 360×480，圆角 6。
     private var stack: some View {
         let flat = mode != .idle || hovering || readingID != nil
         return ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: 6).fill(Color(hex: 0xF6F5F0))
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(hex: 0xE7E5DE)))
-                .shadow(color: .black.opacity(0.05), radius: 9, y: 6)
                 .frame(width: 360, height: 480)
-                .rotationEffect(.degrees(flat ? -2 : -5)).opacity(flat ? 0 : 1)
-                .offset(x: 30.2, y: 33.4)
+                .opacity(flat ? 0 : 1)
+                .offset(x: 10, y: 50)
             paper
                 .frame(width: 360, height: 480)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(mode == .drag ? V3.blue : Color(hex: 0xE7E5DE), style: StrokeStyle(lineWidth: mode == .drag ? 1.5 : 1, dash: mode == .drag ? [5, 4] : [])))
-                .shadow(color: .black.opacity(flat ? 0.12 : 0.08), radius: flat ? 22 : 14, y: flat ? 22 : 10)
-                .rotationEffect(.degrees(flat ? 0 : 4))
-                .offset(x: flat ? 40 : 62.8, y: flat ? (readingID != nil ? 20 : 10) : 32)
+                .shadow(color: .black.opacity(flat && readingID == nil ? 0.14 : 0.08), radius: flat && readingID == nil ? 44 : 28, y: flat && readingID == nil ? 22 : 12)
+                .offset(x: flat ? 40 : 80, y: flat ? (readingID != nil ? 20 : 10) : 20)
             if let hint {
                 Text(hint).font(V3.sans(13)).foregroundStyle(readingID != nil ? V3.blue : Color(hex: 0xA5A39B))
-                    .frame(width: 360).offset(x: 40, y: flat ? 540 : 552)
+                    .slot(flat ? 40 : 44.5, flat ? 543.2 : 555.2, size: 13, width: 360, center: true)
             }
         }
         .animation(.timingCurve(0.2, 0, 0, 1, duration: 0.32), value: flat)
@@ -226,7 +247,7 @@ private struct NewUserHome: View {
     }
 
     private var hint: String? {
-        if readingID != nil { return "正在读\(Self.parts[read])…" }
+        if readingID != nil { return "正在读\(Self.parts[read])…  大约还要 \([40, 32, 20, 12, 6][min(read, 4)]) 秒" }
         switch mode {
         case .open: return "点纸外面收回"
         case .drag: return nil
@@ -239,21 +260,21 @@ private struct NewUserHome: View {
             PaperSkeleton(read: read).background(Color(hex: 0xFCFBF8))
         } else if mode == .drag {
             VStack(spacing: 14) {
-                Image(systemName: "square.and.arrow.up").font(.system(size: 34, weight: .light))
+                Image(systemName: "square.and.arrow.up").font(.system(size: 30, weight: .light))
                 Text("松手，开始读这份简历").font(V3.sans(17, weight: .medium))
             }.foregroundStyle(V3.blue).frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(hex: 0xF3F6FD))
         } else if mode == .open {
             ZStack(alignment: .topLeading) {
                 Color(hex: 0xFCFBF8)
-                Text("放进你的简历").font(V3.sans(20, weight: .medium)).foregroundStyle(V3.txt).offset(x: 35, y: 43)
-                Text("选一种开始，之后随时可以再换").font(V3.sans(13)).foregroundStyle(V3.fnt).offset(x: 35, y: 77)
+                Text("放进你的简历").font(V3.sans(20, weight: .medium)).foregroundStyle(V3.txt).slot(36, 47, size: 20)
+                Text("选一种开始，之后随时可以再换").font(V3.sans(13)).foregroundStyle(V3.fnt).slot(36, 81.2, size: 13)
                 option("square.and.arrow.up", "上传简历文件", "PDF、Word、Markdown 都可以") { mode = .idle; importFile = nil; importOpen = true }
-                    .offset(x: 19, y: 131)
-                Rectangle().fill(Color(hex: 0xE7E5DE)).frame(width: 288, height: 1).offset(x: 35, y: 245)
+                    .offset(x: 20, y: 132)
+                Rectangle().fill(Color(hex: 0xE7E5DE)).frame(width: 288, height: 1).offset(x: 36, y: 246)
                 option("pencil", "从空白开始写", "没有现成的，跟着引导一段段写") { mode = .idle; writeOne() }
-                    .offset(x: 19, y: 259).disabled(busy)
+                    .offset(x: 20, y: 260).disabled(busy)
                 Text("也可以直接把文件拖到这张纸上").font(V3.sans(12)).foregroundStyle(Color(hex: 0xA5A39B))
-                    .frame(width: 360).offset(y: 431)
+                    .slot(0, 434.8, size: 12, width: 360, center: true)
             }
         } else {
             Button { if let guest { guest(); return }; mode = .open } label: {
@@ -268,17 +289,16 @@ private struct NewUserHome: View {
         }
     }
 
+    /// 选项行 320×84：图标 (20,24)，标题 (56,16.8)，说明 (56,45.2)，右边小箭头；悬停底 #F4F3EE、圆角 10。
     private func option(_ icon: String, _ title: String, _ sub: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 16) {
-                Image(systemName: icon).font(.system(size: 20, weight: .light)).frame(width: 24)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(V3.sans(17, weight: .medium)).foregroundStyle(V3.txt)
-                    Text(sub).font(V3.sans(13)).foregroundStyle(V3.fnt)
-                }
-                Spacer()
-                Image(systemName: "chevron.right").font(.system(size: 14)).foregroundStyle(Color(hex: 0xA5A39B))
-            }.padding(.leading, 16).padding(.trailing, 18).frame(width: 320, height: 84).contentShape(Rectangle())
+            ZStack(alignment: .topLeading) {
+                Color.clear
+                Image(systemName: icon).font(.system(size: 18, weight: .light)).foregroundStyle(V3.txt).frame(width: 20, height: 20).offset(x: 20, y: 24)
+                Text(title).font(V3.sans(17, weight: .medium)).foregroundStyle(V3.txt).slot(56, 16.8, size: 17)
+                Text(sub).font(V3.sans(13)).foregroundStyle(V3.fnt).slot(56, 45.2, size: 13)
+                Image(systemName: "chevron.right").font(.system(size: 11, weight: .medium)).foregroundStyle(Color(hex: 0xA5A39B)).frame(width: 10, height: 12).offset(x: 292, y: 27)
+            }.frame(width: 320, height: 84).contentShape(Rectangle())
         }.buttonStyle(OptionStyle())
     }
 
@@ -315,14 +335,18 @@ private struct NewUserHome: View {
     }
 
     /// 刷新后也要知道还有一份在读：取导入列表里还没读完的一份。
+    /// 导入任务只在 `/api/resume-overview` 里（简历列表接口不带）；它不进读缓存，轮询直接查它。
     private func findReading() async {
-        guard let result = try? await session.api.careerRequest(path: "/api/resumes", method: "GET", query: [:], body: nil) else { return }
-        let imports = (result["imports"]?.items ?? []) + (result["active_imports"]?.items ?? [])
-        let active = imports.first { item in
+        guard let result = try? await session.api.careerRequest(path: "/api/resume-overview", method: "GET", query: [:], body: nil) else { return }
+        let active = (result["active_imports"]?.items ?? []).first { item in
             !["failed"].contains(item.text("upload_status")) && !["failed", "succeeded"].contains(item.text("parse_status"))
         }
+        let wasReading = readingID != nil
         readingID = active.map { $0.display("id") }.flatMap { $0.isEmpty ? nil : $0 }
-        if readingID == nil, !(result["resumes"]?.items ?? []).isEmpty { reload() }
+        if readingID == nil, !(result["resumes"]?.items ?? []).isEmpty {
+            if wasReading { await session.api.purgeCache() }
+            reload()
+        }
     }
 
     /// P5 正在读：纸上每 2.4 秒亮一段；每 3 秒查一次，读完由首页重新取数换成有简历的首页。
@@ -330,11 +354,17 @@ private struct NewUserHome: View {
         guard readingID != nil else { return }
         read = 0
         var tick = 0
+        var parseMark = EventHub.shared.mark("parse_task", nil)
         while !Task.isCancelled, readingID != nil {
             try? await Task.sleep(for: .milliseconds(600))
             tick += 1
             if tick % 4 == 0 { withAnimation(.easeOut(duration: 0.42)) { read = min(read + 1, Self.parts.count - 1) } }
-            if tick % 5 == 0 { await findReading() }
+            // 每 3 秒查一次；实时事件连着时只在导入任务有变化或每 30 秒兜底时查。App 不在前台时只走动画不查
+            let changed = EventHub.shared.mark("parse_task", nil) != parseMark
+            if NSApp.isActive, EventHub.shared.live ? (changed || tick % 50 == 0) : tick % 5 == 0 {
+                parseMark = EventHub.shared.mark("parse_task", nil)
+                await findReading()
+            }
         }
     }
 }
@@ -400,7 +430,13 @@ private struct PaperSkeleton: View {
     }
 }
 
-// MARK: 03 / 06 第一份报告之前（Figma 02A·03 H3、02A·06 K2）
+// MARK: 03 / 06 第一份报告之前（Figma 02A·03 H3 / H2、02A·06 K2a / K2b）
+
+/// 新手首页进编辑器写完简历、回到首页时，首页那张简历纸从编辑器那一页的位置落到后面（Web `navigateWithPaper`，Figma H2）。
+@MainActor enum HomePaperHandoff {
+    static var armed = false
+    static func consume() -> Bool { defer { armed = false }; return armed }
+}
 
 private struct FirstStepsHome: View {
     @Environment(SessionStore.self) private var session
@@ -411,19 +447,21 @@ private struct FirstStepsHome: View {
     let jobs: () -> Void
     let changed: () -> Void
     @State private var detail: JSONValue?
+    /// H2：纸刚从编辑器落回首页，左边先淡着、纸在中间，随后落位
+    @State private var arriving = false
 
-    private var copy: (greet: String, title: String, intro: String, button: String, now: Int) {
+    private var copy: (greet: String, title: String, intro: [String], button: String, now: Int) {
         let report = detail?["report"]
         let rows = (report?["questions"]?.items ?? []).filter { $0["is_intro"]?.bool != true && $0["skipped"]?.bool != true }
         let reached = rows.filter { $0.text("outcome") == "reached" }.count
         switch mode {
-        case .start: return ("简历记下了", "练一场模拟面试", "题目按你简历里写的经历来出，大约 15 分钟。\n练完会记下你答得好和卡住的地方，出第一份报告。", "开始模拟面试", 1)
-        case .ongoing: return ("第一场还没练完", "接着练完第一场", "回答都保存着，从上次停下的那题接着答。\n答完就出第一份报告。", "继续这一场", 1)
-        case .evaluating: return ("第一场练完了", "报告在整理", "面试官在把笔记整理成你的第一份报告，大约 1 分钟。\n好了这里会亮起来，等的时候可以先去看看岗位。", "整理中 · 约 1 分钟", 2)
-        case .failed: return ("第一场练完了", "报告没整理出来", "评估时出了点问题，你的回答都还在。\n点开这一场重新整理，再等一分钟就好。", "去重新整理", 2)
+        case .start: return ("简历记下了", "练一场模拟面试", ["题目按你简历里写的经历来出，大约 15 分钟。", "练完会记下你答得好和卡住的地方，", "第一份报告就从这里来。"], "开始模拟面试", 1)
+        case .ongoing: return ("第一场还没练完", "接着练完第一场", ["回答都保存着，从上次停下的那题接着答。", "答完就出第一份报告。"], "继续这一场", 1)
+        case .evaluating: return ("第一场练完了", "报告在整理", ["面试官在把笔记整理成你的第一份报告，大约 1 分钟。", "好了这里会亮起来，等的时候可以先去看看岗位。"], "整理中 · 约 1 分钟", 2)
+        case .failed: return ("第一场练完了", "报告没整理出来", ["评估时出了点问题，你的回答都还在。", "点开这一场重新整理，再等一分钟就好。"], "去重新整理", 2)
         case .report:
             let first = report.flatMap { $0["total_score"]?.numberValue }.map { "\(rows.count) 题答到位 \(reached) 题，\(Int($0.rounded())) 分。" } ?? "分数和每道题的结论都出来了。"
-            return ("第一份报告好了", "看看你答得怎么样", first + "\n答得好和卡住的地方，都记进了你的长期记忆。", "看第一份报告", 2)
+            return ("第一份报告好了", "看看你答得怎么样", [first, "答得好和卡住的地方，都记进了你的长期记忆。"], "看第一份报告", 2)
         }
     }
 
@@ -431,28 +469,55 @@ private struct FirstStepsHome: View {
         let copy = copy
         ZStack(alignment: .topLeading) {
             Color.white
-            papers.frame(width: 560, height: 600).offset(x: 560, y: 110)
-            HStack(spacing: 10) {
-                BrandMark().frame(width: 28, height: 28)
-                Text(copy.greet).font(V3.sans(16, weight: .medium)).foregroundStyle(V3.txt)
-            }.offset(x: 146, y: 214)
-            Text(copy.title).font(V3.sans(48, weight: .medium)).foregroundStyle(V3.txt).fixedSize().offset(x: 146, y: 252)
-            Text(copy.intro).font(V3.sans(15)).lineSpacing(11).foregroundStyle(V3.sub).fixedSize().offset(x: 146, y: 340)
-            HStack(spacing: 24) {
-                Button { open(mockID) } label: {
-                    HStack(spacing: 8) { Text(copy.button); if mode != .evaluating { Image(systemName: "arrow.right").font(.system(size: 13, weight: .medium)) } }
-                }.buttonStyle(HomePillStyle(font: 14)).disabled(mode == .evaluating)
-                Button(action: jobs) {
-                    HStack(spacing: 4) { Text("导入岗位").foregroundStyle(V3.txt); Text("›").foregroundStyle(V3.fnt) }
-                }.buttonStyle(.plain).font(V3.sans(15))
-            }.offset(x: 146, y: 420)
-            steps(now: copy.now).offset(x: 146, y: 516)
+            papers.frame(width: 560, height: 600, alignment: .topLeading).offset(x: 560, y: 110)
+            Group {
+                HStack(spacing: 10) {
+                    BrandMark().frame(width: 28, height: 28)
+                    Text(copy.greet).font(V3.sans(18, weight: .medium)).foregroundStyle(V3.txt)
+                }.offset(x: 120, y: 210)
+                Text(copy.title).font(V3.sans(52, weight: .medium)).foregroundStyle(V3.txt).slot(120, 261.8, size: 52)
+                ForEach(Array(copy.intro.enumerated()), id: \.offset) { index, line in
+                    Text(line).font(V3.sans(17)).foregroundStyle(V3.sub).slot(120, 350.8 + 30 * CGFloat(index), size: 17)
+                }
+                HStack(spacing: 24) {
+                    Button { open(mockID) } label: {
+                        HStack(spacing: 1) { Text(copy.button); if mode != .evaluating { Image(systemName: "arrow.right").font(.system(size: 11, weight: .semibold)) } }
+                    }.buttonStyle(mode == .evaluating ? HomePillStyle(leading: 22, trailing: 22) : HomePillStyle(leading: 34, trailing: 23)).disabled(mode == .evaluating)
+                    Button(action: jobs) {
+                        HStack(spacing: 8) { Text("导入岗位"); Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)) }
+                    }.buttonStyle(HomeTextLinkStyle())
+                }.offset(x: 120, y: 476)
+                steps(now: copy.now).offset(x: 120, y: 576)
+            }.opacity(arriving ? 0.35 : 1)
+            if arriving { handoffArrow }
         }
         .frame(width: 1151, height: 828, alignment: .topLeading)
         .task(id: "\(mockID ?? "")|\(mode.rawValue)") { await loadDetail() }
         .task(id: mode == .evaluating ? mockID : nil) { await pollEvaluating() }
+        .task { await playHandoff() }
     }
 
+    private func playHandoff() async {
+        guard mode == .start, HomePaperHandoff.consume() else { return }
+        arriving = true
+        try? await Task.sleep(for: .milliseconds(450))
+        withAnimation(.timingCurve(0.2, 0.9, 0.25, 1, duration: 0.7)) { arriving = false }
+    }
+
+    /// H2 右上角那条蓝色虚线箭头：纸往后面飞。
+    private var handoffArrow: some View {
+        ZStack {
+            Path { path in
+                path.move(to: CGPoint(x: 902, y: 98))
+                path.addQuadCurve(to: CGPoint(x: 1052, y: 91), control: CGPoint(x: 975, y: 58))
+            }.stroke(V3.blue, style: StrokeStyle(lineWidth: 1.2, lineCap: .round, dash: [4, 3]))
+            Path { path in
+                path.move(to: CGPoint(x: 1042, y: 83)); path.addLine(to: CGPoint(x: 1053, y: 91)); path.addLine(to: CGPoint(x: 1042, y: 99))
+            }.stroke(V3.blue, style: StrokeStyle(lineWidth: 1.2, lineCap: .round, lineJoin: .round))
+        }.transition(.opacity).allowsHitTesting(false)
+    }
+
+    /// 走到哪一步：简历 — 模拟面试 — 第一份报告，三段之间 24 宽的细线。
     private func steps(now: Int) -> some View {
         HStack(spacing: 0) {
             ForEach(Array(["简历", "模拟面试", "第一份报告"].enumerated()), id: \.offset) { index, label in
@@ -460,31 +525,34 @@ private struct FirstStepsHome: View {
                 HStack(spacing: 6) {
                     if index < now { Image(systemName: "checkmark").font(.system(size: 9, weight: .semibold)).foregroundStyle(V3.fnt) }
                     else if index == now { Circle().fill(V3.blue).frame(width: 7, height: 7) }
-                    else { Circle().strokeBorder(V3.fnt2, lineWidth: 1.2).frame(width: 7, height: 7) }
+                    else { Circle().strokeBorder(V3.fnt2, lineWidth: 1.2).frame(width: 6, height: 6) }
                     Text(label).font(V3.sans(13, weight: index == now ? .medium : .regular)).foregroundStyle(index == now ? V3.txt : V3.fnt)
                 }
             }
-        }.accessibilityElement(children: .combine).accessibilityLabel("走到哪一步")
+        }.frame(height: 20).accessibilityElement(children: .combine).accessibilityLabel("走到哪一步")
     }
 
+    /// 右边两张纸（设计稿坐标减去 (560,110)）：后面是真实简历 340×481，前面是第一场面试或第一份报告 360×480；跟 Web `.hfs-resume` / `.hfs-sheet`，以左上角为轴，简历往右倾 6°，面试纸往左倾 3°。
     private var papers: some View {
         ZStack(alignment: .topLeading) {
             if let id = graph.resumeID {
                 HomeResumePaper(resumeID: id)
                     .frame(width: 340, height: 481)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(hex: 0xECEBE6)))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(hex: 0xE7E5DE)))
                     .shadow(color: .black.opacity(0.09), radius: 24, y: 18)
-                    .rotationEffect(.degrees(6), anchor: .topLeading)
-                    .offset(x: 30, y: 40)
+                    .rotationEffect(.degrees(arriving ? 0 : 6), anchor: .topLeading)
+                    .offset(x: arriving ? -180 : 30, y: arriving ? -50 : 40)
             }
             Button { open(mockID) } label: { mode == .report ? AnyView(reportSheet) : AnyView(interviewSheet) }
                 .buttonStyle(SheetStyle())
                 .rotationEffect(.degrees(-3), anchor: .topLeading)
                 .offset(x: 170, y: 18)
+                .opacity(arriving ? 0 : 1)
                 .disabled(mode == .evaluating)
             Text(mode == .report ? "点这张纸，看报告" : mode == .evaluating ? "报告好了会出现在这里" : "点这张纸，开始第一场")
-                .font(V3.sans(13)).foregroundStyle(V3.fnt).offset(x: 290, y: 548)
+                .font(V3.sans(13)).foregroundStyle(V3.fnt).slot(170, 553.2, size: 13, width: 360, center: true)
+                .opacity(arriving ? 0 : 1)
         }
     }
 
@@ -495,7 +563,7 @@ private struct FirstStepsHome: View {
                 .frame(width: 360, height: 480)
                 .background(Color(hex: 0xFCFBF8))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(hex: 0xECEBE6)))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color(hex: 0xE7E5DE)))
                 .shadow(color: .black.opacity(hovering ? 0.12 : 0.09), radius: hovering ? 28 : 24, y: hovering ? 22 : 18)
                 .offset(y: hovering ? -2 : 0)
                 .onHover { hovering = $0 }
@@ -503,6 +571,7 @@ private struct FirstStepsHome: View {
         }
     }
 
+    /// 面试纸（H3 / K2a）：坐标是纸内（0,0）起的设计稿位置；纸只露前两道题，下沿渐隐。
     private var interviewSheet: some View {
         let main = (detail?["questions"]?.items ?? []).filter { $0.text("kind") == "main" && !$0.text("content").isEmpty }
         let total = Int(detail?["question_count"]?.numberValue ?? 3)
@@ -516,31 +585,30 @@ private struct FirstStepsHome: View {
         case .failed: "报告没整理出来 · 回答都还在"
         default: "报告整理中，约 1 分钟"
         }
+        let faint = Color(hex: 0xA5A39B)
         return ZStack(alignment: .topLeading) {
-            VStack(alignment: .leading, spacing: 22) {
-                Text("第 1 题 · 来自你的简历").font(V3.sans(11)).foregroundStyle(V3.fnt)
-                Text(firstText).font(V3.serif(21)).fontWeight(.semibold).lineSpacing(6).foregroundStyle(V3.txt)
-                    .fixedSize(horizontal: false, vertical: true).padding(.top, -12)
-                Wave(live: answered)
-                if answered {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("你答").font(V3.sans(11)).foregroundStyle(V3.fnt)
-                        (Text(String(answer.prefix(26))).foregroundStyle(V3.txt) + Text(String(answer.dropFirst(26).prefix(34)) + (answer.count > 60 ? "……" : "")).foregroundStyle(Color(hex: 0xA5A39B)))
-                            .font(V3.sans(13)).lineSpacing(6)
-                    }
-                } else {
-                    Text(mode == .start ? "轮到你时，直接开口说就行" : "还没答到这一题").font(V3.sans(11.5)).foregroundStyle(V3.fnt)
-                }
-                Rectangle().fill(Color(hex: 0xEFEEE9)).frame(height: 1)
-                Text(mode == .start ? "第 2 题 · 来自你的简历" : "第 2 题").font(V3.sans(11)).foregroundStyle(Color(hex: 0xA5A39B)).padding(.bottom, -16)
-                Text(secondText).font(V3.serif(15)).fontWeight(.semibold).foregroundStyle(V3.sub).fixedSize(horizontal: false, vertical: true)
-                if mode == .start { Text("第 3 题 · 开始后，接着你的回答追问").font(V3.sans(11)).foregroundStyle(Color(hex: 0xA5A39B)).padding(.bottom, -16) }
-            }.frame(width: 300, alignment: .leading).offset(x: 30, y: 40)
+            Text("第 1 题 · 来自你的简历").font(V3.sans(11)).foregroundStyle(V3.fnt).slotC(33, 43, size: 11)
+            Text(firstText).font(V3.serif(21)).fontWeight(.semibold).lineHeight(21, 31, .serif).foregroundStyle(V3.txt)
+                .frame(width: 296, alignment: .topLeading).fixedSize(horizontal: false, vertical: true).offset(x: 32, y: 60.5)
+            Wave(live: answered).frame(width: 296).offset(x: 32, y: 149)
+            if answered {
+                Text("你答").font(V3.sans(11)).foregroundStyle(V3.fnt).slotC(33, 214, size: 11)
+                (Text(String(answer.prefix(26))).foregroundStyle(V3.txt) + Text(String(answer.dropFirst(26).prefix(34)) + (answer.count > 60 ? "……" : "")).foregroundStyle(faint))
+                    .font(V3.sans(13)).lineHeight(13, 18).frame(width: 296, alignment: .topLeading).fixedSize(horizontal: false, vertical: true).offset(x: 33, y: 229)
+            } else {
+                Text(mode == .start ? "轮到你时，直接开口说就行" : "还没答到这一题").font(V3.sans(11.5)).foregroundStyle(V3.fnt).slotC(33, 211, size: 11.5)
+            }
+            Rectangle().fill(Color(hex: 0xEFEEE9)).frame(width: 296, height: 1).offset(x: 32, y: answered ? 296 : 250)
+            Text(mode == .start ? "第 2 题 · 来自你的简历" : "第 2 题").font(V3.sans(11)).foregroundStyle(faint).slotC(33, answered ? 330 : 282, size: 11)
+            Text(secondText).font(V3.serif(15)).fontWeight(.semibold).foregroundStyle(V3.sub)
+                .frame(width: 296, alignment: .topLeading).fixedSize(horizontal: false, vertical: true).offset(x: 33, y: (answered ? 352 : 307) - 11)
+            if mode == .start { Text("第 3 题 · 开始后，接着你的回答追问").font(V3.sans(11)).foregroundStyle(faint).slotC(33, 355, size: 11) }
             fade
-            Text(status).font(V3.sans(11.5)).foregroundStyle(V3.fnt).offset(x: 30, y: 432)
+            Text(status).font(V3.sans(11.5)).foregroundStyle(V3.fnt).slotC(33, 434, size: 11.5)
         }.frame(width: 360, height: 480, alignment: .topLeading)
     }
 
+    /// 报告纸（K2b）：分数和前几题的结论是真实的，下沿渐隐，只写“还有几题 / 看完整报告 →”。
     private var reportSheet: some View {
         let report = detail?["report"]
         let rows = (report?["questions"]?.items ?? []).filter { $0["is_intro"]?.bool != true && $0["skipped"]?.bool != true }
@@ -548,7 +616,7 @@ private struct FirstStepsHome: View {
         let weak = rows.filter { ["one_short", "missed"].contains($0.text("outcome")) }.count
         let company = detail.map { d in d.text("company_name").isEmpty ? d.text("target_role") : [d.text("company_name"), d.text("job_title")].filter { !$0.isEmpty }.joined(separator: " · ") } ?? ""
         return ZStack(alignment: .topLeading) {
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 14) {
                     Text(report?["total_score"]?.numberValue.map { "\(Int($0.rounded()))" } ?? "—").font(V3.serif(50)).fontWeight(.semibold)
                     VStack(alignment: .leading, spacing: 2) {
@@ -556,8 +624,8 @@ private struct FirstStepsHome: View {
                         Text("\(rows.count) 题答到位 \(reached) 题，\(weak) 处要补").font(V3.sans(13, weight: .medium))
                     }
                 }
-                Rectangle().fill(Color(hex: 0xEFEEE9)).frame(height: 1)
-                Text("每道题").font(V3.serif(15)).fontWeight(.semibold).padding(.bottom, -10)
+                Rectangle().fill(Color(hex: 0xEFEEE9)).frame(height: 1).padding(.top, 6)
+                Text("每道题").font(V3.serif(15)).fontWeight(.semibold).padding(.top, 19)
                 VStack(spacing: 0) {
                     ForEach(Array(rows.prefix(4).enumerated()), id: \.offset) { index, row in
                         if index > 0 { Rectangle().fill(Color(hex: 0xEFEEE9)).frame(height: 1) }
@@ -570,22 +638,22 @@ private struct FirstStepsHome: View {
                             Spacer(minLength: 0)
                             let outcome = ["reached": "答到位", "one_short": "差一点", "missed": "没答上"][row.text("outcome")] ?? ""
                             Text(outcome).font(V3.sans(11.5, weight: outcome == "答到位" ? .regular : .medium)).foregroundStyle(outcome == "答到位" ? V3.fnt : Color(hex: 0xC9651B))
-                        }.padding(.vertical, 10)
+                        }.padding(.vertical, 13)
                     }
-                }
-            }.foregroundStyle(V3.txt).frame(width: 300, alignment: .leading).offset(x: 30, y: 40)
+                }.padding(.top, 10)
+            }.foregroundStyle(V3.txt).frame(width: 296, alignment: .leading).offset(x: 34, y: 38)
             fade
             HStack {
                 Text(rows.count > 4 ? "还有 \(rows.count - 4) 题 · \(weak) 处建议补" : "\(weak) 处建议补").font(V3.sans(11.5)).foregroundStyle(V3.fnt)
                 Spacer()
                 Text("看完整报告 →").font(V3.sans(12.5, weight: .medium)).foregroundStyle(V3.blue)
-            }.frame(width: 300).offset(x: 30, y: 432)
+            }.frame(width: 296).offset(x: 33, y: 424)
         }.frame(width: 360, height: 480, alignment: .topLeading)
     }
 
     private var fade: some View {
         LinearGradient(stops: [.init(color: Color(hex: 0xFCFBF8).opacity(0), location: 0), .init(color: Color(hex: 0xFCFBF8), location: 0.6)], startPoint: .top, endPoint: .bottom)
-            .frame(width: 360, height: 170).offset(y: 310).allowsHitTesting(false)
+            .frame(width: 360, height: 174).offset(y: 305.6).allowsHitTesting(false)
     }
 
     private func loadDetail() async {
@@ -593,14 +661,14 @@ private struct FirstStepsHome: View {
         detail = try? await session.api.careerRequest(path: "/api/mock-interviews/\(mockID)", method: "GET", query: [:], body: nil)["mock_interview"]
     }
 
-    /// 报告整理中：每 4 秒查一次，好了首页原地换成“报告好了”。
+    /// 报告整理中：4 秒起逐步放慢到 20 秒查一次，好了首页原地换成“报告好了”。
     private func pollEvaluating() async {
         guard mode == .evaluating, let mockID else { return }
-        while !Task.isCancelled {
-            try? await Task.sleep(for: .seconds(4))
-            guard !Task.isCancelled else { return }
+        var attempt = 0
+        while await Polling.wait(attempt, first: 4, cap: 20, topic: "mock_interview", ref: mockID) {
+            attempt += 1
             if let value = try? await session.api.careerRequest(path: "/api/mock-interviews/\(mockID)", method: "GET", query: [:], body: nil)["mock_interview"],
-               value.text("status") != "evaluating" { changed(); return }
+               value.text("status") != "evaluating" { await session.api.purgeCache(); changed(); return }
         }
     }
 }
@@ -625,21 +693,29 @@ private struct HomeResumePaper: View {
     @Environment(SessionStore.self) private var session
     let resumeID: String
     @State private var paper: ResumeRenderRequest?
+    @State private var image: NSImage?
 
+    /// 首页后面这张纸：网页视图不受 SwiftUI 裁剪和层级约束（会溢出纸面、盖到前面的面试纸上），所以先在原地（透明）按第一页模式渲染，截成图片后由 SwiftUI 缩放、裁剪，并卸掉网页视图。
     var body: some View {
         GeometryReader { geometry in
-            if let paper {
-                ResumePaperView(request: paper, onError: { _ in })
-                    .frame(width: 794, height: 1123)
-                    .scaleEffect(geometry.size.width / 794, anchor: .topLeading)
+            if let image {
+                Image(nsImage: image).resizable().interpolation(.high)
+                    .frame(width: geometry.size.width, height: geometry.size.width * 1123 / 794)
                     .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+            } else if let paper {
+                ResumePaperView(request: paper, onError: { _ in }, onSnapshot: { image = $0 })
+                    .frame(width: geometry.size.width, height: geometry.size.width * 1123 / 794)
+                    .opacity(0.001)
+                    .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+                    .clipped()
                     .allowsHitTesting(false)
             }
         }.background(.white).accessibilityHidden(true)
             .task(id: resumeID) {
+                image = nil
                 guard let resume = try? await session.api.listResumes().first(where: { $0.id == resumeID }),
                       let request = resume.renderRequest() else { return }
-                paper = try? await session.api.preparePaper(request).request
+                paper = try? await session.api.preparePaper(request.firstPage()).request
             }
     }
 }
@@ -647,22 +723,37 @@ private struct HomeResumePaper: View {
 // MARK: 07 有记忆（Figma 02A·07，Web FeedbackHome）
 
 private struct FeedbackHome: View {
+    @Environment(SessionStore.self) private var session
     let graph: HomeGraph
     let editResume: (String) -> Void
     let practice: (PracticeFocus?) -> Void
     let openMock: (String, Bool) -> Void
     let navigate: (WorkspaceSection) -> Void
+    /// 图谱「聊一聊」侧栏右上 ↗：在对话页打开同一条对话；nil 时不显示 ↗
+    var openChat: ((String) -> Void)? = nil
+    /// 侧栏里新建或更新了对话：侧栏“最近对话”重新读取
+    var chatsChanged: (() -> Void)? = nil
     @State private var picked = 0
     @State private var expanded = false
+    /// 展开的图谱右边正在聊的节点（Figma 02A·10 ②）
+    @State private var chat: HomeChatTopic?
+    /// 同一个知识点再点「聊一聊」接着上次那段聊（只在这次打开页面期间记得）
+    @State private var chatSessions: [String: String] = [:]
+
+    /// K4（Figma 02A·06 61:3081）：第一次进记忆首页（只练过一场）时压暗，只亮知识图谱，浮层解释长期记忆
+    private var coach: CoachSlot { CoachSlot(id: "memory-home-first", user: session.coachUser) }
+    private var showCoach: Bool { coach.open && !expanded && graph.hasConclusions && graph.sources.mocks <= 1 }
 
     var body: some View {
         GeometryReader { geometry in
-            let padX = min(56, max(28, geometry.size.width * 0.046))
-            let padY = min(48, max(24, geometry.size.height * 0.04))
+            let padX = min(56, max(28, geometry.size.width * 0.05))
+            let padTop = min(36, max(20, geometry.size.height * 0.045))
+            let padBottom = min(40, max(20, geometry.size.height * 0.048))
+            let graphWidth = min(529, max(320, (geometry.size.width - padX * 2 - 40) * 0.51))
             VStack(spacing: 0) {
                 HStack(alignment: .top, spacing: 40) {
-                    timeline.frame(maxWidth: .infinity, alignment: .topLeading)
-                    VStack(spacing: 4) {
+                    timeline.padding(.top, 70).frame(maxWidth: .infinity, alignment: .topLeading)
+                    VStack(spacing: 0) {
                         HStack(spacing: 22) {
                             Spacer()
                             (Text("知识图谱").foregroundStyle(V3.txt).fontWeight(.medium) + Text("   ") +
@@ -671,24 +762,48 @@ private struct FeedbackHome: View {
                             Button { withAnimation(.timingCurve(0.2, 0.9, 0.25, 1, duration: 0.6)) { expanded = true } } label: {
                                 HStack(spacing: 6) { Text("展开"); Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 11, weight: .medium)) }
                             }.buttonStyle(.plain).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
-                        }
+                        }.frame(height: 28)
                         HomeGraphCanvas(nodes: graph.nodes.filter(\.onHome), edges: graph.edges, large: false)
-                            .frame(minHeight: 240)
+                            .padding(.top, 31).frame(minHeight: 240, maxHeight: 535, alignment: .top)
                             .onTapGesture(count: 2) { withAnimation(.timingCurve(0.2, 0.9, 0.25, 1, duration: 0.6)) { expanded = true } }
-                    }.frame(maxWidth: .infinity).layoutPriority(1.2)
+                    }.frame(width: graphWidth)
+                        .coachTarget(showCoach, label: "长期记忆引导", message: "这是你的长期记忆。简历、面试和岗位里的东西\n都连在这里，每练一场都会更新。",
+                                     actions: [CoachAction(label: "知道了")], padding: 8, corner: 12) { coach.dismiss() }
                 }.frame(maxHeight: .infinity)
-                strips.padding(.top, min(26, max(14, geometry.size.height * 0.03)))
+                strips
             }
             .frame(maxWidth: 1160).frame(maxWidth: .infinity)
-            .padding(.horizontal, padX).padding(.top, padY).padding(.bottom, padY * 0.9)
+            .padding(.horizontal, padX).padding(.top, padTop).padding(.bottom, padBottom)
             .opacity(expanded ? 0 : 1)
             .overlay {
                 if expanded {
-                    expandedGraph.transition(.opacity.combined(with: .scale(scale: 0.96)))
+                    expandedLayer.transition(.opacity.combined(with: .scale(scale: 0.96)))
                 }
             }
         }
-        .onExitCommand { if expanded { withAnimation { expanded = false } } }
+        .onExitCommand {
+            if chat != nil { withAnimation(.easeOut(duration: 0.2)) { chat = nil } }
+            else if expanded { withAnimation { expanded = false } }
+        }
+    }
+
+    /// 展开：铺满整页，左边图谱卡片，右边对话栏（点「聊一聊」才出现）。
+    private var expandedLayer: some View {
+        HStack(spacing: 0) {
+            HomeGraphExpandedView(graph: graph, compact: chat != nil, chatKey: chat?.key,
+                                  collapse: { withAnimation(.timingCurve(0.2, 0.9, 0.25, 1, duration: 0.5)) { chat = nil; expanded = false } },
+                                  chat: { topic in withAnimation(.timingCurve(0.2, 0.9, 0.25, 1, duration: 0.4)) { chat = topic } })
+                .padding(.leading, 24).padding(.vertical, 24).padding(.trailing, chat == nil ? 24 : 16)
+            if let chat {
+                HomeGraphChatPanel(topic: chat, sessionID: chatSessions[chat.key],
+                                   created: { id in chatSessions[chat.key] = id; chatsChanged?() },
+                                   sessionsChanged: { chatsChanged?() },
+                                   expand: openChat,
+                                   close: { withAnimation(.easeOut(duration: 0.2)) { self.chat = nil } })
+                    .id(chat.key)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        }.background(.white)
     }
 
     // 最近进展：选中的一条展开成大标题、说明和按钮，其余收成一行
@@ -703,15 +818,15 @@ private struct FeedbackHome: View {
                             Rectangle().fill(Color(hex: 0xD5D3C9)).frame(width: 1).padding(.top, on ? 17 : 31).frame(maxHeight: .infinity)
                         }
                         Circle().fill(on ? V3.blue : .white).overlay(Circle().strokeBorder(on ? V3.blue : Color(hex: 0xBDBBB2)))
-                            .frame(width: on ? 10 : 9, height: on ? 10 : 9).padding(.top, on ? 5 : 20)
+                            .frame(width: on ? 10 : 8, height: on ? 10 : 8).padding(.top, on ? 6 : 20)
                     }.frame(width: 10)
                     if on { expandedItem(item, text) } else {
                         Button { withAnimation(.timingCurve(0.22, 1, 0.36, 1, duration: 0.55)) { picked = index } } label: {
                             HStack(alignment: .top, spacing: 16) {
                                 Text(HomeProgressText.when(item.date, today: graph.today)).font(V3.sans(13)).foregroundStyle(V3.fnt).monospacedDigit().frame(width: 52, alignment: .leading)
                                 VStack(alignment: .leading, spacing: 0) {
-                                    Text(text.short).font(V3.sans(15)).foregroundStyle(V3.txt).lineLimit(1)
-                                    Text(item.source).font(V3.sans(12)).foregroundStyle(V3.fnt)
+                                    Text(text.short).font(V3.sans(15)).lineHeight(15, 24).foregroundStyle(V3.txt).lineLimit(1)
+                                    Text(item.source).font(V3.sans(12)).lineHeight(12, 18).foregroundStyle(V3.fnt)
                                 }
                                 Spacer(minLength: 0)
                             }.padding(.vertical, 12).contentShape(Rectangle())
@@ -724,14 +839,14 @@ private struct FeedbackHome: View {
 
     private func expandedItem(_ item: HomeGraph.Progress, _ text: HomeProgressText.Text) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("\(HomeProgressText.when(item.date, today: graph.today))  ·  \(item.source)").font(V3.sans(13)).tracking(0.5).foregroundStyle(V3.fnt).padding(.bottom, 14)
+            Text("\(HomeProgressText.when(item.date, today: graph.today))  ·  \(item.source)").font(V3.sans(13)).tracking(0.5).lineHeight(13, 22).foregroundStyle(V3.fnt).padding(.bottom, 14)
             text.lines.enumerated().reduce(Text("")) { result, pair in
                 let (before, mark, after) = pair.element
                 let line = Text(before) + Text(mark).foregroundColor(text.weak ? V3.orange : V3.blue) + Text(after)
                 return pair.offset == 0 ? line : result + Text("\n") + line
             }
-            .font(V3.sans(40, weight: .semibold)).lineSpacing(10).foregroundStyle(V3.txt).minimumScaleFactor(0.6)
-            Text(text.desc).font(V3.sans(16)).lineSpacing(10).foregroundStyle(V3.sub).frame(maxWidth: 544, alignment: .leading).padding(.top, 14).padding(.bottom, 22)
+            .font(V3.sans(40, weight: .semibold)).lineHeight(40, 52.8).foregroundStyle(V3.txt).minimumScaleFactor(0.6)
+            Text(text.desc).font(V3.sans(16)).lineHeight(16, 28).foregroundStyle(V3.sub).frame(maxWidth: 544, alignment: .leading).padding(.top, 14).padding(.bottom, 22)
             HStack(spacing: 22) {
                 if item.kind == .resume, let id = graph.resumeID {
                     pill("打开简历") { editResume(id) }
@@ -754,7 +869,7 @@ private struct FeedbackHome: View {
     private func pill(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 8) { Text(title).lineLimit(1); Image(systemName: "arrow.right").font(.system(size: 12, weight: .medium)) }
-        }.buttonStyle(HomePillStyle(height: 38, font: 14))
+        }.buttonStyle(HomePillStyle(height: 38, font: 14, leading: 22, trailing: 18))
     }
 
     // 底部六个入口：三列两行
@@ -780,7 +895,7 @@ private struct FeedbackHome: View {
             ("square.split.1x2", "收藏的岗位", Text(saved), { navigate(.jobs) }),
             ("folder", "资料库", Text((entries?.datasets ?? 0) > 0 ? "\(entries!.datasets) 份资料" : "还没有资料"), { navigate(.datasets) }),
         ]
-        return Grid(horizontalSpacing: 44, verticalSpacing: 18) {
+        return Grid(horizontalSpacing: 44, verticalSpacing: 30) {
             ForEach(0..<2, id: \.self) { row in
                 GridRow {
                     ForEach(0..<3, id: \.self) { column in
@@ -788,7 +903,7 @@ private struct FeedbackHome: View {
                         Button(action: item.3) {
                             HStack(spacing: 12) {
                                 Image(systemName: item.0).font(.system(size: 19, weight: .light)).foregroundStyle(V3.sub).frame(width: 26, height: 26)
-                                VStack(alignment: .leading, spacing: 2) {
+                                VStack(alignment: .leading, spacing: 6) {
                                     Text(item.1).font(V3.sans(13)).foregroundStyle(V3.fnt)
                                     HStack(spacing: 2) {
                                         item.2.font(V3.sans(15, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1)
@@ -796,37 +911,12 @@ private struct FeedbackHome: View {
                                     }
                                 }
                                 Spacer(minLength: 0)
-                            }.padding(.vertical, 4).contentShape(Rectangle())
+                            }.contentShape(Rectangle())
                         }.buttonStyle(.plain).frame(maxWidth: .infinity)
                     }
                 }
             }
         }
-    }
-
-    // 展开：原地铺满整页，全画；右上「收起」，左上标题与来源，左下图例
-    private var expandedGraph: some View {
-        ZStack(alignment: .topLeading) {
-            Color.white
-            HomeGraphCanvas(nodes: graph.nodes, edges: graph.edges, large: true).padding(.horizontal, 48).padding(.top, 84).padding(.bottom, 56)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("你的知识图谱").font(V3.sans(17, weight: .semibold)).foregroundStyle(V3.txt)
-                Text("\(graph.points) 个知识点 · 来自 \(graph.sources.resumes) 份简历、\(graph.sources.mocks) 场练习、\(graph.sources.interviews) 场面试").font(V3.sans(12.5)).foregroundStyle(V3.fnt)
-            }.padding(.leading, 48).padding(.top, 28)
-            HStack(spacing: 18) {
-                legend(V3.orange, "还不牢"); legend(V3.blue, "刚练稳")
-                HStack(spacing: 6) { Text("“ ”").foregroundStyle(V3.sub); Text("简历亮点") }
-            }.font(V3.sans(12)).foregroundStyle(V3.fnt).frame(maxHeight: .infinity, alignment: .bottomLeading).padding(.leading, 48).padding(.bottom, 24)
-            Button { withAnimation(.timingCurve(0.2, 0.9, 0.25, 1, duration: 0.5)) { expanded = false } } label: {
-                HStack(spacing: 6) { Text("收起"); Image(systemName: "arrow.down.right.and.arrow.up.left").font(.system(size: 11, weight: .medium)) }
-            }.buttonStyle(.plain).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
-                .frame(maxWidth: .infinity, alignment: .trailing).padding(.trailing, 48).padding(.top, 32)
-                .keyboardShortcut(.cancelAction)
-        }
-    }
-
-    private func legend(_ color: Color, _ text: String) -> some View {
-        HStack(spacing: 6) { Circle().fill(color).frame(width: 7, height: 7); Text(text) }
     }
 }
 

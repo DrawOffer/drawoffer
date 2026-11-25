@@ -54,6 +54,30 @@ public struct ResumeTemplate: Decodable, Identifiable, Sendable {
         ])
         return ResumeRenderRequest(title: name, data: data, style: presentation, layoutPlan: layoutPlan)
     }
+
+    /// 模板缩略图与预览用的纸面（Web `templatePreviewData`）：模板要显示头像、缺省用系统头像、示例数据又没有头像时，
+    /// 换成按模板 key 固定的一张虚构证件照。只用于预览，不写进用户简历。
+    public func previewRequest() -> ResumeRenderRequest {
+        let base = renderRequest()
+        guard case .object(var fields) = data, case .object(var identity)? = fields["identity"],
+              identity["avatar"] == nil || identity["avatar"] == .null,
+              style["avatar"]?["visibility"]?.stringValue == "show",
+              style["avatar"]?["fallback_asset"]?.stringValue == "system-default" else { return base }
+        identity["avatar"] = .object([
+            "node_id": .string("node_templatesampleavatar"), "source_refs": .array([]), "media_kind": .string("avatar"),
+            "src": .string(Self.samplePhoto(key)), "alt": .string("示例头像"), "width": .null, "width_unit": .null,
+            "height_px": .null, "align": .null, "system_fallback": .bool(false),
+        ])
+        fields["identity"] = .object(identity)
+        return ResumeRenderRequest(title: base.title, data: .object(fields), style: base.style, layoutPlan: base.layoutPlan)
+    }
+
+    /// 与 Web `templateSamplePhoto` 同一散列：同一套模板的卡片和预览弹窗是同一个人。
+    public static func samplePhoto(_ key: String) -> String {
+        var hash: UInt32 = 0
+        for unit in key.utf16 { hash = hash &* 31 &+ UInt32(unit) }
+        return ["/templates/sample-photo-female.jpg", "/templates/sample-photo-male.jpg"][Int(hash % 2)]
+    }
 }
 
 /// 纸面渲染协议 v1，字段与 apps/web/src/features/preview/print/resumePrintDocument.ts 的
@@ -65,15 +89,35 @@ public struct ResumeRenderRequest: Encodable, Sendable {
     public let style: JSONValue
     public let layoutPlan: JSONValue?
     public let assets: [String: String]
+    /// 只画第一页（同 Web `ResumePreview firstPageOnly`，我的简历卡片用）：纸面不用智能一页、按 A4 分页后裁到第一页。原生纸面的扩展字段。
+    public private(set) var firstPageOnly = false
 
     public init(title: String, data: JSONValue, style: JSONValue, layoutPlan: JSONValue?, assets: [String: String] = [:]) {
         self.title = title; self.data = data; self.style = style; self.layoutPlan = layoutPlan; self.assets = assets
+    }
+
+    public func firstPage() -> ResumeRenderRequest {
+        var copy = self
+        copy.firstPageOnly = true
+        return copy
     }
 
     enum CodingKeys: String, CodingKey {
         case title, data, style, assets
         case protocolVersion = "protocol_version"
         case layoutPlan = "layout_plan"
+        case firstPageOnly = "first_page_only"
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(protocolVersion, forKey: .protocolVersion)
+        try container.encode(title, forKey: .title)
+        try container.encode(data, forKey: .data)
+        try container.encode(style, forKey: .style)
+        try container.encodeIfPresent(layoutPlan, forKey: .layoutPlan)
+        try container.encode(assets, forKey: .assets)
+        if firstPageOnly { try container.encode(true, forKey: .firstPageOnly) }
     }
 }
 

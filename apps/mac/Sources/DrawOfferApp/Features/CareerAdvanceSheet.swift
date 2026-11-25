@@ -96,30 +96,31 @@ struct CareerAdvanceSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            crumbs.padding(.horizontal, 20).padding(.top, 18)
+            crumbs.padding(.horizontal, 25).padding(.top, 19)
             VStack(alignment: .leading, spacing: 6) {
                 title
                 if let placeholder = notePlaceholder {
-                    TextField("", text: kind == .written || kind == .interview ? $prepNote : $note, prompt: Text(placeholder).foregroundStyle(V3.fnt), axis: .vertical)
+                    TextField("", text: kind == .written || kind == .interview ? $prepNote : $note, prompt: Text(placeholder).foregroundStyle(CareerAdvanceStyle.placeholder), axis: .vertical)
                         .textFieldStyle(.plain).font(V3.sans(14)).foregroundStyle(V3.txt).lineLimit(1...4).accessibilityLabel("备注")
                 }
-                if kind == .oc { info("OC 是口头意向；收到书面 Offer 后，在详情页点「记录正式 Offer」") }
+                if kind == .oc { info("OC 是口头意向；收到书面 Offer 后，再记录正式 Offer。") }
                 if nameTaken { Text("这一轮已经加过了").font(V3.sans(12.5)).foregroundStyle(V3.red) }
-            }.padding(.horizontal, 20).padding(.top, 22)
-            props.padding(.horizontal, 20).padding(.top, 18)
-            if let error { Text(error).font(V3.sans(12.5)).foregroundStyle(V3.red).padding(.horizontal, 20).padding(.top, 12) }
-            Rectangle().fill(V3.line).frame(height: 1).padding(.top, 20)
+            }.padding(.horizontal, 25).padding(.top, 20)
+            props.padding(.horizontal, 25).padding(.top, 20)
+            if let error { Text(error).font(V3.sans(12.5)).foregroundStyle(V3.red).padding(.horizontal, 25).padding(.top, 12) }
+            // 稿：分隔线 #EEF1F6，上沿离属性 20，按钮上下各 15
+            Rectangle().fill(CareerAdvanceStyle.divider).frame(height: 1).padding(.top, 20)
             HStack(spacing: 10) {
                 if kind == .written || kind == .interview {
                     Toggle(isOn: $undecided) { Text("时间还没定").font(V3.sans(12.5)).foregroundStyle(V3.sub) }.toggleStyle(.switch).controlSize(.mini)
                 } else if let hint {
-                    Text(hint).font(V3.sans(12.5)).foregroundStyle(V3.fnt)
+                    Text(hint).font(V3.sans(12)).foregroundStyle(CareerAdvanceStyle.hint)
                 }
                 Spacer(minLength: 0)
-                Button("取消", action: close).buttonStyle(V3ButtonStyle(kind: .ghost)).disabled(busy).keyboardShortcut(.cancelAction)
+                Button("取消", action: close).buttonStyle(CareerAdvanceButtonStyle()).disabled(busy).keyboardShortcut(.cancelAction)
                 Button(busy ? "正在保存…" : submitLabel) { Task { await save() } }
-                    .buttonStyle(V3ButtonStyle(kind: kind == .rejected ? .danger : .dark)).disabled(busy || nameTaken)
-            }.padding(.horizontal, 20).padding(.vertical, 14)
+                    .buttonStyle(CareerAdvanceButtonStyle(kind: kind == .rejected ? .danger : .dark)).disabled(busy || nameTaken)
+            }.padding(.horizontal, 25).padding(.vertical, 15)
         }
         .frame(width: 640, alignment: .leading)
         .interactiveDismissDisabled(busy)
@@ -135,14 +136,14 @@ struct CareerAdvanceSheet: View {
         let choice = Self.choices[kind]!
         return HStack(spacing: 8) {
             HStack(spacing: 6) {
-                Text(String(application.text("company_name_snapshot").prefix(1)).nonEmptyValue ?? "企").font(V3.sans(9, weight: .semibold)).foregroundStyle(.white)
+                Text(String(application.text("company_name_snapshot").prefix(1)).nonEmptyValue ?? "企").font(V3.sans(9.5, weight: .medium)).foregroundStyle(.white)
                     .frame(width: 16, height: 16).background(V3.txt, in: RoundedRectangle(cornerRadius: 4))
                 Text(job).font(V3.sans(12.5)).foregroundStyle(V3.sub).lineLimit(1).truncationMode(.tail)
                 if !tag.isEmpty { Text(tag).font(V3.sans(11.5)).foregroundStyle(V3.fnt).lineLimit(1).fixedSize() }
             }
-            .padding(.horizontal, 8).frame(height: 26).frame(maxWidth: 320, alignment: .leading)
-            .background(V3.field, in: RoundedRectangle(cornerRadius: 6)).help(job)
-            Text("›").font(V3.sans(13)).foregroundStyle(V3.fnt2)
+            .padding(.horizontal, 8).frame(height: 28).frame(maxWidth: 320, alignment: .leading)
+            .background(CareerAdvanceStyle.crumb, in: RoundedRectangle(cornerRadius: 6)).help(job)
+            Text("›").font(V3.sans(14)).foregroundStyle(CareerAdvanceStyle.placeholder)
             Menu {
                 ForEach(nextKinds, id: \.self) { item in
                     Button { choose(item) } label: { Label(Self.choices[item]!.title + (item == suggested ? " · 按进度推荐" : ""), systemImage: kind == item ? "checkmark" : Self.choices[item]!.icon) }
@@ -157,9 +158,10 @@ struct CareerAdvanceSheet: View {
                     Text(choice.title).font(V3.sans(12.5, weight: .medium))
                     Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
                 }
-                .foregroundStyle(kind == .rejected ? V3.red : V3.blue).padding(.horizontal, 8).frame(height: 26)
-                .background(kind == .rejected ? V3.redSoft : V3.blueSoft, in: RoundedRectangle(cornerRadius: 6))
-            }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("换成别的进展")
+                .foregroundStyle(kind == .rejected ? V3.red : CareerAdvanceStyle.blueText).padding(.horizontal, 10).frame(height: 28)
+                .background(kind == .rejected ? V3.redSoft : CareerAdvanceStyle.blueSoft, in: RoundedRectangle(cornerRadius: 6))
+                .contentShape(RoundedRectangle(cornerRadius: 6))
+            }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().accessibilityLabel("换成别的进展")
             Spacer(minLength: 0)
         }
     }
@@ -187,7 +189,7 @@ struct CareerAdvanceSheet: View {
                     Button("HR 面" + (interviewType == "hr" ? " ✓" : "")) { interviewType = "hr" }
                     Button("自定义" + (interviewType == "interview" && round == "custom" ? " ✓" : "")) { interviewType = "interview"; round = "custom" }
                 } label: { Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold)).foregroundStyle(V3.fnt).frame(width: 22, height: 22) }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("轮次")
+                    .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().accessibilityLabel("轮次")
             }.frame(height: 34)
         case .oc: plainTitle("OC")
         case .offer: plainTitle("正式 Offer")
@@ -204,14 +206,14 @@ struct CareerAdvanceSheet: View {
                 Text(text).font(V3.serif(24)).foregroundStyle(V3.txt)
                 Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold)).foregroundStyle(V3.fnt)
             }
-        }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().frame(height: 34).accessibilityLabel("类型")
+        }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().frame(height: 34).accessibilityLabel("类型")
     }
 
     private func info(_ text: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Circle().fill(V3.blue).frame(width: 5, height: 5).padding(.top, 7)
-            Text(text).font(V3.sans(12.5)).foregroundStyle(V3.sub)
-        }.padding(.top, 4)
+        // 稿 11.06：整行浅蓝灰底 #F6F8FC、圆角 8、高 33，文字 12.5
+        Text(text).font(V3.sans(12.5)).foregroundStyle(V3.sub).lineLimit(2)
+            .padding(.horizontal, 12).frame(maxWidth: .infinity, minHeight: 33, alignment: .leading)
+            .background(CareerAdvanceStyle.infoBox, in: RoundedRectangle(cornerRadius: 8)).padding(.top, 4)
     }
 
     private var notePlaceholder: String? {
@@ -247,7 +249,7 @@ struct CareerAdvanceSheet: View {
     @ViewBuilder private var props: some View {
         switch kind {
         case .written:
-            HStack(spacing: 8) {
+            FlowLayout(spacing: 9) {
                 CareerAdvanceProp(icon: "calendar", width: 248, value: undecided ? "等待安排" : writtenTimeText, placeholder: windowed ? "选择日期" : "开始时间",
                                   aside: undecided ? nil : windowed ? Self.left(deadline) : (minutes + " 分钟", false), disabled: undecided) {
                     VStack(alignment: .leading, spacing: 10) {
@@ -273,7 +275,7 @@ struct CareerAdvanceSheet: View {
                 CareerAdvanceTextProp(icon: "link", label: "笔试链接", text: $link, width: 156, placeholder: "粘贴链接", limit: 2048)
             }
         case .interview:
-            HStack(spacing: 8) {
+            FlowLayout(spacing: 9) {
                 CareerAdvanceProp(icon: "calendar", width: 212, value: undecided ? "等待安排" : startAt.map { CareerAdvanceFormat.dateText($0, time: true) }, placeholder: "选择时间",
                                   aside: undecided ? nil : (minutes + " 分钟", false), disabled: undecided) {
                     VStack(alignment: .leading, spacing: 10) {
@@ -285,14 +287,14 @@ struct CareerAdvanceSheet: View {
                     ForEach([("video", "视频"), ("onsite", "现场"), ("phone", "电话")], id: \.0) { item in Button(item.1 + (mode == item.0 ? " ✓" : "")) { mode = item.0 } }
                 } label: {
                     CareerAdvancePropLabel(icon: mode == "phone" ? "phone" : mode == "onsite" ? "mappin" : "video", text: ["video": "视频", "onsite": "现场", "phone": "电话"][mode] ?? "视频", empty: false, width: 88, chevron: true)
-                }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("方式")
+                }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().accessibilityLabel("方式")
                 CareerAdvanceTextProp(icon: mode == "onsite" ? "mappin" : "link", label: mode == "onsite" ? "面试地点" : "会议链接", text: $link, width: 130,
                                       placeholder: mode == "onsite" ? "例如：北京市海淀区示例大厦" : "粘贴腾讯会议 / 飞书 / Zoom 链接", limit: mode == "onsite" ? 500 : 2048)
                 CareerAdvanceTextProp(icon: "person", label: "面试官", text: $interviewer, width: 130, placeholder: "例如：李老师 · 技术负责人", limit: 100)
             }
         case .oc:
-            HStack(spacing: 8) {
-                CareerAdvanceProp(icon: "calendar", width: 190, value: ocAt.map { "沟通 " + CareerAdvanceFormat.dateText($0, time: true) }, placeholder: "沟通时间") {
+            FlowLayout(spacing: 9) {
+                CareerAdvanceProp(icon: "calendar", width: 190, value: ocAt.map { CareerAdvanceFormat.dateText($0, time: true) }, placeholder: "沟通时间", lead: "沟通") {
                     CareerAdvanceDateRow(label: "沟通", value: $ocAt, time: true)
                 }
                 CareerAdvanceTextProp(icon: "doc", label: "口头薪资", text: $ocSalary, width: 130, placeholder: "例如：35K × 16", limit: 100)
@@ -300,9 +302,9 @@ struct CareerAdvanceSheet: View {
                 CareerAdvanceTextProp(icon: "calendar", label: "预计入职", text: $ocStart, width: 120, placeholder: "例如：明年 7 月", limit: 100)
             }
         case .offer:
-            FlowLayout(spacing: 8) {
+            FlowLayout(spacing: 9) {
                 dateProp("收到", $receivedOn, width: 156)
-                CareerAdvanceProp(icon: "calendar", width: 232, value: replyDue.map { "答复截止 " + CareerAdvanceFormat.dateText($0, time: false) }, placeholder: "答复截止", aside: Self.left(replyDue)) {
+                CareerAdvanceProp(icon: "calendar", width: 232, value: replyDue.map { CareerAdvanceFormat.dateText($0, time: false) }, placeholder: "答复截止", aside: Self.left(replyDue), lead: "答复截止") {
                     CareerAdvanceDateRow(label: "答复截止", value: $replyDue, time: false, clearable: true)
                 }
                 CareerAdvanceProp(icon: "doc", width: 164, value: salary.trimmingCharacters(in: .whitespaces).nonEmptyValue.map { "\($0) / " + (salaryPeriod == "year" ? "年" : "月") }, placeholder: "薪资") {
@@ -317,8 +319,8 @@ struct CareerAdvanceSheet: View {
                 CareerAdvanceTextProp(icon: "doc", label: "福利说明", text: $benefits, width: 144, placeholder: "例如：六险一金、餐补", limit: 500)
             }
         case .rejected:
-            HStack(spacing: 8) {
-                CareerAdvancePropLabel(icon: "flag", text: "哪一步 · " + currentLabel, empty: false, width: nil, chevron: false)
+            HStack(spacing: 9) {
+                CareerAdvancePropLabel(icon: "person", text: currentLabel, empty: false, width: nil, chevron: true, lead: "哪一步")
                 dateProp("收到通知", $noticeOn, width: 200)
             }
         case .withdraw:
@@ -327,7 +329,7 @@ struct CareerAdvanceSheet: View {
     }
 
     private func dateProp(_ label: String, _ value: Binding<Date?>, width: CGFloat) -> some View {
-        CareerAdvanceProp(icon: "calendar", width: width, value: value.wrappedValue.map { "\(label) " + CareerAdvanceFormat.dateText($0, time: false) }, placeholder: label) {
+        CareerAdvanceProp(icon: "calendar", width: width, value: value.wrappedValue.map { CareerAdvanceFormat.dateText($0, time: false) }, placeholder: label, lead: label) {
             CareerAdvanceDateRow(label: label, value: value, time: false, clearable: true)
         }
     }
@@ -522,6 +524,37 @@ struct CareerAdvanceSheet: View {
 
 // MARK: - 属性胶囊（11.01 / 11.03）
 
+/// 11 分区「Linear 骨架」弹窗用的几个稿内颜色（07 页 84:343）。
+enum CareerAdvanceStyle {
+    static let crumb = Color(hex: 0xF4F5F7)
+    static let blueSoft = Color(hex: 0xEEF3FC)
+    static let blueText = Color(hex: 0x145ED6)
+    static let infoBox = Color(hex: 0xF6F8FC)
+    static let chipLine = Color(hex: 0xDED7CC)
+    static let placeholder = Color(hex: 0xB4B0A8)
+    static let hint = Color(hex: 0x96968F)
+    static let divider = Color(hex: 0xEEF1F6)
+}
+
+/// 弹窗底部按钮：次按钮高 35 白底 12% 描边，主按钮高 36 墨黑（红色只给「记为未通过」），圆角 6、字 13 中等。
+struct CareerAdvanceButtonStyle: ButtonStyle {
+    enum Kind { case ghost, dark, danger }
+    var kind: Kind = .ghost
+    @Environment(\.isEnabled) private var enabled
+    func makeBody(configuration: Configuration) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 6)
+        let filled = kind != .ghost
+        return configuration.label
+            .font(V3.sans(13, weight: .medium)).lineLimit(1).fixedSize()
+            .foregroundStyle(filled ? Color.white : V3.txt)
+            .padding(.horizontal, 20).frame(height: filled ? 36 : 35)
+            .background(kind == .danger ? V3.red : kind == .dark ? V3.txt : Color.white, in: shape)
+            .overlay(shape.stroke(filled ? Color.clear : Color.black.opacity(0.12)))
+            .opacity(enabled ? (configuration.isPressed ? 0.75 : 1) : 0.38)
+            .contentShape(shape)
+    }
+}
+
 enum CareerAdvanceFormat {
     /// 「10月15日 周四 14:00」。
     static func dateText(_ date: Date, time: Bool) -> String {
@@ -540,15 +573,17 @@ struct CareerAdvanceProp<Content: View>: View {
     let placeholder: String
     var aside: (String, Bool)? = nil
     var disabled = false
+    /// 填了之后显示在值前面的灰色小标签（稿：「收到 10月22日 周四」）。
+    var lead: String? = nil
     @ViewBuilder var content: () -> Content
     @State private var open = false
 
     var body: some View {
         Button { open.toggle() } label: {
-            CareerAdvancePropLabel(icon: icon, text: value ?? placeholder, empty: value == nil, width: width, chevron: false, aside: aside, active: open)
+            CareerAdvancePropLabel(icon: icon, text: value ?? placeholder, empty: value == nil, width: width, chevron: false, aside: aside, active: open, lead: lead)
         }
         .buttonStyle(.plain).disabled(disabled).opacity(disabled ? 0.6 : 1).help(value ?? "")
-        .popover(isPresented: $open, arrowEdge: .bottom) { content().padding(14).frame(minWidth: 240) }
+        .popover(isPresented: $open, arrowEdge: .bottom) { content().padding(14).frame(width: 280) }
         .accessibilityLabel(placeholder)
     }
 }
@@ -561,18 +596,23 @@ struct CareerAdvancePropLabel: View {
     let chevron: Bool
     var aside: (String, Bool)? = nil
     var active = false
+    var lead: String? = nil
+    /// 稿 11.01–11.07：胶囊按内容撑开（高 31、圆角 6、字 13），填之前虚线 #DED7CC、填了白底实线，展开时浅蓝底蓝描边。
+    /// `width` 只在安排时间弹窗（12.01–12.03，环境 `careerPropFixedWidth`）里定宽，推进弹窗里按内容撑开。
+    @Environment(\.careerPropFixedWidth) private var fixedWidth
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: icon).font(.system(size: 11)).foregroundStyle(V3.fnt)
-            Text(empty ? "+ " + text : text).font(V3.sans(12.5)).foregroundStyle(empty ? V3.fnt : V3.txt).lineLimit(1).truncationMode(.tail)
-            if let aside { Text(aside.0).font(V3.sans(11.5)).foregroundStyle(aside.1 ? V3.red : V3.fnt).lineLimit(1).fixedSize() }
+            if !empty, let lead { Text(lead).font(V3.sans(13)).foregroundStyle(CareerAdvanceStyle.hint).lineLimit(1).fixedSize() }
+            Text(empty ? "+ " + text : text).font(V3.sans(13)).foregroundStyle(empty ? CareerAdvanceStyle.hint : V3.txt).lineLimit(1).truncationMode(.tail)
+            if let aside { Text(aside.0).font(V3.sans(12, weight: .medium)).foregroundStyle(aside.1 ? V3.red : aside.0.hasPrefix("还剩") || aside.0.hasPrefix("今天") ? CareerAdvanceStyle.blueText : CareerAdvanceStyle.hint).lineLimit(1).fixedSize() }
             if chevron { Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(V3.fnt) }
-            if width != nil { Spacer(minLength: 0) }
         }
-        .padding(.horizontal, 10).frame(width: width, height: 30)
-        .background(empty ? Color.clear : Color.white, in: RoundedRectangle(cornerRadius: 7))
-        .overlay(RoundedRectangle(cornerRadius: 7).stroke(active ? V3.blue.opacity(0.6) : empty ? V3.sk2 : V3.cl, style: StrokeStyle(lineWidth: 1, dash: empty ? [3, 2] : [])))
-        .contentShape(RoundedRectangle(cornerRadius: 7))
+        .padding(.horizontal, 12).frame(height: 31)
+        .frame(minWidth: fixedWidth ? width : nil, maxWidth: fixedWidth ? (width ?? 300) : 300, alignment: .leading)
+        .background(active ? CareerAdvanceStyle.blueSoft : empty ? Color.clear : Color.white, in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(active ? V3.blue : CareerAdvanceStyle.chipLine, style: StrokeStyle(lineWidth: 1, dash: empty && !active ? [3, 2] : [])))
+        .contentShape(RoundedRectangle(cornerRadius: 6))
     }
 }
 
@@ -639,5 +679,15 @@ struct CareerAdvanceDateRow: View {
             let minute = value.map { calendar.component(.minute, from: $0) } ?? 0
             value = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day) ?? day
         }
+    }
+}
+
+private struct CareerPropFixedWidthKey: EnvironmentKey { static let defaultValue = false }
+
+extension EnvironmentValues {
+    /// 属性格是否按调用方给的 `width` 定宽（安排时间弹窗按稿定宽）。
+    var careerPropFixedWidth: Bool {
+        get { self[CareerPropFixedWidthKey.self] }
+        set { self[CareerPropFixedWidthKey.self] = newValue }
     }
 }

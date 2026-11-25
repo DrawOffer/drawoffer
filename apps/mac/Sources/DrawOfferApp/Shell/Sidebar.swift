@@ -75,7 +75,7 @@ struct WorkspaceSidebar: View {
         let active = selection == section && (section != .home || activeChatID == nil)
         return Button { selection = section } label: {
             HStack(spacing: 11) {
-                Image(systemName: section.sidebarSymbol).font(.system(size: 14)).frame(width: 17, height: 17)
+                SideIconView(icon: section.sidebarIcon)
                     .foregroundStyle(Color(hex: 0x55554F))
                 Text(section.title).font(.system(size: 14, weight: active ? .medium : .regular)).foregroundStyle(Color(hex: 0x1D1D1B))
                 Spacer(minLength: 0)
@@ -120,14 +120,14 @@ struct WorkspaceSidebar: View {
             Button(action: toggle) {
                 HStack(spacing: 4) {
                     Text(label)
-                    Image(systemName: isCollapsed ? "chevron.right" : "chevron.down").font(.system(size: 8, weight: .semibold))
+                    SideIconView(icon: .down).rotationEffect(.degrees(isCollapsed ? -90 : 0))
                 }.frame(height: 18).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityLabel(isCollapsed ? "展开\(label)" : "收起\(label)")
             Spacer()
             if key == "recent" {
                 Button(action: user == nil ? requestLogin : newChat) {
                     HStack(spacing: 4) {
-                        Image(systemName: "square.and.pencil").font(.system(size: 11))
+                        SideIconView(icon: .pen)
                         Text("新对话")
                     }.padding(.horizontal, 6).frame(height: 20).contentShape(Rectangle())
                 }.buttonStyle(SideIconStyle()).help("新建对话")
@@ -149,7 +149,7 @@ struct WorkspaceSidebar: View {
                     Text(user.nickname.isEmpty ? (user.email ?? "我") : user.nickname).font(.system(size: 14)).foregroundStyle(V3.txt).lineLimit(1)
                     if let tier { Text("· \(tier)").font(.system(size: 13)).foregroundStyle(Color(hex: 0x8A8A82)).lineLimit(1).fixedSize() }
                     Spacer(minLength: 0)
-                    Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .medium)).foregroundStyle(Color(hex: 0x8A8A82))
+                    SideIconView(icon: .updown).foregroundStyle(Color(hex: 0x8A8A82))
                 }.padding(.horizontal, 8).frame(height: 40).contentShape(Rectangle())
                     .background(selection == .account || userHover ? .black.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 8))
                     .onHover { userHover = $0 }
@@ -180,7 +180,7 @@ struct SidebarToggleButton: View {
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            Image(systemName: "sidebar.left").font(.system(size: 14)).foregroundStyle(Color(hex: 0x55554F)).frame(width: 28, height: 28).contentShape(Rectangle())
+            SideIconView(icon: .side).foregroundStyle(Color(hex: 0x55554F)).frame(width: 28, height: 28).contentShape(Rectangle())
         }.buttonStyle(SideIconStyle()).help("显示或隐藏侧栏").accessibilityLabel("显示或隐藏侧栏")
             .keyboardShortcut("s", modifiers: [.command, .control])
     }
@@ -198,18 +198,17 @@ private struct SideRowStyle: ButtonStyle {
 }
 
 extension WorkspaceSection {
-    /// 第 17 页侧栏的细线图标（SF Symbols 对应）。
-    var sidebarSymbol: String {
+    /// 第 17 页侧栏的线性图标（设计稿矢量，见 `SideIcon`）；其余分区不在侧栏导航里。
+    var sidebarIcon: SideIcon {
         switch self {
-        case .home: "house"
-        case .resumes: "doc.text"
-        case .templates: "rectangle.split.2x1"
-        case .jobs: "square.split.1x2"
-        case .schedule: "calendar"
-        case .mock: "mic"
-        case .opportunities: "briefcase"
-        case .datasets: "folder"
-        default: symbol
+        case .home: .home
+        case .resumes: .doc
+        case .templates: .layout
+        case .jobs: .kanban
+        case .schedule: .cal
+        case .mock: .mic
+        case .opportunities: .brief
+        default: .folder
         }
     }
 }
@@ -257,12 +256,9 @@ private struct SessionRow: View {
                         .frame(height: 32).contentShape(Rectangle())
                 }.buttonStyle(.plain).help(title)
                 Menu {
-                    Button(pinned ? "取消置顶" : "置顶") { Task { await togglePin() } }.disabled(busy)
-                    Button("重命名") { draft = title; renaming = true }
-                    Divider()
-                    Button("删除", role: .destructive) { confirming = true }.disabled(running)
+                    rowActions
                 } label: { Image(systemName: "ellipsis").font(.system(size: 12)).frame(width: 24, height: 24) }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
                     .foregroundStyle(Color(hex: 0x6C6C65)).padding(.trailing, 6)
                     // 与 Web 一样悬停才显示；保留极低不透明度让键盘与读屏仍能找到它。
                     .opacity(hovering ? 1 : 0.001).accessibilityLabel("\(title) 的更多操作")
@@ -271,18 +267,21 @@ private struct SessionRow: View {
             .foregroundStyle(Color(hex: 0x1D1D1B))
             .background(active ? .black.opacity(0.07) : (hovering ? .black.opacity(0.04) : .clear), in: RoundedRectangle(cornerRadius: 8))
             .onHover { hovering = $0 }
-            .contextMenu {
-                Button(pinned ? "取消置顶" : "置顶") { Task { await togglePin() } }.disabled(busy)
-                Button("重命名") { draft = title; renaming = true }
-                Divider()
-                Button("删除", role: .destructive) { confirming = true }.disabled(running)
-            }
+            .contextMenu { rowActions }
             .centeredAlert("置顶状态保存失败，请重试", isPresented: $pinError) { Button("知道了", role: .cancel) {} }
             .centeredConfirmation("删除这条对话？", isPresented: $confirming) {
                 Button(busy ? "正在删除…" : "删除", role: .destructive) { Task { await remove() } }.disabled(busy)
                 Button("取消", role: .cancel) {}
             } message: { Text("「\(title)」及其中的全部消息将被永久删除。\n此操作无法撤销。") }
         }
+    }
+
+    /// 对话菜单（02B·01 方案 A）：16 号灰色细线圆角图标 + 置顶 / 重命名 / 删除。
+    @ViewBuilder private var rowActions: some View {
+        Button { Task { await togglePin() } } label: { Label(pinned ? "取消置顶" : "置顶", systemImage: pinned ? "pin.slash" : "pin") }.disabled(busy)
+        Button { draft = title; renaming = true } label: { Label("重命名", systemImage: "pencil") }
+        Divider()
+        Button(role: .destructive) { confirming = true } label: { Label("删除", systemImage: "trash") }.disabled(running)
     }
 
     private func save() {
@@ -324,11 +323,11 @@ private struct UserMenu: View {
                 if let summary { Text(summary.tierLabel).font(.system(size: 12)).foregroundStyle(V3.sub).fixedSize() }
             }
             .padding(.horizontal, 8).padding(.top, 8).padding(.bottom, 16)
-            .overlay(alignment: .bottom) { Rectangle().fill(V3.line).frame(height: 1) }
+            // 03.01 稿：头部与菜单项之间没有分隔线
             .padding(.bottom, 4).accessibilityElement(children: .combine)
             item("我的额度", symbol: "gauge.with.dots.needle.33percent", trailing: summary.map { "\($0.availableText) 积分" } ?? "—",
                  warn: summary?.exhausted == true, action: openPlans)
-            item("求职画像", symbol: "person.text.rectangle", action: openCareerProfile)
+            item("求职画像", symbol: "person", action: openCareerProfile)
             item("个人设置", symbol: "gearshape", action: openAccount)
             Rectangle().fill(V3.line).frame(height: 1).padding(.vertical, 4).padding(.horizontal, 6)
             item(loggingOut ? "正在退出…" : "退出登录", symbol: "rectangle.portrait.and.arrow.right") {

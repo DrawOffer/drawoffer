@@ -382,8 +382,8 @@ private actor SessionTransport: DesktopRequesting {
 }
 
 
-private func imagePaper() -> ResumeRenderRequest {
-    ResumeRenderRequest(title: "虚构头像", data: .object(["media_kind": .string("avatar"), "src": .string("/api/resumes/42/assets/a.png")]), style: .null, layoutPlan: .null)
+private func imagePaper(_ file: String = "a.png") -> ResumeRenderRequest {
+    ResumeRenderRequest(title: "虚构头像", data: .object(["media_kind": .string("avatar"), "src": .string("/api/resumes/42/assets/" + file)]), style: .null, layoutPlan: .null)
 }
 
 @Test func desktopPrivateImageUsesAccessAndRejectsLateResultAfterLogout() async throws {
@@ -406,8 +406,11 @@ private func imagePaper() -> ResumeRenderRequest {
     let prepared = try await coordinator.preparePaper(imagePaper())
     #expect(prepared.missingImageCount == 0)
     #expect(await transport.calls.filter { $0.path.hasSuffix("a.png") }.count == 2)
+    // 同一路径的图片已在内存缓存里；换一张没读过的图验证连续 401 时失效登录
+    _ = try await coordinator.preparePaper(imagePaper())
+    #expect(await transport.calls.filter { $0.path.hasSuffix("a.png") }.count == 2)
     await transport.setImageFailures(2)
-    await #expect(throws: APIError.unauthorized) { try await coordinator.preparePaper(imagePaper()) }
+    await #expect(throws: APIError.unauthorized) { try await coordinator.preparePaper(imagePaper("b.png")) }
     #expect(try store.load(scope: "fixture") == nil)
 }
 

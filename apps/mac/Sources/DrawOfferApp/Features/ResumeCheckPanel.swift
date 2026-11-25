@@ -26,7 +26,7 @@ struct ResumeCheckPanel: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) { content }
+            VStack(alignment: .leading, spacing: 17) { content }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 12).padding(.bottom, 40)
         }
@@ -48,14 +48,14 @@ struct ResumeCheckPanel: View {
     }
 
     private var reading: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 17) {
             ResumeTalkAssistant(text: "正在读这份简历", note: "一次读完，十几秒。", thinking: true)
             ResumeTalkChips(items: [("停止", { task?.cancel(); state = ResumeCheckState(); close() })])
         }
     }
 
     private func failed(_ credit: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 17) {
             ResumeTalkAssistant(text: credit ? "积分不够了，这次没读完。" : "这次没读完。",
                                 note: credit ? "简历没有改动。在左下角账户里充值后点重试。" : "没连上或出错了，简历没有改动。")
             ResumeTalkChips(items: [("重试", { read() }), ("先收起", { state = ResumeCheckState(); close() })])
@@ -81,7 +81,7 @@ struct ResumeCheckPanel: View {
             let joined = [state.basis.isEmpty ? "" : "按\(state.basis)的眼光看的：", state.summary].joined()
             note = joined.isEmpty ? nil : joined
         }
-        return VStack(alignment: .leading, spacing: 18) {
+        return VStack(alignment: .leading, spacing: 17) {
             if let said { ResumeTalkUser(text: said, faded: true) }
             ResumeTalkAssistant(text: text, note: note) {
                 if !state.findings.isEmpty && open > 0 {
@@ -139,7 +139,7 @@ struct ResumeCheckPanel: View {
                 ResumeTalkChips(items: [("跳过这处", { mark(.skipped, said: "跳过这处") })], disabled: busy)
             }
             noticeLine
-            ResumeTalkInput(placeholder: placeholder(finding), text: $answer, disabled: busy) { send(finding) }.padding(.top, 6)
+            ResumeTalkInput(placeholder: placeholder(finding), text: $answer, disabled: busy) { send(finding) }.padding(.top, 8)
         }
     }
 

@@ -26,6 +26,8 @@ import "../../web/src/styles.css";
 import "../../web/src/design-system/tokens.css";
 import "../../web/src/design-system/utilities.css";
 import "../../web/src/app.css";
+// 模板样式已从 app.css 拆出（Web 由 features/preview/resumeThemes.ts 按需引入），编辑器纸面同样需要
+import "../../web/src/resume-themes.css";
 import "../../web/src/muse-templates.css";
 import "../../web/src/v3/v3.css";
 import "../../web/src/features/workbench/workbench-v3.css";
@@ -63,6 +65,7 @@ import {
   selectionEndAnchorRect,
   shouldShowSelectionAgentBubble,
 } from "../../web/src/features/workbench/selectionBubbleAnchor";
+import { useCanvasPan } from "../../web/src/features/workbench/useCanvasPan";
 import { getSinglePageFitScale, getTwoPageFitScale, getWheelZoomScale } from "../../web/src/features/workbench/workbenchZoom";
 import { liveResumePageMargins } from "../../web/src/features/preview/resumePageMargins";
 import { jumpToSection } from "../../web/src/features/workbench/WorkbenchSectionOrderControl";
@@ -445,6 +448,7 @@ function Workbench({ payload, styleOverride, view, dataOverride, templatePreview
   const [width, setWidth] = useState(() => window.innerWidth);
   const [padding, setPadding] = useState(80);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLElement>(null);
   const initial = useMemo(() => editorContentForResume({ data: payload.data, style: payload.style, layout_plan: payload.layout_plan as never }), [payload]);
   const [content, setContent] = useState<JSONContent | string>(initial);
 
@@ -489,6 +493,41 @@ function Workbench({ payload, styleOverride, view, dataOverride, templatePreview
       });
     },
   }, [payload]);
+  // 画布当白板（Web useCanvasPan）：纸面以外的空白处按住拖动，上下滚动、左右平移；双击空白处回中
+  useCanvasPan(canvasRef, scrollRef, Boolean(editor), `${payload.resumeId}:${editor ? "ready" : "none"}`);
+
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    // 头像贴纸边时，正下方居中的“更换头像”和缩放提示会伸出可见区：沿祖先逐层取裁切框（纸面取内容区），推回最窄的那一层里
+    const fit = () => {
+      for (const control of scroller.querySelectorAll<HTMLElement>(".avatar-replace-action, .avatar-scale-hint")) {
+        const paper = control.closest<HTMLElement>(".resume-paper");
+        if (!paper) continue;
+        control.style.removeProperty("translate");
+        let left = -Infinity, right = Infinity;
+        for (let node = control.parentElement; node && node !== scroller; node = node.parentElement) {
+          const css = getComputedStyle(node);
+          if (node !== paper && css.overflowX === "visible") continue;
+          const box = node.getBoundingClientRect();
+          const inset = node === paper ? [parseFloat(css.paddingLeft || "0"), parseFloat(css.paddingRight || "0")] : [0, 0];
+          left = Math.max(left, box.left + inset[0] + 4);
+          right = Math.min(right, box.right - inset[1] - 4);
+          if (node === paper) break;
+        }
+        const rect = control.getBoundingClientRect();
+        const shift = rect.right > right ? right - rect.right : rect.left < left ? left - rect.left : 0;
+        if (shift) control.style.setProperty("translate", `${Math.round(shift)}px 0`);
+      }
+    };
+    let frame = 0;
+    const schedule = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(fit); };
+    const observer = new MutationObserver(schedule);
+    observer.observe(scroller, { childList: true, subtree: true });
+    scroller.addEventListener("load", schedule, true);
+    schedule();
+    return () => { observer.disconnect(); cancelAnimationFrame(frame); scroller.removeEventListener("load", schedule, true); };
+  }, [editor]);
 
   // 原生替换正文（引导写入、AI 采纳、聚焦这段）：按当前模板重新排版，不进撤销历史
   useEffect(() => {
@@ -677,7 +716,7 @@ function Workbench({ payload, styleOverride, view, dataOverride, templatePreview
         <SlashCommandMenu editor={editor} resumeId={payload.resumeId} state={commandMenu} onClose={() => setCommandMenu(null)}
           onNotice={(message) => post({ type: "error", message })} />
       )}
-      <main className="workbench-canvas">
+      <main ref={canvasRef} className="workbench-canvas">
         <div ref={scrollRef} className={`workbench-paper-scroll${horizontal ? " pages-horizontal" : ""}`}
           style={{ "--workbench-preview-scale": scale } as React.CSSProperties}>
           <div className={`workbench-document-stack${horizontal ? " pages-horizontal" : ""}`}>

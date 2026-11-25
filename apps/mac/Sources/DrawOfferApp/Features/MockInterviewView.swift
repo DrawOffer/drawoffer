@@ -13,6 +13,10 @@ struct MockInterviewView: View {
     var incomingFocus: Binding<PracticeFocus?> = .constant(nil)
     /// 首页点开的某一场：直接进这一场（进行中接着答，完成的看复盘）。
     var incomingSession: Binding<String?> = .constant(nil)
+    /// 对话里模拟面试预览的「练没答好的 N 处」：带着练习计划直接进面试设置（Web `startPractice`）。
+    var incomingPlan: Binding<MockPracticePlan?> = .constant(nil)
+    /// 求职进程或对话预览里的「模拟这场面试」：带着投递直接进面试设置并选好这个岗位（Web `newMockInterviewPath({ applicationId })`）。
+    var incomingApplication: Binding<String?> = .constant(nil)
     /// 面试中隐藏侧栏（Web `SessionFrame` 用 `V3Shell bare`）。
     var fullScreen: Binding<Bool> = .constant(false)
 
@@ -20,6 +24,7 @@ struct MockInterviewView: View {
     @State private var screen = Screen.home
     @State private var selectedID = ""
     @State private var practiceFocus: PracticeFocus?
+    @State private var configApplication: String?
     @State private var practicePlan: MockPracticePlan?
     @State private var configKey = UUID()
 
@@ -50,7 +55,7 @@ struct MockInterviewView: View {
                         showConfig: { config() })
                 case .config:
                     // 面试设置（Figma 09 · 02）
-                    MockConfigPage(focus: practiceFocus, practice: practicePlan, back: { goHome() }, open: open,
+                    MockConfigPage(applicationID: configApplication, focus: practiceFocus, practice: practicePlan, back: { goHome() }, open: open,
                                    showBoard: { navigate(.jobs) }, showOpportunities: { navigate(.opportunities) })
                         .id(configKey)
                 case .records:
@@ -70,6 +75,8 @@ struct MockInterviewView: View {
         #if DEBUG
         .onAppear { if ProcessInfo.processInfo.environment["DRAWOFFER_MOCK_FIXTURE"] != nil { open("fixture") } }
         #endif
+        // 岗位广场「对着这个岗位练一场」：直接落在面试设置页，设置页读走带来的岗位
+        .onAppear { if CoachGuide.shared.pendingMockApplication != nil, !account.isEmpty { config() } }
         .onChange(of: screen == .session && !account.isEmpty, initial: true) { _, value in fullScreen.wrappedValue = value }
         .onDisappear { fullScreen.wrappedValue = false }
         .onChange(of: account) { _, _ in goHome() }
@@ -82,6 +89,16 @@ struct MockInterviewView: View {
             guard let focus else { return }
             incomingFocus.wrappedValue = nil
             config(focus: focus)
+        }
+        .onChange(of: incomingPlan.wrappedValue, initial: true) { _, plan in
+            guard let plan else { return }
+            incomingPlan.wrappedValue = nil
+            config(plan: plan)
+        }
+        .onChange(of: incomingApplication.wrappedValue, initial: true) { _, application in
+            guard let application else { return }
+            incomingApplication.wrappedValue = nil
+            config(application: application)
         }
     }
 
@@ -100,8 +117,8 @@ struct MockInterviewView: View {
         selectedID = id; practiceFocus = nil; practicePlan = nil; screen = .session
     }
 
-    private func config(focus: PracticeFocus? = nil, plan: MockPracticePlan? = nil) {
-        practiceFocus = focus; practicePlan = plan; configKey = UUID(); screen = .config
+    private func config(focus: PracticeFocus? = nil, plan: MockPracticePlan? = nil, application: String? = nil) {
+        practiceFocus = focus; practicePlan = plan; configApplication = application; configKey = UUID(); screen = .config
     }
 
     private func goHome() { practiceFocus = nil; practicePlan = nil; screen = .home }

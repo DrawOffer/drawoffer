@@ -18,6 +18,10 @@ public protocol APIClient: Sendable {
     func resumeImage(path: String) async throws -> (data: Data, contentType: String)
     func mockAudio(path: String, method: String, body: JSONValue?) async throws -> Data
     func speechSocket(interviewID: String, questionID: String, purpose: String, local: Bool) async throws -> URLSessionWebSocketTask
+    /// 作废可变读缓存：窗口回到前台、轮询刷新前调用，确保读到服务端最新状态。
+    func purgeCache() async
+    /// 实时事件流；服务端没有启用时抛 404。
+    func streamEvents(onEvent: @escaping @Sendable (UserEvent) async -> Void) async throws
 }
 
 public enum APIError: Error, Equatable {
@@ -56,6 +60,8 @@ public actor MockAPIClient: APIClient {
 
 
 extension APIClient {
+    public func purgeCache() async {}
+    public func streamEvents(onEvent: @escaping @Sendable (UserEvent) async -> Void) async throws { throw APIError.server(status: 404, code: "NOT_FOUND") }
     public func uploadDataset(_ upload: DatasetUpload) async throws -> JSONValue { throw APIError.unauthorized }
     public func downloadDataset(id: String, limit: Int64) async throws -> DatasetFile { throw APIError.unauthorized }
     public func careerRequest(path: String, method: String = "GET", query: [String: String] = [:], body: JSONValue? = nil) async throws -> JSONValue { throw APIError.unauthorized }
@@ -70,4 +76,10 @@ extension APIClient {
     public func preparePaper(_ request: ResumeRenderRequest) async throws -> PaperPreparation {
         try await PaperAssets.prepare(request, account: "") { _, _ in throw APIError.invalidResponse }
     }
+}
+
+/// `GET /api/events` 的一条事件：`ready` 表示刚连上或期间可能丢了事件（全部重读），`change` 是某个后台任务状态变了。
+public enum UserEvent: Sendable, Equatable {
+    case ready
+    case change(topic: String, ref: String?)
 }

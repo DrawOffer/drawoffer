@@ -6,13 +6,22 @@ import SwiftUI
 /// 对话右侧文件预览（Web `features/assistant/PreviewPanel.tsx`）：简历纸面、资料库文本、AI 生成文档与本地截图，最多 6 个标签。
 /// 简历标签把待确认修改的原文所在段落标黄（与 Web `HighlightedContent` 同样按段落/列表项文字匹配）。
 struct ChatPreviewTab: Equatable {
-    enum Kind: String { case resume, dataset, generated, image }
+    enum Kind: String {
+        case resume, dataset, generated, image
+        /// 对话里点开的岗位广场岗位、我的岗位（含匹配度）、投递和模拟面试报告（Web `ObjectTab`，Figma 02B·09 · 02.10a/b/c）。
+        case poolJob = "pool_job", job, application, mockInterview = "mock_interview"
+        var isObject: Bool { [.poolJob, .job, .application, .mockInterview].contains(self) }
+    }
     let kind: Kind
     let id: String
     var label: String
     var content = ""
     var pending: [String] = []
     var saved = false
+    /// 岗位匹配度用哪份简历算（仅 `job`）。
+    var resumeID: String?
+    var company: String?
+    var logoURL: String?
     /// 截图标签的 PNG 数据，只在本机内存中。
     var imageData: Data?
     var key: String { kind.rawValue + ":" + id }
@@ -72,7 +81,7 @@ struct ChatPreviewPanel: View {
                         Button("重新加载") { reload = UUID() }
                         Button("关闭其他标签") { tabs.filter { $0.key != current?.key }.forEach { closeTab($0.key) } }.disabled(tabs.count < 2)
                     } label: { Image(systemName: "ellipsis").font(.system(size: 12)) }
-                        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().frame(width: 26, height: 26).accessibilityLabel("更多操作")
+                        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().frame(width: 26, height: 26).accessibilityLabel("更多操作")
                     headerIcon(fullscreen.wrappedValue ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
                                label: fullscreen.wrappedValue ? "恢复面板大小" : "全屏查看") { fullscreen.wrappedValue.toggle() }
                     headerIcon("xmark", label: "关闭预览", action: close).keyboardShortcut(.cancelAction)
@@ -85,12 +94,15 @@ struct ChatPreviewPanel: View {
                     case .resume: ChatResumePreview(resumeID: current.id, highlights: current.pending, onMissing: { markUnavailable(current.key) })
                     case .image: ChatImagePreview(data: current.imageData, label: current.label)
                     case .dataset: ChatDatasetPreview(datasetID: current.id, onMissing: { markUnavailable(current.key) })
+                    case .poolJob, .job, .application, .mockInterview: ChatObjectPreview(tab: current, onMissing: { markUnavailable(current.key) })
                     case .generated: ScrollView { NativeMarkdownView(source: current.content, size: 13.5, line: 24).textSelection(.enabled).padding(24).frame(maxWidth: .infinity, alignment: .leading) }
                     }
                 }
             }.id((current?.key ?? "") + reload.uuidString).frame(maxWidth: .infinity, maxHeight: .infinity)
-            Rectangle().fill(V3.line).frame(height: 1)
-            if let current { footer(current).padding(.leading, 18).padding(.trailing, 14).frame(height: 54) }
+            if let current, !current.kind.isObject {
+                Rectangle().fill(V3.line).frame(height: 1)
+                footer(current).padding(.leading, 18).padding(.trailing, 14).frame(height: 54)
+            }
         }
         .background(.white)
     }
@@ -140,7 +152,7 @@ struct ChatPreviewPanel: View {
     /// 标签（02B·06）：当前标签 #F4F4F2 底、圆角 7，显示完整名称；其余只显示图标 + 截断名称，悬停显示全名。
     private func tabButton(_ tab: ChatPreviewTab) -> some View {
         let selected = tab.key == current?.key
-        let symbol = ["resume": "doc.text", "generated": "doc.richtext", "image": "photo"][tab.kind.rawValue] ?? "doc"
+        let symbol = ["resume": "doc.text", "generated": "doc.richtext", "image": "photo", "pool_job": "briefcase", "job": "briefcase", "application": "rectangle.3.group", "mock_interview": "mic"][tab.kind.rawValue] ?? "doc"
         return HStack(spacing: 8) {
             Button { activate(tab.key) } label: {
                 HStack(spacing: 8) {
@@ -171,6 +183,8 @@ struct ChatPreviewPanel: View {
                 footButton(downloading ? "正在下载…" : "下载文件", symbol: "arrow.down.circle") { Task { await download(tab) } }
                     .disabled(downloading || unavailable.contains(tab.key))
                 footButton("在资料库中打开", symbol: "arrow.up.forward.square") { router?.jump(.section(.datasets)) }
+            case .poolJob, .job, .application, .mockInterview:
+                EmptyView()
             case .image:
                 status("截图 · 仅在本次对话中可见")
                 Spacer()
@@ -191,22 +205,24 @@ struct ChatPreviewPanel: View {
     }
 }
 
-private enum PreviewLoad { case loading, ready, missing, failed }
+enum PreviewLoad { case loading, ready, missing, failed }
 
-private func previewMissing(_ error: Error) -> Bool {
+func previewMissing(_ error: Error) -> Bool {
     if case APIError.server(let status, let code) = error { return [403, 404].contains(status) || code.contains("NOT_FOUND") || code.contains("FORBIDDEN") }
     return false
 }
 
-private struct PreviewStateView: View {
+struct PreviewStateView: View {
     let state: PreviewLoad
     var unsupported = false
+    var missingTitle = "这个文件已不可用"
+    var missingDetail = "它可能已被删除或移动，对话中的引用保留为灰色。"
     var body: some View {
         VStack(spacing: 8) {
             if state == .loading { ProgressView().controlSize(.small) }
             else {
-                Text(unsupported ? "暂不支持预览此格式" : state == .missing ? "这个文件已不可用" : "预览加载失败").font(V3.sans(13.5, weight: .medium)).foregroundStyle(V3.txt)
-                Text(unsupported ? "Word、图片等格式请在资料库下载后查看；AI 已读取其中的文字内容。" : state == .missing ? "它可能已被删除或移动，对话中的引用保留为灰色。" : "网络异常或文件解析未完成，可以从“更多操作”重新加载。")
+                Text(unsupported ? "暂不支持预览此格式" : state == .missing ? missingTitle : "预览加载失败").font(V3.sans(13.5, weight: .medium)).foregroundStyle(V3.txt)
+                Text(unsupported ? "Word、图片等格式请在资料库下载后查看；AI 已读取其中的文字内容。" : state == .missing ? missingDetail : "网络异常或文件解析未完成，可以从“更多操作”重新加载。")
                     .font(V3.sans(12)).foregroundStyle(V3.fnt).multilineTextAlignment(.center)
             }
         }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -229,9 +245,7 @@ private struct ChatResumePreview: View {
             ScrollView {
                 if let paper, state == .ready {
                     ResumePaperView(request: paper, highlights: highlights, onRendered: { height = max(1123, $0) }, onError: { _ in state = .failed })
-                        .frame(width: 794, height: height).allowsHitTesting(false)
-                        .scaleEffect(scale, anchor: .topLeading)
-                        .frame(width: 794 * scale, height: height * scale, alignment: .topLeading)
+                        .frame(width: 794 * scale, height: height * scale).allowsHitTesting(false)
                         .padding(16)
                 } else { PreviewStateView(state: state).frame(height: geometry.size.height) }
             }.background(Tokens.Color.stage)

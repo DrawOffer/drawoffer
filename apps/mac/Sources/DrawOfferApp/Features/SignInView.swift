@@ -35,15 +35,16 @@ struct SignInView: View {
             column
             if fullPage {
                 VStack(spacing: 0) {
-                    // 左上品牌：DrawOffer 19 粗体 + 求职工作台 12
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("DrawOffer").font(.system(size: 19, weight: .bold)).foregroundStyle(V3.txt)
+                    // 左上品牌（Brand/Lockup，Web drawoffer-lockup.png 高 22）+ 求职工作台 12，距左 35.5、距顶 34。
+                    HStack(spacing: 8) {
+                        SignInLockup()
                         Text("求职工作台").font(V3.sans(12)).foregroundStyle(V3.fnt)
-                    }.frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 35).padding(.top, 29)
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 35.5).padding(.top, 34)
                     .overlay(alignment: .topTrailing) {
+                        // 右上「暂不登录」（稿 E 125:445）。生产稿 A/B/D 此处是界面语言，Mac 端还没有英文文案，暂不放。
                         if let dismiss {
                             Button("暂不登录", action: dismiss).buttonStyle(.plain).font(V3.sans(13)).foregroundStyle(V3.sub)
-                                .padding(.trailing, 35).padding(.top, 29).keyboardShortcut(.cancelAction)
+                                .padding(.trailing, 35.5).padding(.top, 33).keyboardShortcut(.cancelAction)
                         }
                     }
                     Spacer()
@@ -62,39 +63,35 @@ struct SignInView: View {
         if passwordMode { passwordColumn } else { wechatColumn }
     }
 
-    /// 开发环境邮箱登录：对齐 Web AuthPage 的「仅开发环境」表单（标题 → 说明 → 邮箱 / 密码 → 协议 → 黑色登录）。
+    /// 开发环境邮箱登录（稿 E 125:419）：仅开发环境标签 → 标题 → 说明 → 邮箱 / 密码 → 协议 → 320×40 墨黑胶囊「登录 →」。
+    /// 稿里协议只有文字；与 Web AuthPage 一致保留复选框，未勾选不能登录。
     private var passwordColumn: some View {
         VStack(spacing: 0) {
-            Text("仅开发环境").font(V3.sans(11, weight: .medium)).foregroundStyle(V3.sub)
-                .padding(.horizontal, 8).frame(height: 20).background(V3.field, in: Capsule())
+            Text("仅开发环境").font(V3.sans(11)).foregroundStyle(V3.sub)
+                .padding(.horizontal, 8).padding(.vertical, 3).background(Color(hex: 0xF3F3F1), in: RoundedRectangle(cornerRadius: 10))
             Text("登录 DrawOffer。").font(V3.serif(30)).foregroundStyle(V3.txt).frame(height: 43).padding(.top, 14)
             Text("开发环境支持使用邮箱和密码进入工作台。").font(V3.sans(14)).foregroundStyle(V3.sub).frame(height: 17).padding(.top, 7)
             VStack(alignment: .leading, spacing: 16) {
-                passwordField("邮箱", symbol: "envelope") { TextField("you@example.com", text: $email).textContentType(.username) }
-                passwordField("密码", symbol: "lock") { SecureField("至少 8 位", text: $password).textContentType(.password) }
+                passwordField("邮箱") { TextField("邮箱", text: $email, prompt: Text("you@example.com").foregroundStyle(V3Skeleton.faint)).textContentType(.username) }
+                passwordField("密码") { SecureField("密码", text: $password, prompt: Text("至少 8 位").foregroundStyle(V3Skeleton.faint)).textContentType(.password) }
             }.frame(width: 320).padding(.top, 34)
             agreement.padding(.top, 22)
             if let error = message ?? session.errorMessage {
                 Text(error).font(V3.sans(12)).foregroundStyle(V3.red).multilineTextAlignment(.center).frame(maxWidth: 320).padding(.top, 12)
             }
-            Button { submitPassword() } label: {
-                HStack(spacing: 6) { Text(submitting ? "登录中…" : "登录"); if !submitting { Image(systemName: "arrow.right").font(.system(size: 11, weight: .medium)) } }
-                    .frame(width: 320)
-            }
-            .buttonStyle(V3ButtonStyle(kind: .dark, height: 40)).keyboardShortcut(.defaultAction)
-            .disabled(submitting || !agreed || email.trimmingCharacters(in: .whitespaces).isEmpty || password.isEmpty).padding(.top, 20)
+            Button { submitPassword() } label: { Text(submitting ? "登录中…" : "登录  →") }
+                .buttonStyle(SignInSubmitStyle()).keyboardShortcut(.defaultAction)
+                .disabled(submitting || !agreed || email.trimmingCharacters(in: .whitespaces).isEmpty || password.isEmpty).padding(.top, 20)
         }
     }
 
-    private func passwordField<Field: View>(_ label: String, symbol: String, @ViewBuilder field: () -> Field) -> some View {
+    /// 字段：12 号 sub 标签，下距 6 是 320×40 白底、圆角 8、#E4E4E0 描边的输入框（左右 12，无图标）。
+    private func passwordField<Field: View>(_ label: String, @ViewBuilder field: () -> Field) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(label).font(V3.sans(12, weight: .medium)).foregroundStyle(V3.sub)
-            HStack(spacing: 8) {
-                Image(systemName: symbol).font(.system(size: 12)).foregroundStyle(V3.fnt).frame(width: 14)
-                field().textFieldStyle(.plain).font(V3.sans(14)).disabled(submitting).onSubmit { submitPassword() }
-            }
-            .padding(.horizontal, 12).frame(height: 40)
-            .background(.white, in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(V3.cl))
+            Text(label).font(V3.sans(12)).foregroundStyle(V3.sub)
+            field().textFieldStyle(.plain).font(V3.sans(14)).disabled(submitting).onSubmit { submitPassword() }
+                .padding(.horizontal, 12).frame(height: 40)
+                .background(.white, in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(V3.cl))
         }
     }
 
@@ -132,31 +129,33 @@ struct SignInView: View {
             if !wechat, capabilities?.browser_login_enabled == true { browserLogin }
             else if !wechat { loginUnavailable }
             else if !agreed {
-                AccountSignInQRPlaceholder().blur(radius: 1.6).opacity(0.55)
-                VStack(spacing: 4) {
-                    Text("请先勾选下方协议").font(V3.sans(14, weight: .medium)).foregroundStyle(V3.txt)
-                    Text("勾选后即可扫码登录").font(V3.sans(12)).foregroundStyle(V3.sub)
+                // A（36:6726）：示意码上整块盖 82% 白，中间 157×61 白卡（圆角 9.5、#E4E4E0 描边、无阴影）。
+                AccountSignInQRPlaceholder()
+                Color.white.opacity(0.82)
+                VStack(spacing: 2) {
+                    Text("请先勾选下方协议").font(V3.sans(15, weight: .medium)).foregroundStyle(V3.txt)
+                    Text("勾选后即可扫码登录").font(V3.sans(12)).foregroundStyle(V3.fnt)
                 }
-                .padding(.horizontal, 18).padding(.vertical, 12)
-                .background(.white, in: RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(V3.cl))
-                .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
+                .frame(width: 157, height: 61)
+                .background(.white, in: RoundedRectangle(cornerRadius: 9.5))
+                .overlay(RoundedRectangle(cornerRadius: 9.5).stroke(V3.cl))
             } else {
                 switch state {
                 case .ready(let image): Image(nsImage: image).resizable().interpolation(.high).scaledToFit().frame(width: 200, height: 200).accessibilityLabel("微信登录二维码")
                 case .expired, .failed:
-                    VStack(spacing: 12) {
-                        Text(state == .expired ? "二维码已过期" : "暂时无法获取二维码").font(V3.sans(14, weight: .medium)).foregroundStyle(V3.txt)
-                        Button(state == .expired ? "刷新二维码" : "重试") { refresh += 1 }.buttonStyle(V3ButtonStyle(kind: .dark, height: 32))
+                    // D（36:5932）：整框白底，「二维码已过期」15 中黑，下距 8 是 32 高墨黑主按钮。
+                    VStack(spacing: 8) {
+                        Text(state == .expired ? "二维码已过期" : "暂时无法获取二维码").font(V3.sans(15, weight: .medium)).foregroundStyle(V3.txt)
+                        Button(state == .expired ? "刷新二维码" : "重试") { refresh += 1 }.buttonStyle(SignInProminentStyle())
                     }
                 case .idle, .loading, .confirming: ProgressView().controlSize(.small)
                 }
             }
         }
         .frame(width: 240, height: 240)
-        .background(.white, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(V3.cl))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .background(.white, in: RoundedRectangle(cornerRadius: 14))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(V3.cl))
     }
 
     /// 服务端扫码、浏览器、邮箱三种桌面登录都没开（通常是没配 AUTH_DESKTOP_RETRY_ENCRYPTION_KEY）：同 Web，提示暂不可用并可重试。
@@ -253,27 +252,89 @@ struct SignInView: View {
     }
 }
 
-/// A 态的占位二维码：三个定位角 + 固定伪随机方块，#D6D6D1，只作示意（真码在勾选后才取）。
-private struct AccountSignInQRPlaceholder: View {
+/// 左上品牌字标（Web `assets/drawoffer-lockup.png`，稿 Brand/Lockup 高 22）。
+private struct SignInLockup: View {
+    private static let image: NSImage? = Bundle.module.url(forResource: "lockup", withExtension: "png", subdirectory: "Branding").flatMap(NSImage.init(contentsOf:))
     var body: some View {
-        Canvas { context, size in
-            let cells = 25, cell = (size.width - 40) / CGFloat(cells), origin = CGPoint(x: 20, y: 20)
-            let color = GraphicsContext.Shading.color(Color(hex: 0xD6D6D1))
-            func finder(_ col: Int, _ row: Int) {
-                let rect = CGRect(x: origin.x + CGFloat(col) * cell, y: origin.y + CGFloat(row) * cell, width: cell * 7, height: cell * 7)
-                context.stroke(Path(roundedRect: rect.insetBy(dx: cell / 2, dy: cell / 2), cornerRadius: cell * 1.2), with: color, lineWidth: cell)
-                context.fill(Path(roundedRect: rect.insetBy(dx: cell * 2, dy: cell * 2), cornerRadius: cell * 0.6), with: color)
+        if let image = Self.image {
+            Image(nsImage: image).resizable().interpolation(.high).scaledToFit().frame(height: 22).accessibilityLabel("DrawOffer")
+        } else {
+            Text("DrawOffer").font(.system(size: 19, weight: .bold)).foregroundStyle(V3.txt)
+        }
+    }
+}
+
+/// D 态「刷新二维码」（macOS / Button / Prominent）：32 高、左右 16、圆角 8 的墨黑按钮，13 中黑白字。
+private struct SignInProminentStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.font(V3.sans(13, weight: .medium)).foregroundStyle(.white)
+            .padding(.horizontal, 16).frame(height: 32)
+            .background(configuration.isPressed ? Color(hex: 0x0E0E0D) : V3.txt, in: RoundedRectangle(cornerRadius: 8))
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+/// 稿 E「登录 →」：320×40 #1C1C1B 胶囊，14 号白字。
+private struct SignInSubmitStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var enabled
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.font(V3.sans(14)).foregroundStyle(.white)
+            .frame(width: 320, height: 40)
+            .background(configuration.isPressed ? Color(hex: 0x0E0E0D) : Color(hex: 0x1C1C1B), in: Capsule())
+            .opacity(enabled ? 1 : 0.38)
+            .contentShape(Capsule())
+    }
+}
+
+/// A 态的示意二维码（稿 Login/QR 36:6513）：200×200、距框 20；三个定位角 56/40/24（圆角 10/6/3），
+/// 其余 8×8 圆角 1.5 的 #1D1D1B 方块照稿逐格排布，中间 40×40 白底圆角 8 的「D」。真码在勾选后才取。
+private struct AccountSignInQRPlaceholder: View {
+    /// 25×25 格，`#` 为方块（定位角另画）。
+    private static let modules = [
+        ".........#......#........",
+        ".........##.####.........",
+        "...........#.##.#........",
+        ".........##..............",
+        "........###.##.#.........",
+        ".........##.##..#........",
+        "..........#.##..#........",
+        "........###.##...........",
+        ".###..##.##..##.##.#.#..#",
+        "#.###.####.#.....####....",
+        "..#..##........#####..#.#",
+        "#....#.#.#.....#.#.##.#..",
+        "#.#..#...#......##..#.###",
+        "#...##.###.....#..#.#.#.#",
+        "##.#.#####.....#.#####...",
+        ".##..##..#####......#....",
+        "....#.#.....#.#.#.#..###.",
+        "........####...#...#..###",
+        "........###.........###..",
+        "........##....###..#.###.",
+        ".........###..###.#..#...",
+        "................##....#.#",
+        "..........#..#.###..#...#",
+        "........###.###.....#.###",
+        ".........####...#.###.#..",
+    ]
+
+    var body: some View {
+        Canvas { context, _ in
+            let ink = GraphicsContext.Shading.color(V3.txt), paper = GraphicsContext.Shading.color(.white)
+            let origin = CGPoint(x: 20, y: 20), cell: CGFloat = 8
+            func box(_ x: CGFloat, _ y: CGFloat, _ side: CGFloat, _ radius: CGFloat, _ shading: GraphicsContext.Shading) {
+                context.fill(Path(roundedRect: CGRect(x: origin.x + x, y: origin.y + y, width: side, height: side), cornerRadius: radius), with: shading)
             }
-            finder(0, 0); finder(cells - 7, 0); finder(0, cells - 7)
-            var seed: UInt32 = 20261027
-            for row in 0..<cells {
-                for col in 0..<cells {
-                    seed = seed &* 1103515245 &+ 12345
-                    let inFinder = (row < 8 && col < 8) || (row < 8 && col >= cells - 8) || (row >= cells - 8 && col < 8)
-                    if inFinder || (seed >> 16) % 5 > 1 { continue }
-                    context.fill(Path(CGRect(x: origin.x + CGFloat(col) * cell, y: origin.y + CGFloat(row) * cell, width: cell, height: cell)), with: color)
+            for (x, y) in [(CGFloat(0), CGFloat(0)), (144, 0), (0, 144)] {
+                box(x, y, 56, 10, ink); box(x + 8, y + 8, 40, 6, paper); box(x + 16, y + 16, 24, 3, ink)
+            }
+            for (row, line) in Self.modules.enumerated() {
+                for (col, mark) in line.enumerated() where mark == "#" {
+                    box(CGFloat(col) * cell, CGFloat(row) * cell, cell, 1.5, ink)
                 }
             }
+            box(80, 80, 40, 8, paper)
+            context.draw(Text("D").font(.system(size: 20, weight: .bold)).foregroundStyle(V3.txt), at: CGPoint(x: origin.x + 100, y: origin.y + 100))
         }
         .frame(width: 240, height: 240).accessibilityHidden(true)
     }

@@ -68,7 +68,7 @@ struct CareerJourneyHero: View {
                 Text(step.stage).foregroundStyle(JS.blue).lineLimit(1).fixedSize()
             }.font(V3.sans(13, weight: .medium)).frame(minHeight: 16)
             // 衬线结论标题 36 / 48
-            Text(step.title).font(V3.serif(36)).foregroundStyle(JS.ink).lineHeight(36, 48)
+            Text(step.title).font(V3.serif(36)).foregroundStyle(JS.ink).lineHeight(36, 48, .serif)
                 .fixedSize(horizontal: false, vertical: true).padding(.top, 10)
                 .accessibilityAddTraits(.isHeader)
             if let desc = step.desc, !desc.isEmpty {
@@ -138,7 +138,7 @@ struct CareerJourneyHero: View {
             } label: {
                 Text("＋ 添加").font(V3.sans(12.5)).foregroundStyle(JS.sub).padding(.horizontal, 10).frame(height: 28)
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(JS.line, style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
-            }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
         }
     }
 }
@@ -155,7 +155,7 @@ struct CareerJourneySideHead: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text(title).font(V3.sans(strong ? 16 : 13, weight: strong ? .medium : .regular)).foregroundStyle(strong ? JS.ink : JS.sub)
+                Text(title).font(V3.sans(strong ? 16 : 13, weight: .medium)).foregroundStyle(strong ? JS.ink : JS.sub)
                 if let count { Text(count).font(V3.number(12.5, weight: .medium)).foregroundStyle(JS.mute) }
             }
             Spacer(minLength: 0)
@@ -170,8 +170,26 @@ struct CareerJourneyDrop<Actions: View>: View {
     let title: String
     let text: String
     var busy = false
+    /// 08.02 准备清单入口：左对齐、无图标、实线细边（稿 84:925）；其余入口仍是居中的虚线框。
+    var leading = false
     @ViewBuilder var actions: () -> Actions
     var body: some View {
+        if leading { leadingBody } else { centeredBody }
+    }
+
+    private var leadingBody: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(V3.sans(16, weight: .medium)).foregroundStyle(JS.ink).lineHeight(16, 24)
+            if busy { CareerJourneyProgress().frame(maxWidth: 240).padding(.top, 6).padding(.bottom, 2) }
+            Text(text).font(V3.sans(12.5)).foregroundStyle(JS.body).lineHeight(12.5, 19).fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 12) { actions() }.padding(.top, 14)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 22).padding(.vertical, 24)
+        .background(Color(hex: 0xFAFAF8), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(JS.line))
+    }
+
+    private var centeredBody: some View {
         VStack(spacing: 6) {
             Image(systemName: icon).font(.system(size: 18)).foregroundStyle(JS.sub).frame(height: 22).padding(.bottom, 8)
             Text(title).font(V3.sans(17, weight: .medium)).foregroundStyle(JS.ink).multilineTextAlignment(.center).lineHeight(17, 24)
@@ -352,7 +370,7 @@ struct CareerJourneyPrepSide: View {
                     if session["prep_generated_at"] == nil || session["prep_generated_at"] == .null {
                         // 08.02：还没有清单时，右侧的「生成准备清单」是唯一的黑按钮
                         CareerJourneyDrop(icon: "checklist", title: busy ? "正在生成准备清单…" : "还没有准备清单",
-                                          text: "按岗位要求、你的简历和上一轮复盘，列出这一轮前该补的几件事。每场面试只能生成一次。") {
+                                          text: "按岗位要求、你的简历和上一轮复盘，列出这一轮前该补的几件事。每场面试只能生成一次。", leading: true) {
                             Button("生成准备清单", action: generate).buttonStyle(PDButtonStyle(kind: .primary)).disabled(busy)
                             if let cost { Text(cost).font(V3.sans(12)).foregroundStyle(JS.mute) }
                         }
@@ -640,12 +658,12 @@ struct CareerJourneyOfferSide: View {
     private func salary(_ text: String, note: String?) -> some View {
         HStack(alignment: .lastTextBaseline, spacing: 12) {
             Text(text).font(V3.serif(44)).foregroundStyle(JS.ink).lineLimit(1).minimumScaleFactor(0.6).frame(minHeight: 56)
-            if let note { Text(note).font(V3.sans(13)).foregroundStyle(JS.sub).lineLimit(1).fixedSize() }
+            if let note { Text(note).font(V3.sans(14)).foregroundStyle(JS.body).lineLimit(1).fixedSize() }
         }
     }
 
     private func rows(_ items: [(String, String?)]) -> some View {
-        LazyVGrid(columns: [GridItem(.flexible(), spacing: 24, alignment: .leading), GridItem(.flexible(), spacing: 24, alignment: .leading)], alignment: .leading, spacing: 18) {
+        LazyVGrid(columns: [GridItem(.flexible(), spacing: 0, alignment: .leading), GridItem(.flexible(), spacing: 0, alignment: .leading)], alignment: .leading, spacing: 18) {
             ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.0).font(V3.sans(12.5)).foregroundStyle(JS.sub)
@@ -705,9 +723,10 @@ struct CareerJourneyTimeline: View {
             switch segment.style {
             case .future:
                 Path { path in path.move(to: CGPoint(x: 0, y: 1)); path.addLine(to: CGPoint(x: to - from, y: 1)) }
-                    .stroke(JS.track, style: StrokeStyle(lineWidth: 1.5, dash: [3, 5]))
-            case .current: Rectangle().fill(JS.blue)
-            case .past: Rectangle().fill(JS.track)
+                    .stroke(JS.track, style: StrokeStyle(lineWidth: 1.5, dash: [3, 5])).frame(height: 2)
+            // 线段自身定高 2：ZStack 会把「N 天」文字撑出的高度再塞给可伸缩的 Rectangle，不定高就画成 12pt 粗条。
+            case .current: Rectangle().fill(JS.blue).frame(height: 2)
+            case .past: Rectangle().fill(JS.track).frame(height: 2)
             }
             if let days = segment.days {
                 Text("\(days) 天").font(V3.sans(12, weight: .medium)).foregroundStyle(JS.mute).fixedSize().offset(y: -24)

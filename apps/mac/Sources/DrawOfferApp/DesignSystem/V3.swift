@@ -93,17 +93,6 @@ struct V3ButtonStyle: ButtonStyle {
     }
 }
 
-/// 整行宽的墨黑提交按钮（macOS 大号 32 高、圆角 6）。
-struct V3PrimaryBlockStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var enabled
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(V3.sans(13, weight: .medium)).foregroundStyle(.white)
-            .frame(maxWidth: .infinity).frame(height: 32)
-            .background(configuration.isPressed ? Color(hex: 0x0E0E0D) : V3.txt, in: RoundedRectangle(cornerRadius: 6))
-            .opacity(enabled ? 1 : 0.45).contentShape(RoundedRectangle(cornerRadius: 6))
-    }
-}
-
 /// macOS 稿 SearchField（NSSearchField 观感）：5% 黑底、圆角 7、28 高，聚焦时 accent 聚焦环。
 struct V3SearchField: View {
     @Binding var text: String
@@ -241,35 +230,24 @@ struct V3EmptyCard<Art: View, Actions: View>: View {
     }
 }
 
-/// `.v3-menu`-style popover row with an optional check mark.
-struct V3MenuRow: View {
-    let label: String
-    var systemImage: String? = nil
-    var checked = false
-    var danger = false
-    let action: () -> Void
-    @State private var hover = false
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                if let systemImage { Image(systemName: systemImage).font(.system(size: 13)).frame(width: 15) }
-                Text(label).font(V3.sans(12.5))
-                Spacer(minLength: 0)
-                if checked { Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)) }
-            }
-            .foregroundStyle(danger ? V3.red : V3.txt)
-            .padding(.horizontal, 10).frame(height: 26)
-            .background(hover ? (danger ? V3.redSoft : Color.black.opacity(0.06)) : .clear, in: RoundedRectangle(cornerRadius: 5))
-            .contentShape(Rectangle())
-        }.buttonStyle(.plain).onHover { hover = $0 }
+extension View {
+    /// CSS `line-height`：多行时补行距，首行上下各补一半，使单行高度与 Web 相同。
+    /// 自然行高按字体算：`V3.sans` 是系统字体（SF / 苹方），约 1.2 em；`V3.serif` 约 1.437 em。按错的字体减会让每行差几个点（15/28 的正文实际只有 25）。
+    func lineHeight(_ size: CGFloat, _ height: CGFloat, _ face: LineFace = .sans) -> some View {
+        let extra = max(0, height - size * face.natural)
+        return lineSpacing(extra).padding(.vertical, extra / 2)
     }
 }
 
-extension View {
-    /// CSS `line-height`：多行时补行距，首行上下各补一半，使单行高度与 Web 相同（系统字体行高约为字号 × 1.2）。
-    func lineHeight(_ size: CGFloat, _ height: CGFloat) -> some View {
-        let extra = max(0, height - size * 1.2)
-        return lineSpacing(extra).padding(.vertical, extra / 2)
+/// `lineHeight` 用来算自然行高的字体。
+enum LineFace {
+    case sans, serif, system
+    var natural: CGFloat {
+        switch self {
+        case .sans: 1.2
+        case .serif: 1.437
+        case .system: 1.2
+        }
     }
 }
 
@@ -454,7 +432,7 @@ struct V3Loading: View {
         VStack(spacing: 8) {
             V3ThinkingMark(size: 40).frame(width: 56, height: 48)
             Text(label).font(V3.sans(12.5)).foregroundStyle(V3Skeleton.faint).multilineTextAlignment(.center)
-            V3SlowLoadHint(retry: retry).padding(.top, 4)
+            V3SlowLoadHint(retry: retry).padding(.top, 1)
         }
         .opacity(shown ? 1 : 0)
         .accessibilityElement(children: .contain).accessibilityLabel(label)
@@ -509,9 +487,9 @@ struct V3SlowLoadHint: View {
         Group {
             if slow {
                 HStack(spacing: 6) {
-                    Text("比平时慢一些，还在加载。").foregroundStyle(V3.fnt)
+                    Text("比平时慢一些，还在加载。").foregroundStyle(V3Skeleton.faint)
                     if let retry {
-                        Button("重新加载", action: retry).buttonStyle(.plain).fontWeight(.medium).foregroundStyle(V3.blue).pointingHandCursor()
+                        Button("重新加载", action: retry).buttonStyle(.plain).foregroundStyle(V3.link).pointingHandCursor()
                     }
                 }.font(V3.sans(12.5)).accessibilityElement(children: .combine).transition(.opacity)
             }
@@ -529,7 +507,7 @@ struct V3LoadFailed: View {
     let retry: () -> Void
     var body: some View {
         HStack(spacing: 6) {
-            Text(message).foregroundStyle(V3.fnt)
+            Text(message).foregroundStyle(V3.sub)
             Button("重新加载", action: retry).buttonStyle(.plain).fontWeight(.medium).foregroundStyle(V3.blue).pointingHandCursor()
         }.font(V3.sans(13))
     }

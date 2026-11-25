@@ -133,7 +133,7 @@ struct TemplatesView: View {
                 } label: {
                     Text(byPopularity ? "按热度排序" : "按展示顺序").font(V3.sans(12)).foregroundStyle(TemplatesStyle.hint)
                 }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().padding(.trailing, 16).accessibilityLabel("模板排序")
+                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().padding(.trailing, 16).accessibilityLabel("模板排序")
                 TemplateFilter(styles: $selectedStyles, uses: $selectedUses)
             }.frame(height: 29).padding(.top, 29)
             if filtered.isEmpty {
@@ -198,7 +198,7 @@ struct TemplatesView: View {
 
 /// 线上模板经会话准备私有图片。
 private func preparePaper(_ template: ResumeTemplate, guest: Bool, api: any APIClient) async throws -> PaperPreparation {
-    try await api.preparePaper(template.renderRequest())
+    try await api.preparePaper(template.previewRequest())
 }
 
 /// 缩略纸面。
@@ -208,21 +208,22 @@ struct TemplateThumbnail: View {
     let guest: Bool
     /// 模板页灰底卡片里的纸面用小圆角（稿 2px），编辑器与弹窗沿用 6。
     var radius: CGFloat = 6
+    /// 模板页卡片不描边，纸面本身就是卡片。
+    var bordered = true
     @State private var paper: ResumeRenderRequest?
     @State private var failed = false
     var body: some View {
         GeometryReader { geometry in
             if let paper {
                 ResumePaperView(request: paper, onError: { _ in failed = true })
-                    .frame(width: 794, height: 1123)
-                    .scaleEffect(geometry.size.width / 794, anchor: .topLeading)
+                    .frame(width: geometry.size.width, height: geometry.size.width * 1123 / 794)
                     .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
                     .allowsHitTesting(false)
             } else if !failed { ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity) }
             if failed { Text("预览不可用").font(.caption).padding(8).background(.white) }
         }.aspectRatio(210.0 / 297, contentMode: .fit).background(.white)
             .clipShape(RoundedRectangle(cornerRadius: radius))
-            .overlay(RoundedRectangle(cornerRadius: radius).stroke(Color(hex: 0xD3D3CE)))
+            .overlay { if bordered { RoundedRectangle(cornerRadius: radius).stroke(Color(hex: 0xD3D3CE)) } }
             .task(id: template.id) {
                 do {
                     let result = try await preparePaper(template, guest: guest, api: session.api)
@@ -278,8 +279,7 @@ private struct TemplatePreview: View {
                     if let paper {
                         let scale = zoom * Self.base
                         ResumePaperView(request: paper, onRendered: { height = max(1123, $0) }, onError: { error = $0 })
-                            .frame(width: 794, height: height).scaleEffect(scale, anchor: .topLeading)
-                            .frame(width: 794 * scale, height: height * scale, alignment: .topLeading)
+                            .frame(width: 794 * scale, height: height * scale)
                             .clipShape(RoundedRectangle(cornerRadius: 4)).shadow(color: .black.opacity(0.08), radius: 12, y: 8)
                             .padding(.top, 34).padding(.horizontal, 76).padding(.bottom, 80)
                             .frame(minWidth: 0, maxWidth: .infinity)
@@ -476,8 +476,8 @@ enum TemplatesStyle {
     static let hint = Color(hex: 0x96968F)
 }
 
-/// 79:2093 模板卡片：200×264 的 #F4F4F2 圆角 10 底，居中 A4 纸面（155 宽，距顶 18.5）；
-/// 名称 13 中粗距卡 14；标签（10px、20 高、圆角 5）与「N 使用」一行，距名称 4。悬停只让纸面浮起一点阴影，不加灰块。
+/// 模板卡片：A4 纸面铺满卡片宽度（圆角 10，不加灰底和描边，按用户要求偏离 79:2093 的灰底卡）；
+/// 名称 13 中粗距纸面 14；标签（10px、20 高、圆角 5）与「N 使用」一行，距名称 4。只靠很淡的投影和页面分开，悬停时投影加深。
 struct TemplatesCard: View {
     let template: ResumeTemplate
     let guest: Bool
@@ -486,15 +486,8 @@ struct TemplatesCard: View {
     var body: some View {
         Button(action: open) {
             VStack(alignment: .leading, spacing: 0) {
-                GeometryReader { box in
-                    let paper = box.size.width * 0.775
-                    TemplateThumbnail(template: template, guest: guest, radius: 2)
-                        .frame(width: paper, height: paper * 297 / 210)
-                        .shadow(color: .black.opacity(hover ? 0.08 : 0), radius: 6, y: 3)
-                        .frame(width: box.size.width).padding(.top, box.size.width * 0.0925)
-                }
-                .aspectRatio(200.0 / 264, contentMode: .fit)
-                .background(V3.field, in: RoundedRectangle(cornerRadius: 10))
+                TemplateThumbnail(template: template, guest: guest, radius: 10, bordered: false)
+                    .shadow(color: .black.opacity(hover ? 0.14 : 0.07), radius: hover ? 10 : 6, y: hover ? 4 : 2)
                 Text(template.name).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1).truncationMode(.tail)
                     .frame(height: 16).padding(.top, 14)
                 HStack(spacing: 6) {

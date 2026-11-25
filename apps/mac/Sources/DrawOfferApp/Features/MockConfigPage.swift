@@ -47,8 +47,8 @@ struct MockConfigPage: View {
         "comprehensive": "专业、项目与软素质各问一些",
         "hr": "动机、职业规划、协作与薪资期望",
     ]
-    // 右列每行的位置：画布 y=273 起，行距 44；第一场每行下面多一行灰字，行距放宽到 58
-    private static let setTop: CGFloat = 273, setStep: CGFloat = 44, firstStep: CGFloat = 58
+    // 右列每行的位置：画布 y=273 起，行距 44；第一场每行下面多一行灰字，行距放宽到 64（稿 H5 61:2382：分隔线在行顶 +52.5，灰字 12 / #87867F）
+    private static let setTop: CGFloat = 273, setStep: CGFloat = 44, firstStep: CGFloat = 64
 
     enum Plan { case first, resume, full }
     enum Panel { case resume, type, jobs, more }
@@ -83,6 +83,8 @@ struct MockConfigPage: View {
     @State private var submitting = false
     @State private var notice: MockNotice?
     @State private var applied = false
+    /// K1（Figma 02A · 61:3075）：从岗位广场「对着这个岗位练一场」进来，面试岗位已预选刚加入的那个
+    @State private var fromJoin = false
 
     private var account: String { if case .signedIn(let user) = session.phase { return user.id }; return "" }
     private func get(_ path: String, query: [String: String] = [:]) async throws -> JSONValue {
@@ -115,7 +117,8 @@ struct MockConfigPage: View {
     private var blocking: JSONValue? { data?.list.first { ["in_progress", "preparing", "evaluating", "evaluation_failed"].contains($0.text("status")) } }
     private var selectedResume: JSONValue? { data?.resumes.first { $0.display("id") == resume } }
     private var jobLabel: String {
-        target.kind == .general ? "只按简历出题"
+        if target.kind == .general, firstTime, let role = data?.targetRole { return "\(role) · 按简历" }
+        return target.kind == .general ? "只按简历出题"
             : [MockMap.companyName(target), target.application?.text("job_title_snapshot") ?? "", stageLabel].filter { !$0.isEmpty }.joined(separator: " · ")
     }
     private var cost: String? {
@@ -145,6 +148,8 @@ struct MockConfigPage: View {
             MockNoticeToast(notice: $notice)
         }
         .task(id: account) { await load() }
+        // 选了语音作答就开始在后台准备本机识别资源，开场第一题就能本机识别
+        .task(id: mode) { if mode == "voice" { await LocalSpeech.prepare() } }
         .centeredSheet(isPresented: Binding(get: { panel == .jobs }, set: { if !$0 { panel = nil } })) {
             MockJobDialog(jobs: boardJobs, sessions: data?.sessions ?? [], now: now, current: target.kind == .general ? nil : target.application?.display("id"),
                           close: { panel = nil }, pick: { id in chosen = id ?? "general"; panel = nil; applyDefaults() },
@@ -213,7 +218,8 @@ struct MockConfigPage: View {
     @ViewBuilder private var plans: some View {
         if firstTime {
             planCard(top: 262, on: activePlan == .first, title: "第一次练", meta: "\(Self.firstCount) 题，约 \(Self.firstCount * Self.perQuestion) 分钟",
-                     text: "先自我介绍，再问两道简历里的事；\n走完一遍就有第一份报告。") { plan = .first }
+                     text: target.kind == .general ? "先自我介绍，再问两道简历里的事；\n走完一遍就有第一份报告。"
+                                                   : "先自我介绍，再按这个岗位的要求，\n从你的项目里挑两道问。") { plan = .first }
         } else {
             let others = (data?.overview?["tallies"]?["open"]?["examples"]?.items ?? []).compactMap(\.stringValue).filter { $0 != topic }.prefix(2)
             let text: String = {
@@ -254,7 +260,7 @@ struct MockConfigPage: View {
     private static let firstHintsTail = ["就用你刚写好的这份", "技术和项目都会问，最容易看出哪里要补", "按你的经验定的，答不上来也没关系"]
     private func firstHint(_ index: Int) -> String {
         switch index {
-        case 0: return target.kind == .general ? "还没选岗位，先按简历里的方向出题" : applicationID != nil ? "就按你刚加入的这个岗位出题" : "按这个岗位的要求出题"
+        case 0: return target.kind == .general ? "还没导入岗位，先按简历里的方向出题" : applicationID != nil || fromJoin ? "就按你刚加入的这个岗位出题" : "按这个岗位的要求出题"
         case 1, 2, 3: return Self.firstHintsTail[index - 1]
         case 4: return mode == "voice" ? "最接近真实面试；不方便说话可以换成文字" : "用文字答；方便说话时换成语音更接近真实面试"
         default: return "只是声音不同，不影响出题"
@@ -267,9 +273,9 @@ struct MockConfigPage: View {
             Text(verbatim: label).font(V3.sans(14)).foregroundStyle(MockPalette.sub).frame(height: 22)
             control().frame(maxWidth: .infinity, alignment: .trailing).padding(.trailing, index < 3 ? 7 : 0).offset(y: index < 3 ? 0 : -4)
             if firstTime { Text(verbatim: firstHint(index)).font(V3.sans(12)).foregroundStyle(MockPalette.hint).lineLimit(1).frame(height: 18).offset(y: 24) }
-            if index < 5 { Rectangle().fill(MockPalette.line).frame(height: 1).offset(y: firstTime ? 49 : 33) }
+            if index < 5 { Rectangle().fill(MockPalette.line).frame(height: 1).offset(y: firstTime ? 52.5 : 33) }
         }
-        .frame(width: 418, height: firstTime ? 58 : 44, alignment: .topLeading)
+        .frame(width: 418, height: firstTime ? Self.firstStep : Self.setStep, alignment: .topLeading)
         .opacity(off ? 0.4 : 1)
         .offset(x: 588, y: Self.setTop + CGFloat(index) * step)
     }
@@ -292,7 +298,7 @@ struct MockConfigPage: View {
             VStack(alignment: .leading, spacing: 2) {
                 if panel == .resume {
                     ForEach(data?.resumes ?? [], id: \.self) { item in
-                        menuRow(on: item.display("id") == resume) {
+                        menuRow(on: item.display("id") == resume, height: 41) {
                             HStack(spacing: 12) {
                                 Text(verbatim: item.text("title")).font(V3.sans(13.5, weight: item.display("id") == resume ? .medium : .regular)).foregroundStyle(MockPalette.ink).lineLimit(1)
                                 Spacer(minLength: 0)
@@ -302,7 +308,7 @@ struct MockConfigPage: View {
                     }
                 } else {
                     ForEach(Self.types, id: \.self) { value in
-                        menuRow(on: value == activeType) {
+                        menuRow(on: value == activeType, height: 56) {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(verbatim: MockMap.typeNames[value] ?? "").font(V3.sans(13.5, weight: value == activeType ? .medium : .regular)).foregroundStyle(MockPalette.ink)
                                 Text(verbatim: Self.typeHints[value] ?? "").font(V3.sans(12.5)).foregroundStyle(MockPalette.fnt)
@@ -313,16 +319,16 @@ struct MockConfigPage: View {
             }
             .padding(6).frame(width: panel == .resume ? 260 : 300)
             .background(.white, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(MockPalette.line))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(MockPalette.cl))
             .shadow(color: .black.opacity(0.14), radius: 20, y: 16)
             .offset(x: panel == .resume ? 746 : 706, y: top)
             .accessibilityElement(children: .contain).accessibilityLabel(panel == .resume ? "选择简历" : "面试类型")
         }
     }
 
-    private func menuRow<Label: View>(on: Bool, @ViewBuilder label: () -> Label, action: @escaping () -> Void) -> some View {
+    private func menuRow<Label: View>(on: Bool, height: CGFloat, @ViewBuilder label: () -> Label, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            label().padding(.horizontal, 12).padding(.vertical, 9).frame(maxWidth: .infinity, alignment: .leading)
+            label().padding(.horizontal, 12).frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .leading)
                 .background(on ? MockPalette.hover : .clear, in: RoundedRectangle(cornerRadius: 8)).contentShape(Rectangle())
         }.buttonStyle(.plain)
     }
@@ -331,7 +337,8 @@ struct MockConfigPage: View {
 
     private func load() async {
         guard !account.isEmpty else { return }
-        let since = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-6 * 3600))
+        if let joined = CoachGuide.shared.takePendingMockApplication() { chosen = joined; fromJoin = true }
+        let since = ISO8601DateFormatter().string(from: ReadCache.floor(Date(), minutes: 5).addingTimeInterval(-6 * 3600))
         do {
             async let list = get("/api/mock-interviews", query: ["limit": "100"])
             async let overview = try? get("/api/mock-interviews/overview")
@@ -466,13 +473,13 @@ struct MockPracticeCard: View {
                 }
                 .padding(.horizontal, 20)
             } else if let item = items.first {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 22) {
                     if !item.signals.isEmpty {
                         section("要补") {
                             HStack(spacing: 6) {
                                 ForEach(item.signals.prefix(3), id: \.self) { signal in
                                     Text(verbatim: signal).font(V3.sans(12)).foregroundStyle(MockPalette.sub).lineLimit(1)
-                                        .padding(.horizontal, 10).padding(.vertical, 3).background(MockPalette.chip, in: RoundedRectangle(cornerRadius: 6)).help(signal)
+                                        .padding(.horizontal, 10).frame(height: 26).background(MockPalette.chip, in: RoundedRectangle(cornerRadius: 6)).help(signal)
                                 }
                             }
                         }
@@ -480,7 +487,7 @@ struct MockPracticeCard: View {
                     section("上次到哪") { Text(verbatim: item.last).font(V3.sans(13)).foregroundStyle(MockPalette.sub).lineHeight(13, 21).lineLimit(2) }
                     section("这次要到") { Text(verbatim: item.goal).font(V3.sans(13)).foregroundStyle(MockPalette.sub).lineHeight(13, 21).lineLimit(2) }
                 }
-                .padding(.horizontal, 20).padding(.vertical, 18).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(.horizontal, 20).padding(.vertical, 20).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
         .frame(width: 392, height: 256)
@@ -488,7 +495,7 @@ struct MockPracticeCard: View {
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(MockPalette.cl))
     }
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(verbatim: title).font(V3.sans(12)).foregroundStyle(MockPalette.fnt)
             content()
         }
@@ -512,15 +519,13 @@ struct MockJobDialog: View {
         let chosen: String? = picked ?? current
         let keyword = query.trimmingCharacters(in: .whitespaces).lowercased()
         let shown = jobs.filter { keyword.isEmpty || ($0.text("company_name_snapshot") + $0.text("job_title_snapshot")).lowercased().contains(keyword) }
-        MockFormCard(title: "选择面试岗位", sub: "面试官按这个岗位的 JD 出题。", close: close) {
-            TextField("搜公司或岗位", text: $query).textFieldStyle(.plain).font(V3.sans(13.5))
+        MockFormCard(title: "选择面试岗位", sub: "面试官按这个岗位的 JD 出题。", close: close, footLine: false, footTop: 22, footBottom: 25) {
+            TextField("", text: $query).textFieldStyle(.plain).font(V3.sans(13))
+                .overlay(alignment: .leading) { if query.isEmpty { Text("搜公司或岗位").font(V3.sans(13)).foregroundStyle(MockPalette.mute).allowsHitTesting(false) } }
                 .padding(.horizontal, 14).frame(height: 38).background(MockPalette.field, in: RoundedRectangle(cornerRadius: 10)).padding(.top, 16)
                 .accessibilityLabel("搜公司或岗位")
             ScrollView {
-                VStack(spacing: 0) {
-                    if keyword.isEmpty || "不选岗位".contains(keyword) {
-                        row(on: chosen == nil, title: "不选岗位", sub: "只按简历出题", trailing: nil) { picked = .some(nil) }
-                    }
+                VStack(spacing: 7) {
                     ForEach(shown, id: \.self) { item in
                         let id = item.display("id")
                         let usable = !item.text("job_description_id").isEmpty
@@ -531,14 +536,17 @@ struct MockJobDialog: View {
                             if usable { picked = .some(id) } else { showOpportunities() }
                         }
                     }
+                    if keyword.isEmpty || "不选岗位".contains(keyword) {
+                        row(on: chosen == nil, title: "不选岗位", sub: "只按简历出题", trailing: nil) { picked = .some(nil) }
+                    }
                 }
             }
-            .frame(height: 226).padding(.top, 10)
+            .frame(height: 241).padding(.top, 12)
         } left: {
-            Button("去投递看板添加 ›", action: showBoard).buttonStyle(MockLinkStyle(blue: true))
+            Button("去投递看板添加 ›", action: showBoard).buttonStyle(MockLinkStyle())
         } foot: {
-            Button("取消", action: close).buttonStyle(MockPillStyle(kind: .ghost, height: 36, padding: 20))
-            Button(chosen != nil ? "用这个岗位练" : "不选岗位练") { pick(chosen) }.buttonStyle(MockPillStyle(height: 36, padding: 20))
+            Button("取消", action: close).buttonStyle(MockPillStyle(kind: .ghost, height: 32, padding: 21, size: 13))
+            Button(chosen != nil ? "用这个岗位练" : "不选岗位练") { pick(chosen) }.buttonStyle(MockPillStyle(height: 38, padding: 24))
         }
     }
 
@@ -546,13 +554,13 @@ struct MockJobDialog: View {
         Button(action: action) {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(verbatim: title).font(V3.sans(14, weight: .medium)).foregroundStyle(MockPalette.ink).lineLimit(1).frame(height: 22)
-                    Text(verbatim: sub).font(V3.sans(12.5)).foregroundStyle(MockPalette.fnt).lineLimit(1).frame(height: 18)
+                    Text(verbatim: title).font(V3.sans(14, weight: .medium)).foregroundStyle(trailing?.1 == true ? MockPalette.mute : MockPalette.ink).lineLimit(1)
+                    Text(verbatim: sub).font(V3.sans(12.5)).foregroundStyle(MockPalette.fnt).lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                if let trailing { Text(verbatim: trailing.0).font(V3.sans(12.5)).foregroundStyle(trailing.1 ? MockPalette.blue : MockPalette.mute) }
+                if let trailing { Text(verbatim: trailing.0).font(V3.sans(12.5)).foregroundStyle(trailing.1 ? MockPalette.blue : MockPalette.fnt) }
             }
-            .padding(.horizontal, 12).frame(height: 56)
+            .padding(.horizontal, 14).frame(height: 55)
             .background(on ? Color.white : .clear, in: RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(on ? MockPalette.ink : .clear))
             .contentShape(Rectangle())
@@ -578,10 +586,10 @@ struct MockMoreDialog: View {
     var body: some View {
         let options = voices.filter { $0.text("gender") == voice }
         let ids = picked ?? voiceIDs
-        MockFormCard(title: "更多设置", close: close) {
+        MockFormCard(title: "更多设置", close: close, footLine: false, footTop: 19, footBottom: 20) {
             VStack(spacing: 0) {
                 option("面试语言", "面试官提问和报告使用的语言") {
-                    MockSeg(label: "面试语言", options: [("zh", "中文", false), ("en", "英文", false)], current: lang ?? language) { lang = $0 }
+                    MockSeg(label: "面试语言", options: [("zh", "中文", false), ("en", "英文", false)], current: lang ?? language, pill: true) { lang = $0 }
                 }
                 if !options.isEmpty {
                     option("面试官音色", "这一场选的是\(voice == "male" ? "男声" : "女声")") {
@@ -593,12 +601,12 @@ struct MockMoreDialog: View {
                 option("允许追问", "每道主问题最多追问 2 次，关掉就一题一答") {
                     Toggle("允许追问", isOn: Binding(get: { follow ?? followUp }, set: { follow = $0 })).labelsHidden().toggleStyle(.switch).controlSize(.small).tint(MockPalette.ink)
                 }
-            }.padding(.top, 10)
+            }.padding(.top, 6)
         } left: {
             EmptyView()
         } foot: {
-            Button("取消", action: close).buttonStyle(MockPillStyle(kind: .ghost, height: 36, padding: 20))
-            Button("保存") { save(Value(language: lang ?? language, followUp: follow ?? followUp, voiceIDs: ids)) }.buttonStyle(MockPillStyle(height: 36, padding: 20))
+            Button("取消", action: close).buttonStyle(MockPillStyle(kind: .ghost, height: 32, padding: 21, size: 13))
+            Button("保存") { save(Value(language: lang ?? language, followUp: follow ?? followUp, voiceIDs: ids)) }.buttonStyle(MockPillStyle(height: 38, padding: 24))
         }
     }
 
@@ -606,12 +614,12 @@ struct MockMoreDialog: View {
         HStack(spacing: 24) {
             VStack(alignment: .leading, spacing: 0) {
                 Text(verbatim: title).font(V3.sans(14, weight: .medium)).foregroundStyle(MockPalette.ink).frame(height: 22)
-                Text(verbatim: sub).font(V3.sans(13)).foregroundStyle(MockPalette.fnt).frame(height: 20)
+                Text(verbatim: sub).font(V3.sans(12.5)).foregroundStyle(MockPalette.fnt).frame(height: 20)
             }
             Spacer(minLength: 0)
             control()
         }
-        .frame(minHeight: 60)
+        .padding(.vertical, 15).frame(minHeight: 72)
         .overlay(alignment: .top) { Rectangle().fill(MockPalette.line).frame(height: 1).opacity(title == "面试语言" ? 0 : 1) }
     }
 }

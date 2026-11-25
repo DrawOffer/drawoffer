@@ -39,7 +39,7 @@ struct CareerRecordPage: View {
                             .disabled(paste.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || splitting)
                     }
                 }
-                if mode == .paste { pasteBody.padding(.top, 30) }
+                if mode == .paste { pasteBody.padding(.top, 40) }
                 else if splitting { splittingBody }
                 else if questions.isEmpty {
                     Text("还没有问题。").font(V3.sans(13)).foregroundStyle(PD.mute).frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -116,7 +116,8 @@ struct RecordReaderView: View {
 
     var body: some View {
         ScrollViewReader { proxy in
-            HStack(alignment: .top, spacing: 60) {
+            // 稿 07.05：正文滚动区 660 宽（问答 600 + 右侧留白），距目录 75
+            HStack(alignment: .top, spacing: 75) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(questions.enumerated()), id: \.offset) { position, item in
@@ -124,7 +125,7 @@ struct RecordReaderView: View {
                                 .background(GeometryReader { geometry in Color.clear.preference(key: RecordOffsets.self, value: [position: geometry.frame(in: .named("record")).minY]) })
                         }
                     }
-                    .frame(maxWidth: 620, alignment: .leading).padding(.bottom, 96)
+                    .frame(maxWidth: 600, alignment: .leading).padding(.bottom, 96)
                 }
                 .scrollIndicators(.never)
                 .coordinateSpace(name: "record")
@@ -132,9 +133,10 @@ struct RecordReaderView: View {
                     // 读到哪一题：最后一个顶边越过阅读区顶部（留 40）的题
                     active = offsets.filter { $0.value <= 40 }.map(\.key).max() ?? 0
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: 660, alignment: .leading).layoutPriority(1)
                 index(proxy).frame(width: 300, alignment: .leading)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -144,7 +146,7 @@ struct RecordReaderView: View {
         return VStack(alignment: .leading, spacing: 12) {
             Text(String(format: "%02d", position + 1)).font(.system(size: 12, weight: .medium)).foregroundStyle(PD.mute).frame(height: 18)
             Text(item.question.trimmingCharacters(in: .whitespaces).nonEmptyValue ?? "（没记下问题）").font(V3.serif(20)).foregroundStyle(V3.txt)
-                .lineHeight(20, 30).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                .lineHeight(20, 30, .serif).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             if item.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(missing(item, position) ?? "这道题没记下回答").font(V3.sans(14)).foregroundStyle(PD.mute)
             } else { paragraphs(item.answer) }
@@ -253,11 +255,11 @@ struct CareerSubpageHead<Actions: View>: View {
                     Menu {
                         ForEach(Array(menu.enumerated()), id: \.offset) { _, item in Button(item.title, action: item.action) }
                     } label: { Text("⋯").font(.system(size: 16, weight: .medium)).foregroundStyle(PD.body).frame(width: 20, height: 19) }
-                        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("更多操作")
+                        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().accessibilityLabel("更多操作")
                 }
             }.frame(height: 19)
             HStack(alignment: .center, spacing: 24) {
-                Text(title).font(V3.serif(36)).foregroundStyle(V3.txt).lineHeight(36, 48).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                Text(title).font(V3.serif(36)).foregroundStyle(V3.txt).lineHeight(36, 48, .serif).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                 HStack(spacing: 14) { actions() }
             }.padding(.top, 28)
         }
@@ -271,92 +273,4 @@ struct CareerSubpageMenuItem { let title: String; let action: () -> Void }
 struct RecordOffsets: PreferenceKey {
     static let defaultValue: [Int: CGFloat] = [:]
     static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) { value.merge(nextValue()) { $1 } }
-}
-
-/// Web `StationCard.PrepDialog`：560 宽；勾选、增加、生成准备清单。
-struct CareerPrepSheet: View {
-    let session: JSONValue
-    let busy: Bool
-    let save: ([JSONValue]) -> Void
-    let generate: () -> Void
-    let close: () -> Void
-    @State private var draft: String?
-
-    private static let category = ["intro": "自我介绍", "project": "项目", "technical": "技术", "system_design": "系统设计", "behavior": "行为", "company": "公司", "other": "其他"]
-
-    var body: some View {
-        let items = session["prep_items"]?.items ?? []
-        let done = items.filter { $0["done"]?.bool == true }.count
-        let canGenerate = session.text("status") == "scheduled" && (session["prep_generated_at"] ?? .null) == .null
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("准备清单").font(V3.serif(20)).frame(height: 28)
-                Text(items.isEmpty ? "还没有准备清单" : "完成 \(done) / \(items.count)").font(V3.sans(12.5)).foregroundStyle(PD.body)
-            }.padding(.horizontal, 28).padding(.top, 26).padding(.bottom, 8)
-            Rectangle().fill(Color(hex: 0xECEAE4)).frame(height: 1)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    if busy && items.isEmpty { Text("正在按岗位要求和简历生成…").font(V3.sans(12.5)).foregroundStyle(PD.body).padding(.top, 14) }
-                    if !busy && items.isEmpty && canGenerate {
-                        HStack(spacing: 16) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("按这一站的类型、岗位要求和你的简历生成").font(V3.sans(13, weight: .medium))
-                                Text("可以随时增删").font(V3.sans(12)).foregroundStyle(PD.mute)
-                            }.frame(maxWidth: .infinity, alignment: .leading)
-                            Button("生成准备清单", action: generate).buttonStyle(PDButtonStyle(kind: .primary)).disabled(busy)
-                        }.padding(.horizontal, 18).padding(.vertical, 16).background(Color(hex: 0xF4F7FD), in: RoundedRectangle(cornerRadius: 14))
-                    }
-                    ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                        let on = item["done"]?.bool == true
-                        HStack(spacing: 10) {
-                            Button { save(toggled(items, index)) } label: {
-                                Circle().stroke(on ? PD.blue : Color(hex: 0xC3D3F0), lineWidth: 1.4).background(Circle().fill(on ? PD.blue : .white))
-                                    .overlay { if on { Image(systemName: "checkmark").font(.system(size: 7, weight: .bold)).foregroundStyle(.white) } }
-                                    .frame(width: 14, height: 14).frame(width: 22, height: 22).contentShape(Rectangle())
-                            }.buttonStyle(.plain).disabled(busy).accessibilityLabel(item.text("title")).accessibilityAddTraits(on ? .isSelected : [])
-                            Text(Self.category[item.text("category")] ?? "其他").font(V3.sans(11, weight: .medium)).foregroundStyle(PD.blueText).frame(width: 54, alignment: .leading)
-                            Text(item.text("title")).font(V3.sans(13, weight: .medium)).foregroundStyle(on ? PD.mute : PD.ink).strikethrough(on).frame(maxWidth: .infinity, alignment: .leading)
-                            Text(item.text("reason")).font(V3.sans(12)).foregroundStyle(PD.mute).lineLimit(1)
-                        }
-                        .frame(minHeight: 44)
-                        .overlay(alignment: .bottom) { Rectangle().fill(Color(hex: 0xEEF2F9)).frame(height: 1) }
-                    }
-                    if draft != nil {
-                        HStack(spacing: 10) {
-                            Spacer().frame(width: 22)
-                            Text("其他").font(V3.sans(11, weight: .medium)).foregroundStyle(PD.blueText).frame(width: 54, alignment: .leading)
-                            TextField("比如：复习项目里的分片方案", text: Binding(get: { draft ?? "" }, set: { draft = String($0.prefix(80)) }))
-                                .textFieldStyle(.plain).font(V3.sans(13)).padding(.horizontal, 10).frame(height: 30)
-                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(hex: 0xCDDCF5)))
-                                .onSubmit { add(items) }
-                                .accessibilityLabel("新的准备事项")
-                        }.frame(minHeight: 44)
-                    }
-                }.padding(.horizontal, 28).padding(.top, 14).padding(.bottom, 20)
-            }.frame(maxHeight: 560)
-            Rectangle().fill(Color(hex: 0xECEAE4)).frame(height: 1)
-            HStack(spacing: 10) {
-                Button("+ 添加一项") { if draft == nil { draft = "" } else { add(items) } }
-                    .buttonStyle(.plain).font(V3.sans(12.5, weight: .medium)).foregroundStyle(PD.ink).disabled(busy || items.count >= 12)
-                Spacer()
-                Button("关闭") { if let draft, !draft.trimmingCharacters(in: .whitespaces).isEmpty { add(items) }; close() }.buttonStyle(PDButtonStyle())
-            }.padding(.horizontal, 28).padding(.top, 16).padding(.bottom, 20)
-        }
-        .frame(width: 560).foregroundStyle(PD.ink)
-    }
-
-    private func toggled(_ items: [JSONValue], _ index: Int) -> [JSONValue] {
-        items.enumerated().map { position, item in
-            guard position == index, case .object(var fields) = item else { return item }
-            fields["done"] = .bool(item["done"]?.bool != true)
-            return .object(fields)
-        }
-    }
-
-    private func add(_ items: [JSONValue]) {
-        let title = (draft ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        draft = nil
-        guard !title.isEmpty else { return }
-        save(items + [.object(["title": .string(String(title.prefix(80))), "category": .string("other"), "reason": .null, "done": .bool(false)])])
-    }
 }

@@ -43,33 +43,6 @@ public struct JobMatch: Equatable, Sendable {
     public static let pollLimit = 20
 }
 
-/// 首页推荐岗位（`/api/job-matches/recommendations`）。
-public struct JobMatchRecommendations: Equatable, Sendable {
-    public struct Item: Equatable, Sendable, Identifiable {
-        public let id: String
-        public let title: String
-        public let company: String
-        public let score: Int
-        public let applicationStatus: String?
-    }
-    public let state: String
-    public let resumeTitle: String?
-    public let items: [Item]
-    public let pendingCount: Int
-    public let canCompute: Bool
-
-    public init(_ value: JSONValue) {
-        state = value.text("state")
-        resumeTitle = value["resume"]?["title"]?.stringValue
-        items = (value["items"]?.items ?? []).map {
-            Item(id: $0.text("job_id"), title: $0.text("job_title"), company: $0.text("company_name"),
-                 score: $0["score"]?.integer ?? 0, applicationStatus: $0["application_status"]?.stringValue)
-        }
-        pendingCount = value["pending_count"]?.integer ?? 0
-        if case .bool(let flag) = value["can_compute"] { canCompute = flag } else { canCompute = false }
-    }
-}
-
 /// 岗位详情的完整可编辑字段（Web `JobDescriptionFields`）。PUT 需要提交完整字段集合与 base_lock_version。
 public enum JobDescriptionFields {
     public static let optionalText = [

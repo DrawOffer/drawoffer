@@ -72,12 +72,6 @@ for (const directory of [
   copyFileSync(resolve(appsRoot, 'web/src/assets/drawoffer-mark.png'), resolve(directory, 'mark.png'));
 }
 
-for (const directory of [resolve(appsRoot, 'mac/Sources/DrawOfferApp/Resources/Home'), resolve(appsRoot, 'windows/src/DrawOffer.App/Assets/Home')]) {
-  mkdirSync(directory, { recursive: true });
-  for (const filename of ['content.json', 'firstResume.png', 'target.png', 'plugin.png'])
-    copyFileSync(resolve(nativeRoot, 'shared/home', filename), resolve(directory, filename));
-}
-
 // 可编辑纸面：挂载 Web 同一套 TipTap 编辑器与选区工具栏，样式、字体、图标全部内联。
 // 页面由原生 drawoffer-paper:// scheme 加载，纸面图片与上传经该 scheme 由原生带凭据转发。
 const webSrc = resolve(appsRoot, "web/src");
@@ -147,7 +141,7 @@ for (const directory of editorDirectories) {
   // 模板示例头像：纸面里写的是站内 /templates/... 地址，由原生 scheme 从随包资源读出
   const templateTarget = resolve(directory, "templates");
   mkdirSync(templateTarget, { recursive: true });
-  for (const filename of ["avatar-administrative.png", "avatar-administrative.svg", "avatar-campus.png", "avatar-campus.svg", "avatar-cat.jpg", "avatar-civic.png", "avatar-civic.svg", "avatar-creative.png", "avatar-creative.svg", "masthead-mountains.png", "bamboo-leaves.png", "deco-village.png", "deco-lake.png"])
+  for (const filename of ["avatar-administrative.png", "avatar-administrative.svg", "avatar-campus.png", "avatar-campus.svg", "avatar-cat.jpg", "avatar-civic.png", "avatar-civic.svg", "avatar-creative.png", "avatar-creative.svg", "masthead-mountains.png", "bamboo-leaves.png", "deco-village.png", "deco-lake.png", "sample-photo-female.jpg", "sample-photo-male.jpg"])
     copyFileSync(resolve(appsRoot, "web/public/templates", filename), resolve(templateTarget, filename));
 }
 console.log(`editor.html ${(editorHtml.length / 1024).toFixed(0)} KiB -> ${editorDirectories.length} clients`);

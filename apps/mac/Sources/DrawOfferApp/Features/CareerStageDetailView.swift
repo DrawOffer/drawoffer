@@ -69,10 +69,12 @@ struct CareerStageDetailView: View {
         // Transcription and review generation finish in the background; refresh while they run.
         .task(id: transcribing || generating) {
             guard transcribing || generating else { return }
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(10))
-                guard !Task.isCancelled else { return }
+            var attempt = 0
+            while await Polling.wait(attempt, first: 5, cap: 30, topic: "interview_session", ref: sessionID) {
+                attempt += 1
                 await load(quiet: true)
+                // 落定后投递列表、日程里的这一场也变了
+                if !(transcribing || generating) { await api.purgeCache(); return }
             }
         }
         .centeredSheet(item: $sheet) { kind in sheetView(kind) }
@@ -115,7 +117,7 @@ struct CareerStageDetailView: View {
                         }
                         Button("从资料库添加") { sheet = .library }
                     } label: { Text("···").font(LibraryTypography.sans(12, weight: .medium)).kerning(2) }
-                        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
                         .frame(minWidth: 58, minHeight: 30).overlay(RoundedRectangle(cornerRadius: 8).stroke(CareerPalette.border)).accessibilityLabel("更多操作")
                 }
             }

@@ -2,19 +2,15 @@
 
 `apps/mac` 是 SwiftUI 客户端，`apps/windows` 是 WinUI 3 客户端。界面使用系统控件，仅简历纸面嵌入离线网页视图，复用 Web 的 `renderResumePrintDocument`；`apps/desktop` 的 Electron 壳是独立线路。
 
-正式 App 注入 desktop Bearer HTTP 客户端，支持启动恢复、续期与退出。Mac 登录不再在客户端内扫码：点击登录打开浏览器 `/desktop-login`，在网页登录并点击“授权并打开客户端”后经 `drawoffer://auth/callback` 回到客户端完成领取（见[桌面会话契约](../../docs/api/http-contracts.md#桌面-bearer-会话)），Windows 仍为微信扫码。Mac 与 Windows 均直接进入工作区首页：未登录或恢复失败时仍可浏览随包提供的 9 套精选模板与虚构示例，不请求账号资源，不显示未经查询的个人数量；后端模板接口要求登录，所以游客只能看到随包示例，不代表完整在线模板目录。Mac 登录后模板页改为读取 `GET /api/resume-templates` 的真实启用模板（过滤已退役 `blank-cn`，显示使用次数），游客“使用此模板”先登录，成功后回到模板页按模板 key 匹配真实模板并打开创建弹窗。Mac 简历管理与原生编辑器见下文“Mac 我的简历”；Windows 仍只读。退出后清理准备状态并返回游客首页。Mac 的首页卡片、我的简历、模板、岗位看板与岗位详情、面试排期、文字与语音模拟面试、资料库、账号设置与 AI 对话均已使用原生页面接入现有接口，简历编辑覆盖文字格式、版式与模板切换；桌面端不提供注销账号、密码与微信绑定。Windows 仍以看板、排期、模拟面试与资料库为主。Mock 只用于 Core 测试。协议与权限边界见 [桌面会话契约](../../docs/api/http-contracts.md#桌面-bearer-会话)。
+正式 App 注入 desktop Bearer HTTP 客户端，支持启动恢复、续期与退出。Mac 登录不再在客户端内扫码：点击登录打开浏览器 `/desktop-login`，在网页登录并点击“授权并打开客户端”后经 `drawoffer://auth/callback` 回到客户端完成领取（见[桌面会话契约](../../docs/api/http-contracts.md#桌面-bearer-会话)），Windows 仍为微信扫码。Mac 与 Windows 均直接进入工作区首页：未登录或恢复失败时仍可浏览随包提供的 9 套精选模板与虚构示例，不请求账号资源，不显示未经查询的个人数量；后端模板接口要求登录，所以游客只能看到随包示例，不代表完整在线模板目录。Mac 登录后模板页改为读取 `GET /api/resume-templates` 的真实启用模板（过滤已退役 `blank-cn`，显示使用次数），游客“使用此模板”先登录，成功后回到模板页按模板 key 匹配真实模板并打开创建弹窗。Mac 简历管理与原生编辑器见下文“Mac 我的简历”；Windows 仍只读。退出后清理准备状态并返回游客首页。Mac 的首页、我的简历、模板、岗位看板与岗位详情、面试排期、文字与语音模拟面试、资料库、账号设置与 AI 对话均已使用原生页面接入现有接口，简历编辑覆盖文字格式、版式与模板切换；桌面端不提供注销账号、密码与微信绑定。Windows 仍以看板、排期、模拟面试与资料库为主。Mock 只用于 Core 测试。协议与权限边界见 [桌面会话契约](../../docs/api/http-contracts.md#桌面-bearer-会话)。
 
 ## 界面与 Web 对齐
 
 原生外壳以 `origin/dev` 中 `App.tsx` 实际挂载的 `apps/web/src/v3/Shell.tsx` 为准，使用 216px 侧栏和圆角内容面板：品牌、新建对话、首页、我的简历、简历模板、岗位看板、面试日程、模拟面试、资料库、最近对话与账号入口。`WorkspaceLayout.tsx` 的顶部导航不是该入口的视觉基准。原生默认展示首页；游客沿用 Web 空状态层级，示例不计入账号数量。品牌通过纸面构建脚本从 Web 同步；模板使用共享纸面渲染卡片网格与预览弹窗。字号、间距、颜色以 Dev 的 V3 CSS 为依据。AI 首页已实现 Dev 的游客引导布局（问候、输入区、快捷指令和三张引导卡）；Mac 登录后按真实数据生成首页卡片，并接入 AI 对话（见下文）；岗位看板和排期已接入本文说明的求职接口；系统窗口装饰、字体回退、原生控件和 Windows 实机视觉仍需验收，不能据此外壳宣称全部页面已一致。
 
-### 首页引导与输入
+### 首页
 
-首页参考 Dev 的 `AssistantPage.tsx`、`HomeCards.tsx`、`homeDashboard.ts` 与 `assistant.css`，采用 720px 居中正文、120px 输入框、三条快捷指令和三张 236px 引导卡。游客使用 Web 新用户的引导文案，发送与添加资料触发登录，不模拟 AI 回答。Mac 登录后由 Core 的 `HomeDashboard` 移植 Web `homeDashboard.ts` 规则：并行读取本人简历、本周起两周的排期（`start_at/end_at`）与进行中求职进程，三个卡片位依次取 Offer 待回复/今日面试/三天内笔试截止/本周安排，Offer 对比或最近编辑的简历，岗位推荐或求职进度；问候副标题与快捷指令随位置 1 变化。推荐岗位卡读取 `/api/job-matches/recommendations`，可计算时调用 `:ensure`，随后每 3 秒轮询、最多 20 次，各状态与 Web 文案一致。读取失败显示重新加载，不当作无数据。发送按钮把输入带入新的 AI 对话。
-
-首页在右侧内容区水平、垂直居中，正文最大宽度 720px，随窗口宽度收缩；移除页面级滚动容器与固定顶部留白。较矮窗口缩减间距、插图和卡片高度，Mac 支持的最小窗口为 1080×700。Windows 同步尺寸响应，并在过小窗口使用仅缩小的 Viewbox 防止截断，实机视觉仍需验证。输入框内部仍支持长文本编辑。
-
-输入只存当前窗口内存，切换页和取消登录保留；新建对话主动清空，退出或切换账号清空。不会写本地草稿文件或发送到后端。共用 `shared/home/content.json` 与三张引导插图，纸面构建同步到两端；插图源坐标取自 Dev HomeCards，修改后可运行 `node apps/native/scripts/build_home_art.mjs` 重新导出。
+Mac 登录后首页为 `HomeMemoryView`（macOS 设计稿 02A）：按长期记忆和模拟面试场次自动在新用户、练第一场、有记忆三种状态之间切换；游客显示 `GuestHomeView`。首页问候与对话共用的数据由 `HomeImproveModel` 并行读取本人简历、资料、面试场次、长期记忆与求职画像。
 
 ### 应用图标
 
@@ -59,6 +55,24 @@ App 共享一个会话协调器。Mac 窗口共享该实例；两端 App 的进�
 
 取消领取等待者不会取消共享领取；保存失败可以沿用同一 challenge 重试。业务 401 最多续期并重试一次，再次 401 清理登录态。退出先禁用本地会话，拒绝迟到写回；清理失败仍尝试远端撤销，远端失败保留进程内恢复证明供重试。该退出恢复信息不跨进程持久化，因此远端撤销未确认时不应强制结束进程。
 
+## Mac 读缓存与轮询
+
+为减轻服务端压力，Mac 会话协调器对少数 GET 做读缓存（规则见 Core `ReadCache`）：价格、语音能力、插件版本与模板列表 10 分钟；画像、偏好、投递与面试列表、面试概览、资料夹与简历列表 60 秒；岗位广场 120 秒；带 64 位内容哈希的公司 logo 长期保存，并落盘到 `~/Library/Caches/<bundle>/responses/`。同一请求在路上时后来的调用共用它，调用方被取消立即返回、不影响其他等待者。处理中状态（单场面试、模拟面试、资料、通知、积分、AI 对话）不缓存。
+
+作废规则（`ReadCache.affected`）：写请求前后只作废它影响到的读——账号设置的写只作废账号类读，资料库的写只作废资料夹，模拟面试作答不作废任何读，其余写作废全部用户数据；配置类与 logo 不受写请求影响。上传、导入、AI 对话、App 回到前台与后台任务落定时作废全部用户数据（配置类保留）；退出或换账号清空全部缓存。读到的始终是自己最新的修改。
+
+简历列表与单份简历另外用服务端的弱 ETag：会话协调器在内存里留着上一份正文和 ETag，缓存作废后再读时带 `If-None-Match`，没变时服务端回 304 不带正文。
+
+头像与简历图片除内存缓存外落盘到 `~/Library/Caches/<bundle>/images/<sha256(账号)>/`（目录 0700，总量 256 MiB，超出先删最久没用的），重启后不再下载；退出、登录失效或换账号时整个目录删除。
+
+登录期间 App `EventHub` 保持一条 `GET /api/events`（desktop Bearer，契约见主仓库 http-contracts“实时事件”）：`ready` 与业务 `change` 作废读缓存并唤醒等待对应 topic（`interview_session`、`mock_interview`、`parse_task`，带 ref 时只认那一条）的页面，`notification` 刷新消息中心。流正常结束 1 秒后重连；`404`（服务端没启用）不再连；`401` 不按登录失效处理（服务端尚未对桌面开放时也是 401），与 `503` 等一样按 3 秒起翻倍退避、最长 15 分钟。
+
+复盘、转写、评估、导入与资料解析等后台任务的等待统一走 App `Polling`：事件流连着时等对应事件，最长 60 秒兜底查一次（事件不重发，少数批量更新不发事件）；没连上时退回轮询，间隔从 2.5–5 秒起每次乘 1.5，封顶 10–30 秒。App 不在前台时暂停，回到前台立即补查。每次只查任务本身的状态（单场面试、单场模拟面试、资料列表、导入概览，均不进缓存），状态落定后才作废缓存并整页刷新。登录与支付结果的轮询发生在浏览器里，不受前台限制。
+
+简历导入时，单栏、有文字层的 PDF 由 Core `ResumeText`（PDFKit）在本机取出文字，以“原名.txt”的 `text/plain` 上传，服务端跳过文件转换与 OCR。扫描件、多栏（页宽 45% 以右起笔的行超过 15%）、乱码字体、加密或超过 10 页的 PDF，以及 DOCX（文本框与表格可能漏字），都照常上传原文件。服务端还不认 `.txt`（`415 UNSUPPORTED_IMPORT_FORMAT`）时，本次改用原文件重传（幂等键由原键派生），本进程之后都直接传原文件。资料库仍上传原文件，以保留原文件预览与下载。
+
+两处与 Web 不同的做法（同步 Web 时注意不要改回）：粘贴的岗位文字带“职位：”“公司：”这类标注时，先由 Core `JobDraftParser` 在本机抽字段进确认页，不调用 `parse-draft`、不扣积分；同一段文字再点一次“确认导入”才交给 AI。模拟面试配置页选了语音作答时，`LocalSpeech.prepare` 在后台预先下载本机识别资源（系统识别资源或 SenseVoice 模型），第一次录音就用本机识别。
+
 ## 验证入口与限制
 
 Mac 测试脚本兼容 CLT 的 Testing 框架路径，并在 CLT 残留旧 PackageDescription 私有接口时只修正临时副本，不修改系统文件。Windows Core 可在 macOS 上用 .NET 10 测试；WinUI XAML 编译与 Credential Locker 实机测试需要 Windows。平台测试使用唯一虚构 scope，并在 finally 清理；Mac 真实 Keychain 测试需显式设置 `RUN_DESKTOP_KEYCHAIN_TESTS=1`，Windows 需 `RUN_DESKTOP_CREDENTIAL_TESTS=1`，未启用时跳过。
@@ -73,6 +87,8 @@ Mac 测试脚本兼容 CLT 的 Testing 框架路径，并在 CLT 残留旧 Packa
 ## 纸面预览契约
 
 `build_renderer.mjs` 将预览 `paper.html`、可编辑纸面 `editor.html` 与编辑器引用的九个模板头像同步到 Mac 的 `DrawOfferRender/Resources` 和 Windows 的 `Assets/Renderer`；HTML 与模板头像均为忽略提交的生成资源，打包前必须先执行 `npm run build:native-renderer`。`check_renderer.mjs` 校验两端 HTML 与源头像的字节一致性。
+
+纸面样式按 Web 的拼法组装：`styles.css`、`app.css` 之后接 `resume-themes.css`（去掉其中的 `@import`，再把 `crafted-style-collection.css` 拼在后面）、打印样式和 Muse 样式；样式里的 `/templates/` 地址改写为包内相对路径。模板卡片、预览弹窗与编辑器换模板时，没有头像且模板显示系统默认头像的，按 Web `templateSamplePhoto` 的同一散列换成虚构示例证件照 `sample-photo-{female,male}.jpg`（Core `ResumeTemplate.previewRequest()`），只在纸面显示，不写进简历。示例照与模板装饰底图（山峦、竹叶、村落、湖面）随包放在 `templates/`，编辑器的 `drawoffer-paper://` scheme 只放行这些固定文件。编辑器沿用 Web `useCanvasPan`，按住纸面外的空白画布可拖动；选中头像时的“更换头像”与缩放提示若伸出模板的裁切区，会被平移回可见范围内。纸面固定按 A4 794 CSS 像素排版，再由 `paper.html` 按视图宽度整体 CSS `scale`（同 Web 卡片），原生侧不再用 `scaleEffect` 缩位图。我的简历卡片与首页简历纸用 `first_page_only`（Core `ResumeRenderRequest.firstPage()`，同 Web `firstPageOnly`）：不用智能一页、按 A4 分页后只画第一页。首页叠在面试纸后面的简历纸先离屏渲染再截图显示（`ResumePaperView(onSnapshot:)`），网页视图本身不受 SwiftUI 裁剪和层级约束。
 
 原生离线入口与 Web／PDF 加载相同的基础、应用、打印及 Muse 样式，复用 `renderResumePrintDocument`，使用同一份 canonical data、template snapshot 与 layout_plan。内容、模块顺序、模板结构、配色、图片及关键布局应保留；这不是字形、换行、分页或像素一致的承诺。Mac 使用 WebKit，Windows 使用 WebView2，最终 PDF 由 Chromium 生成，并使用其内嵌字体。最终排版以生成的 PDF 为准，原生模板舞台常驻显示差异提示。
 
@@ -101,7 +117,7 @@ Swift／C# 的纸面请求包含 `assets`。现有模板纸面入口在渲染前
 
 下载复用禁用 Cookie／重定向的原生 HTTP transport。流式读取同时校验响应 MIME、声明大小和实际大小；图片头、格式与像素尺寸通过校验后转换为 data URL。单次纸面最多下载 32 个去重资源，单张及全部私有图片合计不超过 10 MiB，单张最多 4000 万像素。这些是原生内存安全边界；PDF 的输入限制仍以服务端契约为准。Windows Core 校验 PNG／JPEG 头与尺寸，最终解码由 WebView 执行；损坏图片不会被当作整份预览成功而静默忽略。
 
-本次不建立图片缓存，也不写磁盘。图片仅存在当前准备结果和离线 WebView 中，每次准备重新请求；会话协调器按 origin 和当前账号取得凭据，并用 generation 拒绝退出／切换后的迟到结果，401 最多续期后重试一次。旧用户级路径在原生层先核对账号，简历级路径仍由后端核验归属。页面切换取消准备并清空旧纸面；Mac 销毁纸面时清空 HTML，Windows 卸载时关闭 WebView2。纸面导航限制在随包入口和空白页，网页不接收 Bearer 或 refresh。
+Mac 的私有图片在会话协调器内存里按路径复用（路径带上传时间与随机串，同一路径内容不变；总量 64 MiB，先进先出），并按账号落盘到系统缓存目录（见“Mac 读缓存与轮询”），退出、登录失效或换账号即清空内存与磁盘；Windows 仍每次准备重新请求。会话协调器按 origin 和当前账号取得凭据，并用 generation 拒绝退出／切换后的迟到结果，401 最多续期后重试一次。旧用户级路径在原生层先核对账号，简历级路径仍由后端核验归属。页面切换取消准备并清空旧纸面；Mac 销毁纸面时清空 HTML，Windows 卸载时关闭 WebView2。纸面导航限制在随包入口和空白页，网页不接收 Bearer 或 refresh。
 
 单张来源拒绝、404／403、网络、大小、格式或解码失败使用中性占位并显示“部分图片不可用，正文仍可预览”；正文及 layout_plan 保持原值。取消不转成图片失败，鉴权失效沿登录状态路径处理。Core 测试覆盖下载去重、输入来源、类型和体积、会话迟到结果及真实 HTTP 的 Cookie／重定向／流式大小边界；实际 Windows WebView2 图片展示仍需要 Windows 实机验收，Mac“我的简历”见下一节。
 
@@ -114,7 +130,7 @@ Swift／C# 的纸面请求包含 `assets`。现有模板纸面入口在渲染前
 
 卡片菜单提供预览、重命名、复制为新简历、分享链接、导出 PDF 与删除；达到 10 份上限时禁用新建与复制，最终以后端 `RESUME_LIMIT_REACHED` 为准。重命名经 `PUT /api/resumes/{id}` 只提交 `title` 与 `base_lock_version`；复制提交固定 `client_request_id`，网络结果不确定时可原样重试而不重复复制；删除前确认分享失效与求职记录解除关联。分享弹窗对齐 Web `SharePanel`：未创建时选择公开/仅自己、7 天/30 天/永久与是否允许下载；已创建时显示 `{origin}/share/{token}` 并可复制、调整可见性/有效期/下载、重新生成（保留可见性与下载，已过期按原有效时长顺延，推算不出默认 7 天）和删除。模板页“创建简历”弹窗提交 `POST /api/resumes {title, template_id}`，成功后进入“我的简历”并打开新简历预览；该接口没有幂等标识，网络不确定时引导先查看列表，避免重复创建。
 
-导入简历通过系统打开面板选择 Markdown/DOCX/PDF（最多 10 MiB，客户端先校验扩展名、空文件与大小），以固定 `Idempotency-Key` 提交 `POST /api/resumes/import`，模板沿用 Web 规则：取模板列表首项（管理端顺序里的导入默认）作为 `template_id`。导入任务卡读取 `GET /api/resume-overview` 的进行中与失败任务，进行中每 3 秒刷新，有任务结束即刷新列表；失败任务可经 `DELETE /api/resume-imports/{id}` 删除记录。新建按钮进入模板页。点击卡片或菜单“编辑”进入 `ResumeEditorView` 原生结构化编辑器（新建简历后也直接进入）：编辑姓名、一句话介绍、头像（上传 PNG/JPEG、调整 56–220px 尺寸、更换或移除）、联系方式，模块的类型与标题、条目字段（名称/单位/角色/学位/专业/地点/起止时间/链接）与内容块：段落（左/中/右对齐）、项目符号/编号列表（回车新增一项、可互换类型）、两栏/三栏/四栏信息行（两栏可调左栏宽度）与图片（上传、说明、10–100% 宽度、左/中/右/通栏）；支持增删与上下移动模块、条目和内容块。所有文字使用 `RichTextEditor.swift` 的原生富文本框，格式工具条对应 Web 选区工具：加粗（⌘B）、斜体（⌘I）、下划线（⌘U）、删除线、代码、6–48pt 字号、与 Web 相同色板的文字颜色和背景色、http(s) 链接、12 个图标与清除格式；格式真值保存在自定义文本属性中，显示样式由它重算，图标与行内图片以附件保留原始 JSON，粘贴一律按纯文本。段落里只输入“/”时显示斜杠插入条，可转为列表、分栏或图片。顶部工具栏：大纲跳转到模块，“顺序”弹窗拖动排序（双栏模板按侧栏/主栏分组、各栏内移动，可恢复 Web 默认语义顺序），“版式”弹层调整字体（思源宋体/霞鹜文楷/系统黑体）、正文字号 8–16pt、行距 1.1–1.8、上下 6–30mm 与左右 10–30mm 边距和智能一页（Core `ResumeTypeSettings` 移植 Web `styleToEditorSettings/editorSettingsToStyle`），“模板”弹窗按风格/场景筛选真实模板并以 `POST /api/resumes/{id}/apply-template` 切换（随请求提交当前正文与名称，未保存的版式设置在新模板上重新套用后待保存）。保存以 `PUT /api/resumes/{id}` 提交 `data`、`style`（与改名时的 `title`）和 `base_lock_version`；保存前按 Web `canonicalV1SourceDispositions` 重算来源处置，删除节点不留悬空引用，新节点使用随机 `node_` 标识。冲突（`RESUME_EDIT_CONFLICT`）时提示重新载入，不覆盖他处修改。右侧纸面停顿 0.4 秒后实时预览未保存内容：Core `ResumeLayout` 移植后端 `compile_layout_plan` 在本地生成版式计划（模板放不下某个模块类型时提示而不渲染），保存或切换模板后改用服务端返回的 layout_plan；纸面可在 40%–120% 间缩放。图片经 `POST /api/resumes/{id}/assets` 以 data URL 上传（单张 10 MiB，PNG/JPEG），返回地址写入简历。卡片菜单仍保留“在 Web 编辑器打开”，用默认浏览器打开 `{origin}/resumes/{id}/edit`（网页使用自己的登录态）。Web 画布内的所见即所得编辑在原生端以结构化表单加实时纸面替代。SwiftUI 部分尚未在 macOS 上编译和界面验收。
+导入简历通过系统打开面板选择 Markdown/DOCX/PDF（最多 10 MiB，客户端先校验扩展名、空文件与大小），以固定 `Idempotency-Key` 提交 `POST /api/resumes/import`，模板沿用 Web 规则：取模板列表首项（管理端顺序里的导入默认）作为 `template_id`。导入任务卡读取 `GET /api/resume-overview` 的进行中与失败任务，进行中每 3 秒刷新，有任务结束即刷新列表；失败任务可经 `DELETE /api/resume-imports/{id}` 删除记录。新建按钮进入模板页。点击卡片或菜单“编辑”进入 `ResumeEditorView` 原生结构化编辑器（新建简历后也直接进入）：编辑姓名、一句话介绍、头像（上传 PNG/JPEG、调整 56–220px 尺寸、更换或移除）、联系方式，模块的类型与标题、条目字段（名称/单位/角色/学位/专业/地点/起止时间/链接）与内容块：段落（左/中/右对齐）、项目符号/编号列表（回车新增一项、可互换类型）、两栏/三栏/四栏信息行（两栏可调左栏宽度）与图片（上传、说明、10–100% 宽度、左/中/右/通栏）；支持增删与上下移动模块、条目和内容块。正文在嵌入的离线 `editor.html`（Web 同一套 TipTap 编辑器与选区工具栏）里编辑。段落里只输入“/”时显示斜杠插入条，可转为列表、分栏或图片。顶部工具栏：大纲跳转到模块，“顺序”弹窗拖动排序（双栏模板按侧栏/主栏分组、各栏内移动，可恢复 Web 默认语义顺序），“版式”弹层调整字体（思源宋体/霞鹜文楷/系统黑体）、正文字号 8–16pt、行距 1.1–1.8、上下 6–30mm 与左右 10–30mm 边距和智能一页（Core `ResumeTypeSettings` 移植 Web `styleToEditorSettings/editorSettingsToStyle`），“模板”弹窗按风格/场景筛选真实模板并以 `POST /api/resumes/{id}/apply-template` 切换（随请求提交当前正文与名称，未保存的版式设置在新模板上重新套用后待保存）。保存以 `PUT /api/resumes/{id}` 提交 `data`、`style`（与改名时的 `title`）和 `base_lock_version`；保存前按 Web `canonicalV1SourceDispositions` 重算来源处置，删除节点不留悬空引用，新节点使用随机 `node_` 标识。冲突（`RESUME_EDIT_CONFLICT`）时提示重新载入，不覆盖他处修改。右侧纸面停顿 0.4 秒后实时预览未保存内容：Core `ResumeLayout` 移植后端 `compile_layout_plan` 在本地生成版式计划（模板放不下某个模块类型时提示而不渲染），保存或切换模板后改用服务端返回的 layout_plan；纸面可在 40%–120% 间缩放。图片经 `POST /api/resumes/{id}/assets` 以 data URL 上传（单张 10 MiB，PNG/JPEG），返回地址写入简历。卡片菜单仍保留“在 Web 编辑器打开”，用默认浏览器打开 `{origin}/resumes/{id}/edit`（网页使用自己的登录态）。Web 画布内的所见即所得编辑在原生端以结构化表单加实时纸面替代。SwiftUI 部分尚未在 macOS 上编译和界面验收。
 
 ## 原生岗位看板
 

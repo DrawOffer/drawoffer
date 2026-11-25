@@ -22,7 +22,7 @@ struct MockStage<Content: View>: View {
     @ViewBuilder var content: () -> Content
     var body: some View {
         GeometryReader { geometry in
-            let scale = min(geometry.size.width / width, geometry.size.height / height)
+            let scale = min(geometry.size.width / width, geometry.size.height / height, 1) // 只缩不放，放大会把字拉糊
             content().frame(width: width, height: height, alignment: .topLeading)
                 .scaleEffect(scale, anchor: .center)
                 .frame(width: geometry.size.width, height: geometry.size.height)

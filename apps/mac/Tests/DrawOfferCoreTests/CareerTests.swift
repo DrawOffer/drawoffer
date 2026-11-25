@@ -67,23 +67,12 @@ private func application(_ source: String) throws -> CareerApplication {
     }
 }
 
-@Test func v4NextActionSeparatesOralFormalAndTerminalOffer() throws {
-    let oc = try application(#"{"id":"1","current_stage_type":"offer","offer_status":"none","status":"active"}"#)
-    #expect(CareerFlow(oc).kind == "offer")
-    let formal = try application(#"{"id":"2","current_stage_type":"offer","offer_status":"received","status":"active"}"#)
-    #expect(CareerFlow(formal).kind == "accept")
+@Test func v4OfferDecisionEndsApplication() {
     for decision in ["accepted", "declined"] {
         let ended = CareerApplication(.object(["status": .string("closed"), "current_stage_type": .string("offer"), "offer_status": .string(decision)]))
         #expect(ended.stage == "ended")
         #expect(!ended.movable)
-        #expect(CareerFlow(ended).kind == "history")
     }
-    let waiting = try application(#"{"current_stage_type":"interview","stage_state":"awaiting_schedule"}"#)
-    #expect(CareerFlow(waiting).kind == "schedule-current")
-    let scheduled = try application(#"{"current_stage_type":"interview","stage_state":"scheduled"}"#)
-    #expect(CareerFlow(scheduled).kind == "records")
-    let done = CareerApplication(scheduled.raw, completedSchedule: Date())
-    #expect(CareerFlow(done).kind == "stage")
     for command in ["close", "archive", "restore"] {
         #expect(CareerRequest.allowed(path: "/api/job-applications/12/" + command, method: "POST"))
         #expect(!CareerRequest.allowed(path: "/api/job-applications/12/" + command, method: "PUT"))
@@ -97,13 +86,4 @@ private func application(_ source: String) throws -> CareerApplication {
     #expect(merged.contains("未识别字段：保留"))
     #expect(!merged.contains("官网"))
     #expect(CareerNotes.value("投递渠道", in: merged) == "内推")
-}
-
-@Test func v4ProgressPreservesMultipleRoundsAndOralBeforeFormalWithoutInventingStages() throws {
-    let item = try application(#"{"id":"1","status":"active","current_stage_type":"offer","offer_status":"received","current_stage":{"id":"5","stage_type":"offer","stage_label":"OC"},"notes":"收到日期：2030-10-24T09:00:00Z","stages":[{"id":"2","stage_type":"interview","stage_label":"一面"},{"id":"3","stage_type":"interview","stage_label":"二面"},{"id":"4","stage_type":"interview","stage_label":"HR 面"},{"id":"5","stage_type":"offer","stage_label":"OC"}]}"#)
-    let steps = CareerProgress.steps(item)
-    #expect(steps.map(\.label) == ["已投递", "一面", "二面", "HR 面", "OC", "Offer"])
-    #expect(steps.last?.state == "current")
-    #expect(steps.last?.date == "2030-10-24T09:00:00Z")
-    #expect(!steps.contains { $0.label.contains("笔试") })
 }

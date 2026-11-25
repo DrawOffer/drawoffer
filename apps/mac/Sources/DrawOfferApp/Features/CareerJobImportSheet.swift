@@ -21,6 +21,8 @@ struct CareerJobImportSheet: View {
     @State private var recognized = Set<String>()
     @State private var reviewSource: Tab?
     @State private var warnings: [String] = []
+    /// 已经在本机识别过的文字；同一段文字再点“确认导入”就交给 AI。
+    @State private var locallyParsed: String?
     @State private var expanded = Set<String>()
     @State private var busy = false
     @State private var error: String?
@@ -34,9 +36,9 @@ struct CareerJobImportSheet: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 head
-                if !reviewing { tabs.padding(.top, 20) }
+                if !reviewing { tabs.padding(.top, 27) }
                 if reviewing { summary } else {
-                    Text(hint).font(V3.sans(12)).foregroundStyle(V3.fnt).lineSpacing(3).padding(.top, 16).padding(.bottom, 10)
+                    Text(hint).font(V3.sans(12)).foregroundStyle(ImportInk.hint).lineSpacing(3).padding(.top, 18).padding(.bottom, 10)
                 }
                 Group {
                     switch tab {
@@ -50,7 +52,7 @@ struct CareerJobImportSheet: View {
             }
             .padding(.horizontal, 32).padding(.top, 28).padding(.bottom, 24)
             .frame(maxHeight: .infinity, alignment: .top)
-            Rectangle().fill(V3.line).frame(height: 1)
+            Rectangle().fill(ImportInk.divider).frame(height: 1)
             foot.padding(.horizontal, 32).frame(height: 72)
         }
         .frame(width: 640, height: 600)
@@ -64,9 +66,9 @@ struct CareerJobImportSheet: View {
     private var head: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("导入岗位").font(V3.serif(22)).foregroundStyle(V3.txt)
+                Text("导入岗位").font(V3.sans(20)).foregroundStyle(V3.txt).frame(height: 27)
                 Text(reviewing ? "识别完成，核对无误后创建岗位。" : "识别成岗位草稿，核对后放进看板「待投递」。")
-                    .font(V3.sans(13)).foregroundStyle(V3.sub)
+                    .font(V3.sans(13)).foregroundStyle(V3.fnt).frame(height: 18)
             }
             Spacer(minLength: 12)
             Button { cancel() } label: { Image(systemName: "xmark").font(.system(size: 12, weight: .medium)).foregroundStyle(V3.fnt).frame(width: 24, height: 24).contentShape(Rectangle()) }
@@ -80,12 +82,12 @@ struct CareerJobImportSheet: View {
                 let on = tab == item.0
                 Button { select(item.0) } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: item.1).font(.system(size: 12)).foregroundStyle(on ? V3.txt : V3.fnt)
-                        Text(item.2).font(V3.sans(13, weight: on ? .medium : .regular)).foregroundStyle(on ? V3.txt : V3.sub).lineLimit(1)
+                        Image(systemName: item.1).font(.system(size: 13)).foregroundStyle(on ? V3.txt : V3.fnt)
+                        Text(item.2).font(V3.sans(13, weight: on ? .medium : .regular)).foregroundStyle(on ? V3.txt : V3.fnt).lineLimit(1)
                     }
                     .frame(maxWidth: .infinity).frame(height: 32)
                     .background(on ? Color.white : .clear, in: RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(on ? V3.cl : .clear))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(on ? V3.sk2 : .clear))
                     .contentShape(Rectangle())
                 }.buttonStyle(.plain).disabled(busy).accessibilityAddTraits(on ? .isSelected : [])
             }
@@ -104,21 +106,21 @@ struct CareerJobImportSheet: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
                 Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(V3.green)
-                    .frame(width: 22, height: 22).background(V3.greenSoft, in: Circle())
+                    .frame(width: 22, height: 22).background(Color(hex: 0xE3F3E9), in: Circle())
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("已从\(reviewSource == .image ? "岗位截图" : "岗位文字")识别出 \(recognized.count) 个字段").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
-                    Text("没识别到的用橙色虚线标出，可以现在补，也可以之后改。").font(V3.sans(12)).foregroundStyle(V3.sub)
+                    Text("从\(reviewSource == .image ? "岗位截图" : "岗位文字")识别出 \(recognized.count) 个字段").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
+                    Text("没识别到的用橙色虚线标出，可以现在补，也可以之后改。").font(V3.sans(12)).foregroundStyle(V3.fnt)
                 }
                 Spacer(minLength: 8)
-                Button("查看原文") { select(reviewSource ?? .text) }.buttonStyle(.plain).font(V3.sans(12.5)).foregroundStyle(V3.link)
+                Button("查看原文") { select(reviewSource ?? .text) }.buttonStyle(.plain).font(V3.sans(12, weight: .medium)).foregroundStyle(V3.blue)
             }
-            .padding(.horizontal, 14).padding(.vertical, 12)
-            .background(V3.stage, in: RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, 14).frame(height: 65)
+            .background(Color(hex: 0xF6F6F4), in: RoundedRectangle(cornerRadius: 10))
             ForEach(warnings, id: \.self) { warning in
                 Text(warning).font(V3.sans(12)).foregroundStyle(V3.orange).padding(.horizontal, 12).padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .leading).background(V3.orangeSoft, in: RoundedRectangle(cornerRadius: 8))
             }
-        }.padding(.top, 20).padding(.bottom, 18)
+        }.padding(.top, 27).padding(.bottom, 20)
     }
 
     // MARK: 粘贴文字
@@ -131,18 +133,18 @@ struct CareerJobImportSheet: View {
                 .disabled(busy).opacity(busy ? 0.55 : 1)
                 .overlay(alignment: .topLeading) {
                     if text.isEmpty {
-                        Text("粘贴职位名称、岗位职责、任职要求、薪资和公司信息…").font(V3.sans(13)).foregroundStyle(V3.fnt2)
+                        Text("粘贴职位名称、岗位职责、任职要求、薪资和公司信息…").font(V3.sans(13)).foregroundStyle(ImportInk.placeholder)
                             .padding(.horizontal, 16).padding(.top, 10).allowsHitTesting(false)
                     }
                 }
                 .onChange(of: text) { _, _ in error = nil }
                 .accessibilityLabel("岗位文字")
             Text("\(text.count) / \(Self.limit)").font(V3.number(11, weight: .regular))
-                .foregroundStyle(text.count > Self.limit ? V3.red : V3.fnt2).padding(.trailing, 14).padding(.bottom, 10)
+                .foregroundStyle(text.count > Self.limit ? V3.red : ImportInk.placeholder).padding(.trailing, 14).padding(.bottom, 10)
         }
         .frame(minHeight: 140, maxHeight: .infinity)
         .background(.white, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(V3.cl))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(V3.sk2))
     }
 
     // MARK: 上传截图
@@ -162,18 +164,18 @@ struct CareerJobImportSheet: View {
                     Button("移除图片") { self.image = nil; preview = nil; error = nil }.buttonStyle(V3ButtonStyle(kind: .ghost, small: true)).disabled(busy)
                 }
                 .padding(16).frame(maxWidth: .infinity, minHeight: 140, maxHeight: .infinity)
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(V3.cl))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(V3.sk2))
             } else {
                 Button(action: chooseImage) {
-                    VStack(spacing: 10) {
+                    VStack(spacing: 12) {
                         Image(systemName: "arrow.up.to.line").font(.system(size: 16, weight: .medium)).foregroundStyle(V3.txt)
-                            .frame(width: 44, height: 44).background(.white, in: Circle()).overlay(Circle().stroke(V3.cl))
-                        Text("点击上传，或把截图拖进来").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
-                        Text("PNG 或 JPEG · 最大 10 MB · 每次一张").font(V3.sans(12)).foregroundStyle(V3.fnt)
+                            .frame(width: 43, height: 43).background(.white, in: Circle()).overlay(Circle().stroke(V3.cl))
+                        Text("点击上传，或把截图拖进来、直接粘贴（⌘V）").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
+                        Text("PNG、JPEG 或 WebP · 最大 10 MB · 每次一张").font(V3.sans(12)).foregroundStyle(ImportInk.hint)
                     }
                     .frame(maxWidth: .infinity, minHeight: 140, maxHeight: .infinity)
                     .background(dropping ? V3.field : Color(hex: 0xFAFAF8), in: RoundedRectangle(cornerRadius: 10))
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(dropping ? V3.txt : V3.sk2, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(dropping ? V3.txt : Color(hex: 0xCFCFCB), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).disabled(busy).accessibilityLabel("选择岗位截图")
@@ -186,10 +188,15 @@ struct CareerJobImportSheet: View {
                 ForEach(["截图里要有职位名称和公司", "一屏放不下就截最关键的一屏"], id: \.self) { tip in
                     HStack(spacing: 5) {
                         Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)).foregroundStyle(V3.green)
-                        Text(tip).font(V3.sans(12)).foregroundStyle(V3.sub)
+                        Text(tip).font(V3.sans(12)).foregroundStyle(V3.fnt)
                     }
                 }
             }
+        }
+        .background {
+            // ⌘V 直接粘贴剪贴板里的截图（与 Web 一致）；只在上传页挂载，不影响其他页的文字粘贴。
+            Button("") { pasteImage() }.keyboardShortcut("v", modifiers: .command)
+                .opacity(0).frame(width: 1, height: 1).allowsHitTesting(false).accessibilityHidden(true).disabled(busy)
         }
     }
 
@@ -207,10 +214,10 @@ struct CareerJobImportSheet: View {
                     choice("work_mode", "工作方式", [("onsite", "现场"), ("hybrid", "混合"), ("remote", "远程")]),
                 ])
                 HStack(alignment: .firstTextBaseline) {
-                    Text(reviewing ? "其余信息" : "更多信息").font(V3.sans(12, weight: .medium)).foregroundStyle(V3.sub)
+                    Text(reviewing ? "其余信息" : "更多信息").font(V3.sans(12, weight: .medium)).foregroundStyle(V3.fnt)
                     Spacer()
-                    Text("可选，之后在岗位详情也能改").font(V3.sans(11)).foregroundStyle(V3.fnt2)
-                }.padding(.top, 22).padding(.bottom, 8)
+                    Text("可选，之后在岗位详情也能改").font(V3.sans(11)).foregroundStyle(ImportInk.placeholder)
+                }.padding(.top, 24).padding(.bottom, 8)
                 FlowLayout(spacing: 8) {
                     ForEach(groups, id: \.0) { group in
                         let open = expanded.contains(group.0)
@@ -219,10 +226,10 @@ struct CareerJobImportSheet: View {
                         } label: {
                             HStack(spacing: 6) {
                                 Image(systemName: open ? "minus" : "plus").font(.system(size: 10, weight: .medium)).foregroundStyle(V3.sub)
-                                Text(group.1).font(V3.sans(12)).foregroundStyle(open ? V3.txt : V3.sub)
+                                Text(group.1).font(V3.sans(12)).foregroundStyle(Color(hex: 0x3A3A38))
                             }
                             .padding(.leading, 10).padding(.trailing, 12).frame(height: 28)
-                            .background(.white, in: Capsule()).overlay(Capsule().stroke(open ? V3.txt : V3.cl))
+                            .background(.white, in: Capsule()).overlay(Capsule().stroke(open ? V3.txt : V3.sk2))
                             .contentShape(Capsule())
                         }.buttonStyle(.plain).accessibilityAddTraits(open ? .isSelected : [])
                     }
@@ -268,7 +275,7 @@ struct CareerJobImportSheet: View {
             else { pending.append(cell); if pending.count == 2 { rows.append(pending); pending = [] } }
         }
         if !pending.isEmpty { rows.append(pending) }
-        return VStack(alignment: .leading, spacing: 14) {
+        return VStack(alignment: .leading, spacing: 16) {
             ForEach(Array(rows.enumerated()), id: \.offset) { row in
                 HStack(alignment: .top, spacing: 16) {
                     ForEach(row.element) { cell in cell.view.frame(maxWidth: .infinity, alignment: .leading) }
@@ -296,16 +303,16 @@ struct CareerJobImportSheet: View {
     private func label(_ key: String, _ title: String, required: Bool) -> some View {
         HStack(spacing: 8) {
             HStack(spacing: 3) {
-                Text(title).font(V3.sans(12, weight: .medium)).foregroundStyle(V3.sub)
+                Text(title).font(V3.sans(12, weight: .medium)).foregroundStyle(V3.fnt)
                 if required { Text("*").font(V3.sans(12, weight: .bold)).foregroundStyle(V3.red) }
             }
             Spacer(minLength: 0)
             if missing(key) { Text("未识别").font(V3.sans(11)).foregroundStyle(V3.orange) }
-        }
+        }.frame(height: 17)
     }
 
     private func box(_ key: String) -> some View {
-        RoundedRectangle(cornerRadius: 8).stroke(missing(key) ? V3.orange : V3.cl, style: StrokeStyle(lineWidth: 1, dash: missing(key) ? [4, 3] : []))
+        RoundedRectangle(cornerRadius: 8).stroke(missing(key) ? V3.orange : V3.sk2, style: StrokeStyle(lineWidth: 1, dash: missing(key) ? [4, 3] : []))
     }
 
     private func field(_ key: String, _ title: String, _ placeholder: String, required: Bool = false, icon: String? = nil, wide: Bool = false) -> Cell {
@@ -314,7 +321,7 @@ struct CareerJobImportSheet: View {
             label(key, title, required: required)
             HStack(spacing: 8) {
                 if let icon { Image(systemName: icon).font(.system(size: 12)).foregroundStyle(V3.fnt) }
-                TextField("", text: binding(key), prompt: Text(empty ? "可以现在补充，也可以之后改" : placeholder).foregroundStyle(empty ? V3.orange : V3.fnt2))
+                TextField("", text: binding(key), prompt: Text(empty ? "可以现在补充，也可以之后改" : placeholder).foregroundStyle(empty ? V3.orange : ImportInk.placeholder))
                     .textFieldStyle(.plain).font(V3.sans(13)).foregroundStyle(V3.txt).accessibilityLabel(title)
             }
             .padding(.horizontal, 12).frame(height: 38)
@@ -325,7 +332,7 @@ struct CareerJobImportSheet: View {
     private func area(_ key: String, _ title: String, _ placeholder: String) -> Cell {
         Cell(id: key, wide: true, view: AnyView(VStack(alignment: .leading, spacing: 6) {
             label(key, title, required: false)
-            TextField("", text: binding(key), prompt: Text(placeholder).foregroundStyle(V3.fnt2), axis: .vertical)
+            TextField("", text: binding(key), prompt: Text(placeholder).foregroundStyle(ImportInk.placeholder), axis: .vertical)
                 .textFieldStyle(.plain).font(V3.sans(13)).foregroundStyle(V3.txt).lineLimit(4...10).lineSpacing(3)
                 .padding(.horizontal, 12).padding(.vertical, 10).frame(minHeight: 88, alignment: .topLeading)
                 .background(.white, in: RoundedRectangle(cornerRadius: 8)).overlay(box(key)).accessibilityLabel(title)
@@ -341,7 +348,7 @@ struct CareerJobImportSheet: View {
                 ForEach(options, id: \.0) { option in Button(option.1) { form[key] = option.0 } }
             } label: {
                 HStack {
-                    Text(options.first { $0.0 == value }?.1 ?? "未填写").font(V3.sans(13)).foregroundStyle(value.isEmpty ? (missing(key) ? V3.orange : V3.fnt2) : V3.txt)
+                    Text(options.first { $0.0 == value }?.1 ?? "未填写").font(V3.sans(13)).foregroundStyle(value.isEmpty ? (missing(key) ? V3.orange : ImportInk.placeholder) : V3.txt)
                     Spacer(minLength: 4)
                     Image(systemName: "chevron.down").font(.system(size: 10, weight: .medium)).foregroundStyle(V3.fnt)
                 }
@@ -366,23 +373,23 @@ struct CareerJobImportSheet: View {
     }
 
     private var foot: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             if reviewing {
                 Button { select(reviewSource ?? .text) } label: {
                     HStack(spacing: 4) { Image(systemName: "chevron.left").font(.system(size: 11, weight: .medium)); Text("返回修改原文") }
-                }.buttonStyle(.plain).font(V3.sans(13)).foregroundStyle(V3.link).disabled(busy)
+                }.buttonStyle(.plain).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.blue).disabled(busy)
             } else if busy {
                 Text("关闭弹窗会取消识别").font(V3.sans(12)).foregroundStyle(V3.fnt)
             } else {
                 Button { installPlugin() } label: {
                     HStack(spacing: 4) { Text("用浏览器插件一键保存"); Image(systemName: "arrow.right").font(.system(size: 11, weight: .medium)) }
-                }.buttonStyle(.plain).font(V3.sans(13)).foregroundStyle(V3.link).lineLimit(1)
+                }.buttonStyle(.plain).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.blue).lineLimit(1)
             }
             Spacer(minLength: 8)
-            if tab != .manual && !busy { Text("按实际用量消耗积分").font(V3.sans(12)).foregroundStyle(V3.fnt) }
-            if !reviewing { Button("取消") { cancel() }.buttonStyle(V3ButtonStyle(kind: .ghost, height: 36)).keyboardShortcut(.cancelAction) }
+            if tab != .manual && !busy { Text("按实际用量消耗积分").font(V3.sans(12)).foregroundStyle(ImportInk.hint) }
+            if !reviewing { Button("取消") { cancel() }.buttonStyle(ImportPillStyle(dark: false)).keyboardShortcut(.cancelAction) }
             Button(primaryLabel) { submit() }
-                .buttonStyle(V3ButtonStyle(kind: .dark, height: 36, width: 96)).disabled(busy)
+                .buttonStyle(ImportPillStyle(dark: true)).disabled(busy)
                 .keyboardShortcut(.defaultAction)
         }
     }
@@ -409,17 +416,30 @@ struct CareerJobImportSheet: View {
     }
 
     private func chooseImage() {
-        let panel = NSOpenPanel(); panel.allowedContentTypes = [.png, .jpeg]; panel.allowsMultipleSelection = false
+        let panel = NSOpenPanel(); panel.allowedContentTypes = [.png, .jpeg, .webP]; panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         load(url)
     }
 
     private func load(_ url: URL) {
         let ext = url.pathExtension.lowercased()
-        guard ["png", "jpg", "jpeg"].contains(ext) else { error = "仅支持 PNG 或 JPEG 图片。"; return }
+        guard ["png", "jpg", "jpeg", "webp"].contains(ext) else { error = "仅支持 PNG、JPEG 或 WebP 图片。"; return }
         guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 10 * 1024 * 1024 else { error = "图片不能超过 10 MiB。"; return }
         guard let data = try? Data(contentsOf: url) else { error = "截图读取失败，请重新选择。"; return }
-        image = (data, url.lastPathComponent, ext == "png" ? "image/png" : "image/jpeg")
+        image = (data, url.lastPathComponent, ext == "png" ? "image/png" : ext == "webp" ? "image/webp" : "image/jpeg")
+        preview = NSImage(data: data); error = nil
+    }
+
+    /// ⌘V：剪贴板里是文件就按文件读，是截图就转成 PNG。
+    private func pasteImage() {
+        guard tab == .image, !busy else { return }
+        let board = NSPasteboard.general
+        if let url = (board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL])?.first { load(url); return }
+        var data = board.data(forType: .png)
+        if data == nil, let tiff = board.data(forType: .tiff) { data = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) }
+        guard let data else { error = "剪贴板里没有截图。"; return }
+        guard data.count <= 10 * 1024 * 1024 else { error = "图片不能超过 10 MiB。"; return }
+        image = (data, "粘贴的截图.png", "image/png")
         preview = NSImage(data: data); error = nil
     }
 
@@ -429,6 +449,15 @@ struct CareerJobImportSheet: View {
         if tab == .text && normalized.isEmpty { error = "请输入岗位文字。"; return }
         if tab == .text && normalized.count > Self.limit { error = "岗位文字不能超过 60000 个字符。"; return }
         let source = tab
+        // 带“职位：”“公司：”这类标注的文字先在本机识别，不调 AI、不扣积分；用户回来再点一次才走 AI。
+        if source == .text, locallyParsed != normalized, let local = JobDraftParser.parse(normalized) {
+            locallyParsed = normalized
+            form = local
+            recognized = Set(local.filter { !$0.value.isEmpty }.keys)
+            warnings = ["已按文字里的标注在本机识别，没有调用 AI，也没有消耗积分。识别不全时回到「粘贴岗位文字」再点一次「确认导入」，会改用 AI 识别。"]
+            reviewSource = source; tab = .manual; error = nil
+            return
+        }
         busy = true; error = nil
         defer { busy = false }
         do {
@@ -498,7 +527,7 @@ struct CareerJobImportSheet: View {
         case "JD_IMPORT_MODEL_NOT_CONFIGURED": return "\(image ? "图片" : "文字")解析模型尚未配置，请联系管理员或改为填写。"
         case "JD_IMPORT_PARSE_TIMEOUT": return "识别超时，请重试或改为填写。"
         case "JD_IMPORT_IMAGE_TOO_LARGE": return "图片不能超过 10 MiB。"
-        case "JD_IMPORT_IMAGE_UNSUPPORTED": return "仅支持 PNG 或 JPEG 图片。"
+        case "JD_IMPORT_IMAGE_UNSUPPORTED": return "仅支持 PNG、JPEG 或 WebP 图片。"
         case "JD_IMPORT_TEXT_TOO_LARGE": return "岗位文字不能超过 60000 个字符。"
         case "INSUFFICIENT_CREDITS", "CREDITS_INSUFFICIENT": return "积分不足，充值后再识别，或改为手工填写。"
         default: return "暂时无法识别，请稍后重试或改为填写。"
@@ -545,42 +574,50 @@ struct CareerPluginSheet: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
-                    Text("安装 DrawOffer 求职助手").font(V3.serif(22)).foregroundStyle(V3.txt)
+                    Text("安装岗位采集插件").font(V3.sans(20)).foregroundStyle(V3.txt).frame(height: 27)
                     Spacer(minLength: 12)
                     Button(action: close) { Image(systemName: "xmark").font(.system(size: 12, weight: .medium)).foregroundStyle(V3.fnt).frame(width: 24, height: 24).contentShape(Rectangle()) }
                         .buttonStyle(.plain).accessibilityLabel("关闭插件安装说明")
                 }
-                Text("下载后解压，按下面三步装到浏览器。").font(V3.sans(13)).foregroundStyle(V3.sub).padding(.top, 8)
+                Text("在招聘网站上一键把岗位存进投递看板 · 支持 Chrome / Edge").font(V3.sans(13)).foregroundStyle(V3.fnt).frame(height: 18).padding(.top, 6)
                 HStack(spacing: 12) {
-                    Image(systemName: "puzzlepiece.extension").font(.system(size: 16)).foregroundStyle(V3.txt)
-                        .frame(width: 36, height: 36).background(V3.field, in: RoundedRectangle(cornerRadius: 8))
+                    Image(systemName: "puzzlepiece.extension").font(.system(size: 18)).foregroundStyle(V3.txt)
+                        .frame(width: 40, height: 40).background(V3.field, in: RoundedRectangle(cornerRadius: 10))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("DrawOffer 求职助手").font(V3.sans(14, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1)
-                        Text(stateText).font(V3.sans(12)).foregroundStyle(failed ? V3.red : V3.fnt).lineLimit(1)
+                        Text("DrawOffer 岗位采集插件").font(V3.sans(14, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1)
+                        Text(stateText).font(V3.sans(12)).foregroundStyle(failed ? V3.red : ImportInk.hint).lineLimit(1)
                     }
                     Spacer(minLength: 8)
                     if status == "available" {
                         Button { openWeb() } label: { Image(systemName: "arrow.down.to.line").font(.system(size: 12, weight: .medium)); Text("下载 ZIP") }
-                            .buttonStyle(V3ButtonStyle(kind: .dark, height: 36))
+                            .buttonStyle(ImportPillStyle(dark: true))
                     }
-                }.padding(.top, 24)
-                Rectangle().fill(V3.line).frame(height: 1).padding(.top, 16)
-                Text("三步装好").font(V3.sans(12, weight: .medium)).foregroundStyle(V3.fnt).tracking(0.5).padding(.top, 24)
-                VStack(alignment: .leading, spacing: 24) {
-                    step("1", "解压到固定目录", Text("不能直接把 ZIP 拖进浏览器；解压后别移动。"))
-                    step("2", "打开扩展管理页", Text("地址栏输入 ") + code("chrome://extensions") + Text("。\nEdge 用 ") + code("edge://extensions") + Text("。"))
-                    step("3", "加载并固定到工具栏", Text("打开「开发者模式」→「加载已解压的扩展程序」→\n选择包含 ") + code("manifest.json") + Text(" 的目录，再把插件固定到工具栏。"))
-                }.padding(.top, 16)
-                Rectangle().fill(V3.line).frame(height: 1).padding(.top, 24)
-                (Text("装好后：").foregroundStyle(V3.txt).fontWeight(.medium) + Text("登录后点工具栏图标打开侧栏：在 BOSS 岗位页把岗位加入我的岗位，在其他网申页用求职画像填写。插件不会自动投递或批量采集。").foregroundStyle(V3.fnt))
-                    .font(V3.sans(12)).lineSpacing(3).fixedSize(horizontal: false, vertical: true).padding(.top, 12)
-            }.padding(.horizontal, 32).padding(.top, 28)
+                }
+                .padding(.horizontal, 14).frame(height: 72)
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(ImportInk.divider))
+                .padding(.top, 21)
+                Text("下载后三步装好").font(V3.sans(12, weight: .medium)).foregroundStyle(V3.fnt).padding(.top, 20)
+                VStack(alignment: .leading, spacing: 16) {
+                    step("1", "解压到一个固定目录", Text("浏览器不能直接安装 ZIP；解压后别移动或删除这个目录。"))
+                    step("2", "打开扩展管理页", Text("地址栏输入 chrome://extensions，Edge 输入 edge://extensions。"))
+                    step("3", "加载并固定到工具栏", Text("打开「开发者模式」→「加载已解压的扩展程序」→ 选含 manifest.json 的目录，再把插件固定到工具栏。"))
+                }.padding(.top, 12)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("装好后怎么用").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
+                    Text("登录 DrawOffer → 打开 BOSS 直聘岗位详情页 → 点工具栏的插件图标，核对后「确认导入」，岗位就进「待投递」。插件不会自动投递。")
+                        .font(V3.sans(12.5)).foregroundStyle(V3.fnt).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 14).frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(hex: 0xF6F6F4), in: RoundedRectangle(cornerRadius: 10))
+                .padding(.top, 20)
+            }.padding(.horizontal, 32).padding(.top, 29)
             Spacer(minLength: 0)
-            HStack(spacing: 10) {
-                Text("更新时覆盖原解压目录，再在扩展页点「重新加载」").font(V3.sans(12)).foregroundStyle(V3.fnt).lineLimit(1).truncationMode(.tail)
+            Rectangle().fill(ImportInk.divider).frame(height: 1)
+            HStack(spacing: 12) {
+                Text("更新时覆盖原目录，再在扩展页点「重新加载」").font(V3.sans(12)).foregroundStyle(ImportInk.hint).lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 8)
-                Button("完成", action: close).buttonStyle(V3ButtonStyle(kind: .ghost, height: 36)).keyboardShortcut(.defaultAction)
-            }.padding(.horizontal, 32).frame(height: 64)
+                Button("完成", action: close).buttonStyle(ImportPillStyle(dark: false)).keyboardShortcut(.defaultAction)
+            }.padding(.horizontal, 32).frame(height: 72)
         }
         .frame(width: 640, height: 612)
         .background(.white)
@@ -596,14 +633,13 @@ struct CareerPluginSheet: View {
         }
     }
 
-    private func code(_ value: String) -> Text { Text(value).font(.system(size: 12, design: .monospaced)).foregroundStyle(V3.txt) }
-
     private func step(_ index: String, _ title: String, _ body: Text) -> some View {
-        HStack(alignment: .top, spacing: 16) {
-            Text(index).font(V3.number(12, weight: .medium)).foregroundStyle(V3.fnt).frame(width: 16, height: 24, alignment: .leading)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(V3.sans(16, weight: .medium)).foregroundStyle(V3.txt).frame(height: 24)
-                body.font(V3.sans(14)).foregroundStyle(V3.sub).lineSpacing(4).fixedSize(horizontal: false, vertical: true)
+        HStack(alignment: .top, spacing: 13) {
+            Text(index).font(.system(size: 11)).foregroundStyle(V3.fnt).frame(width: 21, height: 21)
+                .overlay(Circle().stroke(V3.sk2)).padding(.top, 0)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(V3.sans(14, weight: .medium)).foregroundStyle(V3.txt).frame(height: 21, alignment: .leading)
+                body.font(V3.sans(12.5)).foregroundStyle(V3.fnt).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -621,5 +657,31 @@ struct CareerPluginSheet: View {
         guard var components = URLComponents(string: origin), components.scheme == "https" || components.host == "localhost" || components.host == "127.0.0.1" else { failed = true; return }
         components.path = "/career/jobs"; components.query = nil; components.fragment = nil
         if let url = components.url { NSWorkspace.shared.open(url) }
+    }
+}
+
+/// 03 弹窗里 Figma 直接取值的灰阶与分隔线（V3 令牌里没有的几档）。
+private enum ImportInk {
+    static let hint = Color(hex: 0x8A8A86)
+    static let placeholder = Color(hex: 0xA8A8A4)
+    static let divider = Color(hex: 0xE6E6E3)
+}
+
+/// 03 弹窗底栏的胶囊按钮：36 高、圆角 18；深色为墨黑实底，浅色为白底细边。
+private struct ImportPillStyle: ButtonStyle {
+    let dark: Bool
+    @Environment(\.isEnabled) private var enabled
+    func makeBody(configuration: Configuration) -> some View {
+        let pressed = configuration.isPressed
+        return HStack(spacing: 6) { configuration.label }
+            .font(V3.sans(13, weight: .medium)).lineLimit(1).fixedSize()
+            .foregroundStyle(dark ? Color.white : V3.txt)
+            .padding(.horizontal, 16).frame(height: 36)
+            .background {
+                if dark { Capsule().fill(pressed ? Color(hex: 0x0E0E0D) : V3.txt) }
+                else { Capsule().fill(pressed ? V3.field : .white).overlay(Capsule().stroke(V3.sk2)) }
+            }
+            .opacity(enabled ? 1 : 0.38)
+            .contentShape(Capsule())
     }
 }

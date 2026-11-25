@@ -13,24 +13,40 @@ struct AccountCreditsShortCard: View {
     let onCredits: () -> Void
     /// 例如（"改用 GPT 6 Luna 重新发送（约 1 积分）", 动作）。
     var fallback: (label: String, action: () -> Void)? = nil
+    /// 「把消息放回输入框」（Web 没有这一项，客户端保留原有入口）。
+    var restore: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(title).font(V3.sans(14, weight: .semibold)).foregroundStyle(V3.txt).frame(height: 20)
+            Text(title).font(V3.sans(14, weight: .medium)).foregroundStyle(V3.txt).frame(height: 20)
             Text(message).font(V3.sans(13)).foregroundStyle(V3.sub).lineHeight(13, 20).fixedSize(horizontal: false, vertical: true).padding(.top, 8)
             HStack(spacing: 10) {
-                Button("开通会员", action: onPlans).buttonStyle(V3ButtonStyle(kind: .dark, height: 36))
-                Button("购买积分", action: onCredits).buttonStyle(V3ButtonStyle(kind: .ghost, height: 36))
+                // 05.01：开通会员是系统 Prominent 按钮（墨黑、圆角 7），购买积分是白底 #E4E4E0 描边 38 高
+                Button("开通会员", action: onPlans).buttonStyle(.borderedProminent).tint(V3.txt).controlSize(.large)
+                    .buttonBorderShape(.roundedRectangle(radius: 7)).font(V3.sans(13, weight: .medium))
+                Button("购买积分", action: onCredits).buttonStyle(CreditsShortOutlineStyle())
                 if let fallback {
                     Button(action: fallback.action) { Text(fallback.label).underline() }
                         .buttonStyle(.plain).font(V3.sans(13)).foregroundStyle(V3.sub).padding(.leading, 2)
                 }
-            }.padding(.top, 18)
+                if let restore {
+                    Button("把消息放回输入框", action: restore).buttonStyle(.plain).font(V3.sans(12)).foregroundStyle(V3.link)
+                }
+            }.padding(.top, 17)
         }
-        .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 20)
+        .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 19)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.white, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(V3.cl))
+        .background(.white, in: RoundedRectangle(cornerRadius: 11.5))
+        .overlay(RoundedRectangle(cornerRadius: 11.5).stroke(V3.cl))
         .accessibilityElement(children: .contain)
+    }
+}
+
+/// 05.01 的「购买积分」：白底、#E4E4E0 描边、圆角 6.5、38 高。
+private struct CreditsShortOutlineStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt).padding(.horizontal, 16).frame(height: 38)
+            .background(configuration.isPressed ? V3.field : Color.white, in: RoundedRectangle(cornerRadius: 6.5))
+            .overlay(RoundedRectangle(cornerRadius: 6.5).stroke(V3.cl)).contentShape(RoundedRectangle(cornerRadius: 6.5))
     }
 }

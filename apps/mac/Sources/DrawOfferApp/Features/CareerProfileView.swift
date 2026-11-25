@@ -22,12 +22,11 @@ struct CareerProfileView: View {
         GeometryReader { geometry in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    crumb
                     if failed && profile == nil {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("暂时无法读取求职画像").font(V3.serif(18)).foregroundStyle(V3.txt)
                             Button("重新加载") { Task { await load() } }.buttonStyle(V3ButtonStyle(kind: .ghost))
-                        }.padding(.top, 40)
+                        }.padding(.top, 61)
                     } else if let profile, let intent {
                         head(profile)
                         sections(profile, intent)
@@ -36,6 +35,8 @@ struct CareerProfileView: View {
                     }
                 }
                 .frame(width: min(900, max(480, geometry.size.width - 64)), alignment: .leading)
+                // 03.02 稿没有返回条（从个人菜单直接进入）；从账号设置进来的返回按钮浮在标题上方的空白里，不占版面
+                .overlay(alignment: .topLeading) { crumb }
                 .padding(.top, 33).padding(.bottom, 72).frame(maxWidth: .infinity)
             }.scrollIndicators(.never)
         }
@@ -69,7 +70,7 @@ struct CareerProfileView: View {
                 Text(saving > 0 ? " · 保存中…" : " · 已保存").foregroundStyle(Color(hex: 0x96968F))
             }.font(V3.sans(13)).fixedSize().frame(height: 17)
         }
-        .padding(.top, 14).padding(.bottom, 30)
+        .padding(.top, 21).padding(.bottom, 30)
         .overlay(alignment: .bottom) { AccountHairline() }
     }
 
@@ -274,8 +275,9 @@ enum AccountProfileModel {
         var options: [String]? = nil; var wide = false; var gpa = false; var month: String? = nil }
     static let inputs: [String: [Input]] = [
         "education": [
-            Input(label: "学校", field: "学校"), Input(label: "学院", field: "学院"),
-            Input(label: "学历学位", field: "学历学位", options: ["博士", "硕士", "本科", "大专", "高中"]), Input(label: "专业", field: "专业"),
+            // 占位字照 03.04 稿
+            Input(label: "学校", field: "学校", placeholder: "学校全称"), Input(label: "学院", field: "学院", placeholder: "例如 计算机学院"),
+            Input(label: "学历学位", field: "学历学位", placeholder: "选择", options: ["博士", "硕士", "本科", "大专", "高中"]), Input(label: "专业", field: "专业", placeholder: "专业全称"),
             Input(label: "开始时间", field: "开始时间", month: "start"), Input(label: "结束时间", field: "结束时间", month: "end"),
             Input(label: "GPA", supplement: "gpa", placeholder: "例如 3.6 / 4.0", gpa: true), Input(label: "专业排名", supplement: "major_rank", placeholder: "例如 5 / 120"),
         ],
@@ -401,6 +403,8 @@ struct AccountProfileSection<Content: View>: View {
     var desc: String? = nil
     var action: (String, () -> Void)? = nil
     var last = false
+    /// 没填的分区只占标题（和说明）一行，不留内容间距（03.03）。
+    var empty = false
     @ViewBuilder var content: () -> Content
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -415,7 +419,7 @@ struct AccountProfileSection<Content: View>: View {
                     }.buttonStyle(.plain).font(V3.sans(13)).foregroundStyle(V3.blue).accessibilityLabel(action.0)
                 }
             }
-            content().padding(.top, desc == nil ? 25 : 24)
+            if !empty { content().padding(.top, desc == nil ? 25 : 24) }
         }
         .padding(.top, 35).padding(.bottom, 32)
         .overlay(alignment: .bottom) { if !last { AccountHairline() } }
@@ -485,11 +489,17 @@ struct AccountProfileInput: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        TextField("", text: $draft, prompt: placeholder.map { Text($0).foregroundStyle(V3.fnt2) })
+        // 占位字自己叠：整框设了字色后，macOS 26 会让 prompt 也变成正文色。
+        TextField("", text: $draft)
             .textFieldStyle(.plain).font(V3.sans(14)).foregroundStyle(V3.txt).focused($focused)
             .padding(.horizontal, 15).frame(height: 40)
+            .overlay(alignment: .leading) {
+                if draft.isEmpty, let placeholder {
+                    Text(placeholder).font(V3.sans(14)).foregroundStyle(V3.fnt2).padding(.horizontal, 15).allowsHitTesting(false)
+                }
+            }
             .background(.white, in: RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(focused ? V3.txt.opacity(0.5) : V3.cl))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(focused ? V3.txt : V3.cl))
             .accessibilityLabel(label)
             .onAppear { draft = value }
             .onChange(of: value) { if !focused { draft = value } }
@@ -517,7 +527,7 @@ struct AccountProfileTextArea: View {
         TextEditor(text: $draft).font(V3.sans(14)).foregroundStyle(V3.txt).scrollContentBackground(.hidden).focused($focused)
             .padding(.horizontal, 10).padding(.vertical, 10).frame(height: 96)
             .background(.white, in: RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(focused ? V3.txt.opacity(0.5) : V3.cl))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(focused ? V3.txt : V3.cl))
             .accessibilityLabel(label)
             .onAppear { draft = value }
             .onChange(of: value) { if !focused { draft = value } }
@@ -530,6 +540,7 @@ struct AccountProfileSelect: View {
     let label: String
     let value: String
     let options: [String]
+    var placeholder = "请选择"
     let change: (String) -> Void
     var body: some View {
         Menu {
@@ -540,7 +551,7 @@ struct AccountProfileSelect: View {
             }
         } label: {
             HStack(spacing: 8) {
-                Text(value.isEmpty ? "请选择" : value).font(V3.sans(14)).foregroundStyle(value.isEmpty ? V3.fnt2 : V3.txt).frame(maxWidth: .infinity, alignment: .leading)
+                Text(value.isEmpty ? placeholder : value).font(V3.sans(14)).foregroundStyle(value.isEmpty ? V3.fnt2 : V3.txt).frame(maxWidth: .infinity, alignment: .leading)
                 Image(systemName: "chevron.down").font(.system(size: 9, weight: .medium)).foregroundStyle(V3.fnt)
             }
             .padding(.horizontal, 15).frame(height: 40)
@@ -548,7 +559,8 @@ struct AccountProfileSelect: View {
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(V3.cl))
             .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden).buttonStyle(.plain).accessibilityLabel(label)
+        // .borderlessButton 在 macOS 26 会把自定义 label 压平成「图标 + 文字」，外框和尺寸都丢；.button + .plain 才按原样画。
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).accessibilityLabel(label)
     }
 }
 
@@ -566,7 +578,8 @@ private struct AccountProfileExperience: View {
         let supplements = experience["supplements"] ?? .null
         ForEach(AccountProfileModel.groups(experience, drafts: drafts), id: \.key) { group in
             AccountProfileSection(title: group.label, desc: AccountProfileModel.groupDescriptions[group.key],
-                          action: group.addable ? ("添加\(group.label)", { drafts.append(AccountProfileDraft(id: AccountProfileModel.newID(), group: group.key)) }) : nil) {
+                          action: group.addable ? ("添加\(group.label)", { drafts.append(AccountProfileDraft(id: AccountProfileModel.newID(), group: group.key)) }) : nil,
+                          empty: group.items.isEmpty) {
                 if !group.items.isEmpty {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(zip(group.items.indices, group.items)), id: \.1.id) { index, item in
@@ -653,7 +666,7 @@ private struct AccountProfileEntryForm: View {
             if let month = input.month {
                 AccountYearMonthField(label: input.label, value: current, allowPresent: month == "end") { commit(input, $0) }
             } else if let options = input.options {
-                AccountProfileSelect(label: input.label, value: current, options: options) { commit(input, $0) }
+                AccountProfileSelect(label: input.label, value: current, options: options, placeholder: input.placeholder ?? "请选择") { commit(input, $0) }
             } else {
                 AccountProfileInput(label: input.label, value: current, placeholder: input.placeholder) { commit(input, $0) }
             }
@@ -730,7 +743,7 @@ private struct AccountProfileSkills: View {
                     .onChange(of: focused) { if !focused { add() } }
             } else {
                 Button { adding = "" } label: {
-                    HStack(spacing: 4) { Image(systemName: "plus").font(.system(size: 11)); Text("添加技能") }
+                    HStack(spacing: 4) { Image(systemName: "plus").font(.system(size: 15, weight: .light)); Text("添加技能") }
                         .font(V3.sans(14)).foregroundStyle(V3.sub).padding(.horizontal, 13).frame(height: 34)
                         .overlay(Capsule().stroke(V3.cl, style: StrokeStyle(lineWidth: 1, dash: [3, 2]))).contentShape(Capsule())
                 }.buttonStyle(.plain)

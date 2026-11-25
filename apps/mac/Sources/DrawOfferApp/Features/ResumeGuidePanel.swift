@@ -139,7 +139,7 @@ struct ResumeGuidePanel: View {
         ResumeTalkFlow(spacing: 9) {
             if let primary, let onPrimary { ResumeTalkChip(title: primary, disabled: disabled, action: onPrimary) }
             if let left { left }
-        }.padding(.top, 22)
+        }.padding(.top, 17)
     }
 
     private func textLink(_ title: String, disabled: Bool = false, _ action: @escaping () -> Void) -> AnyView {
@@ -190,9 +190,9 @@ struct ResumeGuidePanel: View {
             Button(action: submit) { Image(systemName: "arrow.up").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white).frame(width: 30, height: 30).background(ready ? V3.txt : ResumeTalk.line, in: Circle()) }
                 .buttonStyle(.plain).disabled(!ready).accessibilityLabel("发送")
         }
-        .padding(.leading, 16).padding(.trailing, 8).padding(.vertical, 8).frame(minHeight: 47)
+        .padding(.leading, 16.5).padding(.trailing, 8).padding(.vertical, 8).frame(minHeight: 47)
         .background(.white, in: RoundedRectangle(cornerRadius: 13.5)).overlay(RoundedRectangle(cornerRadius: 13.5).stroke(ResumeTalk.fieldLine))
-        .padding(.top, 24)
+        .padding(.top, 25)
     }
 
     private func meta(_ text: String, link: String, action: @escaping () -> Void) -> some View {
@@ -890,7 +890,7 @@ private struct GuideMaterialsStep: View {
             HStack(spacing: 9) {
                 if done { ResumeTalkChip(title: G.nextLabel("materials"), action: next) }
                 else { ResumeTalkChip(title: files.isEmpty ? "没有资料，一栏一栏填" : "不用资料了，一栏一栏填", disabled: running, action: next) }
-            }.padding(.top, 22)
+            }.padding(.top, 17)
         }
     }
 
@@ -1081,16 +1081,4 @@ private struct CityChips: View {
 
 private extension String {
     var trimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) }
-}
-
-
-/// `.wb3-guide-primary`：44 高胶囊、内边距 22、15/500 白字墨黑底，最宽 280；禁用时 #dcdcd8。
-struct GuidePrimaryStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var enabled
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(V3.sans(13, weight: .medium)).foregroundStyle(.white).lineLimit(1).truncationMode(.tail)
-            .padding(.horizontal, 16).frame(height: 32).frame(maxWidth: 280)
-            .background(enabled ? V3.txt.opacity(configuration.isPressed ? 0.85 : 1) : Color(hex: 0xDCDCD8), in: RoundedRectangle(cornerRadius: 6))
-            .fixedSize()
-    }
 }

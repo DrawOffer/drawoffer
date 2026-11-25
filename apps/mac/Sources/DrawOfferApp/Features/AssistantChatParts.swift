@@ -301,7 +301,8 @@ struct AssistantActionCards: View {
         let state = card.text("status") == "processing" ? "解析中" : card.text("status") == "failed" ? "解析失败" : ""
         let subtitle = [card.text("subtitle"), state].filter { !$0.isEmpty }.joined(separator: " · ")
         let tab: ChatPreviewTab? = kind == "resume" ? ChatPreviewTab(kind: .resume, id: card.text("target_id"), label: card.text("title"))
-            : kind == "dataset" ? ChatPreviewTab(kind: .dataset, id: card.text("target_id"), label: card.text("title")) : nil
+            : kind == "dataset" ? ChatPreviewTab(kind: .dataset, id: card.text("target_id"), label: card.text("title"))
+            : kind == "job" && !card.text("target_id").isEmpty ? ChatPreviewTab(kind: .job, id: card.text("target_id"), label: card.text("title")) : nil
         return cardButton(symbol: ["resume": "doc.text", "dataset": "folder", "job": "briefcase"][kind] ?? "doc", title: card.text("title"), subtitle: subtitle,
                           failed: card.text("status") == "failed", active: tab.map { activeKey == $0.key } ?? false) {
             if let tab { openPreview(tab) }
@@ -341,7 +342,10 @@ struct AssistantActionCards: View {
     private func object(_ item: JSONValue) -> some View {
         let kind = item.text("kind")
         let company = item.text("company").nilIfEmpty ?? item.text("title")
+        let tab = Self.objectTab(item)
+        let active = tab.map { activeKey == $0.key } ?? false
         return Button {
+            if let tab { openPreview(tab); return }
             switch kind {
             case "application": router.jump(.application(item.text("id")))
             case "pool_job": router.jump(.section(.opportunities))
@@ -354,18 +358,35 @@ struct AssistantActionCards: View {
                     if kind == "mock_interview" { Image(systemName: "mic").font(.system(size: 15, weight: .light)).foregroundStyle(V3.sub) }
                     else if kind == "match" { Image(systemName: "gauge.with.dots.needle.33percent").font(.system(size: 17, weight: .light)).foregroundStyle(V3.sub) }
                     else {
-                        Text(String(company.prefix(1))).font(V3.sans(14, weight: .medium)).foregroundStyle(Color(hex: 0x454842))
-                            .frame(width: 31, height: 31).background(.white, in: RoundedRectangle(cornerRadius: 7.5)).overlay(RoundedRectangle(cornerRadius: 7.5).stroke(Color(hex: 0xE3E3DF)))
+                        PoolLogo(name: company, url: item.text("logo_url"), size: 32)
                     }
-                }.frame(width: 31, height: 31)
+                }.frame(width: 32, height: 32)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(kind == "match" ? item.text("subtitle").nilIfEmpty ?? item.text("title") : item.text("title")).font(V3.sans(13.5, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1)
                     if !item.text("subtitle").isEmpty, kind != "match" { Text(item.text("subtitle")).font(V3.sans(12)).foregroundStyle(Color(hex: 0x8A8A84)).lineLimit(1) }
                 }
             }.padding(.leading, 11).padding(.trailing, 14).frame(height: 53)
-                .background(.white, in: RoundedRectangle(cornerRadius: 9.5)).overlay(RoundedRectangle(cornerRadius: 9.5).stroke(V3.cl))
+                .background(.white, in: RoundedRectangle(cornerRadius: 9.5)).overlay(RoundedRectangle(cornerRadius: 9.5).stroke(active ? Color(hex: 0x9E9E99) : V3.cl))
                 .contentShape(Rectangle())
         }.buttonStyle(AssistantCardHover())
+    }
+
+    /// 读工具找到的对象在右侧预览里打开（Web `objectPreview`）；匹配度打开那个岗位并带上简历。
+    static func objectTab(_ item: JSONValue) -> ChatPreviewTab? {
+        let id = item.text("id")
+        guard !id.isEmpty else { return nil }
+        let base = { (kind: ChatPreviewTab.Kind, label: String) in
+            ChatPreviewTab(kind: kind, id: id, label: label, resumeID: kind == .job ? item.text("resume_id").nonEmptyValue : nil,
+                           company: item.text("company").nonEmptyValue, logoURL: item.text("logo_url").nonEmptyValue)
+        }
+        switch item.text("kind") {
+        case "match": return base(.job, item.text("subtitle").nonEmptyValue ?? item.text("title"))
+        case "pool_job": return base(.poolJob, item.text("title"))
+        case "job": return base(.job, item.text("title"))
+        case "application": return base(.application, item.text("title"))
+        case "mock_interview": return base(.mockInterview, item.text("title"))
+        default: return nil
+        }
     }
 
     private func cardButton(symbol: String, title: String, subtitle: String, failed: Bool = false, go: Bool = false, active: Bool, action: @escaping () -> Void) -> some View {
@@ -748,7 +769,6 @@ struct AssistantContextPanel: View {
                 HStack(spacing: 10) {
                     Image(systemName: "square.and.arrow.up").font(.system(size: 11)).foregroundStyle(V3.sub)
                     Text("上传本地文件").font(V3.sans(14)).foregroundStyle(Color(hex: 0x33332F))
-                    Text("图片、文档和录音").font(V3.sans(12)).foregroundStyle(Color(hex: 0xA3A39C))
                     Spacer(minLength: 0)
                 }.padding(.horizontal, 20).frame(height: 46).contentShape(Rectangle())
             }.buttonStyle(.plain)
@@ -807,8 +827,8 @@ struct AssistantUsagePanel: View {
     static let reserve = 16_384.0
     static let maxWindow = 200_000.0
     static let categories: [(String, String, Color)] = [
-        ("conversation", "对话记录", V3.blue), ("materials", "引用资料", V3.orange), ("memory", "求职记忆", V3.purple),
-        ("attachments", "附件", V3.green), ("system", "系统指令与工具", Color(hex: 0xA8A49A)),
+        ("conversation", "对话记录", Color(hex: 0x3F6FD8)), ("materials", "引用资料", Color(hex: 0xD9822B)), ("memory", "求职记忆", Color(hex: 0x8A5CC7)),
+        ("attachments", "附件", Color(hex: 0x3B9A5B)), ("system", "系统指令与工具", Color(hex: 0xB4B4AE)),
     ]
 
     /// 弹层里的数一律取整到 k（Web `formatTokens`）。
@@ -830,38 +850,38 @@ struct AssistantUsagePanel: View {
         VStack(alignment: .leading, spacing: 0) {
             if let tokens, let percent {
                 HStack {
-                    Text("上下文").font(V3.sans(12.5)).foregroundStyle(V3.txt)
+                    Text("上下文").font(V3.sans(13.5, weight: .medium)).foregroundStyle(Color(hex: 0x55554F))
                     Spacer()
-                    Text("\(Self.format(tokens)) / \(Self.format(compactAt))（\(Int(percent.rounded()))%）").font(V3.number(12.5, weight: .medium))
-                        .foregroundStyle(high ? V3.orange : V3.txt)
+                    Text("\(Self.format(tokens)) / \(Self.format(compactAt))（\(Int(percent.rounded()))%）").font(V3.number(13.5, weight: .medium))
+                        .foregroundStyle(high ? V3.orange : Color(hex: 0x1D1D1B))
                 }.frame(height: 16)
                 GeometryReader { geometry in
-                    HStack(spacing: 1.5) {
+                    HStack(spacing: 2) {
                         if case .object = breakdown {
                             ForEach(rows, id: \.0) { key, _, color in color.frame(width: max(2, geometry.size.width * min(1, (breakdown?[key]?.numberValue ?? 0) / compactAt))) }
-                        } else { V3.blue.frame(width: geometry.size.width * min(1, tokens / compactAt)) }
+                        } else { Color(hex: 0x3F6FD8).frame(width: geometry.size.width * min(1, tokens / compactAt)) }
                         Spacer(minLength: 0)
-                    }.background(Color(hex: 0xEEEEEA)).clipShape(Capsule())
+                    }.background(Color(hex: 0xEFEFEC)).clipShape(Capsule())
                 }.frame(height: 6).padding(.top, 12).padding(.bottom, 10)
                 ForEach(rows, id: \.0) { key, name, color in
                     let value = breakdown?[key]?.numberValue ?? 0
                     line(color: color, name: name, detail: details[key], value: value, compactAt: compactAt, muted: false)
                 }
-                line(color: Color(hex: 0xE4E4E0), name: "剩余空间", detail: high ? "满了自动压缩" : nil, value: max(0, compactAt - tokens), compactAt: compactAt, muted: true)
+                line(color: Color(hex: 0xE6E6E2), name: "剩余空间", detail: high ? "满了自动压缩" : nil, value: max(0, compactAt - tokens), compactAt: compactAt, muted: true)
             } else {
                 Text("较早的对话已压缩成摘要").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
                 Text("下次回复后重新计算用量；引用的资料、记忆和附件仍可随时读取。").font(V3.sans(12)).foregroundStyle(V3.sub)
                     .fixedSize(horizontal: false, vertical: true).padding(.top, 6)
             }
-            Rectangle().fill(V3.line).frame(height: 1).padding(.top, 10)
+            Rectangle().fill(Color(hex: 0xEEEEEA)).frame(height: 1).padding(.top, 10)
             HStack {
                 Text([modelName, "用到 \(Self.format(compactAt)) 时自动压缩"].compactMap { $0 }.joined(separator: " · "))
-                    .font(V3.sans(11)).foregroundStyle(Color(hex: 0x8A8A84)).lineLimit(1)
+                    .font(V3.sans(12)).foregroundStyle(Color(hex: 0x8A8A84)).lineLimit(1)
                 Spacer(minLength: 8)
                 if tokens != nil {
                     Button(action: compact) {
-                        Text("压缩上下文").font(V3.sans(12, weight: .medium)).foregroundStyle(V3.txt).padding(.horizontal, 10).frame(height: 24)
-                            .background(V3.field, in: RoundedRectangle(cornerRadius: 6))
+                        Text("压缩上下文").font(V3.sans(12.5, weight: .medium)).foregroundStyle(Color(hex: 0x1D1D1B)).frame(width: 87, height: 27)
+                            .background(Color(hex: 0xF2F2EF), in: RoundedRectangle(cornerRadius: 8))
                     }.buttonStyle(.plain).disabled(compactDisabled).opacity(compactDisabled ? 0.45 : 1)
                 }
             }.padding(.top, 12)
@@ -869,20 +889,20 @@ struct AssistantUsagePanel: View {
         .padding(.horizontal, 19).padding(.top, 17).padding(.bottom, 15)
         .frame(width: 340)
         .background(.white, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(V3.cl))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(hex: 0xE6E6E2)))
         .shadow(color: .black.opacity(0.08), radius: 10, y: 6)
         .accessibilityElement(children: .contain).accessibilityLabel("上下文用量")
     }
 
     private func line(color: Color, name: String, detail: String?, value: Double, compactAt: Double, muted: Bool) -> some View {
         HStack(spacing: 8) {
-            RoundedRectangle(cornerRadius: 1.5).fill(color).frame(width: 8, height: 8)
-            Text(name).font(V3.sans(12.5)).foregroundStyle(muted ? Color(hex: 0x8A8A84) : V3.txt)
-            if let detail { Text(detail).font(V3.sans(11)).foregroundStyle(Color(hex: 0xA3A39C)).lineLimit(1) }
+            RoundedRectangle(cornerRadius: 2.5).fill(color).frame(width: 10, height: 10)
+            Text(name).font(V3.sans(13.5)).foregroundStyle(muted ? Color(hex: 0x8A8A84) : Color(hex: 0x1D1D1B))
+            if let detail { Text(detail).font(V3.sans(12)).foregroundStyle(Color(hex: 0xA3A39D)).lineLimit(1) }
             Spacer(minLength: 8)
-            Text(Self.format(value)).font(V3.number(12, weight: .regular)).foregroundStyle(Color(hex: 0x8A8A84)).frame(width: 40, alignment: .trailing)
-            Text(String(format: "%.1f%%", min(100, value / compactAt * 100))).font(V3.number(12, weight: .medium))
-                .foregroundStyle(muted ? Color(hex: 0x8A8A84) : V3.txt).frame(width: 52, alignment: .trailing)
+            Text(Self.format(value)).font(V3.number(13, weight: .regular)).foregroundStyle(Color(hex: 0x8A8A84)).frame(width: 40, alignment: .trailing)
+            Text(String(format: "%.1f%%", min(100, value / compactAt * 100))).font(V3.number(13, weight: .medium))
+                .foregroundStyle(muted ? Color(hex: 0x8A8A84) : Color(hex: 0x1D1D1B)).frame(width: 52, alignment: .trailing)
         }.frame(height: 26)
     }
 }

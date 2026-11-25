@@ -60,10 +60,21 @@ public actor SessionCoordinator {
     private typealias LogoutRecovery = (id: UUID, saved: DesktopCredentialRecord?, refresh: Task<DesktopTokens, Error>?, exchange: Task<DesktopTokens, Error>?)
     private var logoutRecovery: LogoutRecovery?
     private var logoutFlight: (id: UUID, task: Task<Void, Error>)?
+    /// 读缓存（规则见 `ReadCache`）：键 → 结果与过期时间；同一请求正在路上时后来的调用共用它。
+    /// `cacheEpoch` 在作废时加一，作废前发出、作废后才回来的读结果不再写回缓存。
+    private var readCache: [String: (value: any Sendable, expires: Date)] = [:]
+    private var readFlights: [String: (epoch: Int, task: Task<any Sendable, Error>)] = [:]
+    private var cacheEpoch = 0
+    private var images = ImageMemoryCache()
+    private let imageDisk: ImageDiskCache?
+    /// 简历列表与详情最近一次的 ETag 和正文（只在内存，换账号即清空）；作废缓存后再读时用它发条件请求。
+    private var validators: [String: (etag: String, value: JSONValue)] = [:]
+    private var textImportUnsupported = false
 
-    init(transport: any DesktopRequesting, tokens: any TokenStore) {
+    init(transport: any DesktopRequesting, tokens: any TokenStore, imageDisk: ImageDiskCache? = nil) {
         self.transport = transport
         self.tokens = tokens
+        self.imageDisk = imageDisk
         // Stored credential key from before the DrawOffer rename; keep it so users stay signed in.
         scope = "LinkResume:macos:desktop:\(transport.origin.absoluteString)"
     }
@@ -210,22 +221,111 @@ public actor SessionCoordinator {
 
     func request<T: Decodable & Sendable>(_ type: T.Type, path: String) async throws -> T {
         let transport = self.transport
-        return try await authorized { access in try await transport.send(type, path: path, body: nil, access: access) }
+        guard let lifetime = ReadCache.lifetime(path: path, query: [:]) else {
+            return try await authorized { access in try await transport.send(type, path: path, body: nil, access: access) }
+        }
+        return try await cachedRead(key: "send:" + path, lifetime: lifetime) {
+            try await self.authorized { access in try await transport.send(type, path: path, body: nil, access: access) }
+        }
     }
 
     public func careerRequest(path: String, method: String, query: [String: String], body: JSONValue?) async throws -> JSONValue {
         guard CareerRequest.allowed(path: path, method: method) else { throw APIError.invalidResponse }
         let transport = self.transport
-        return try await authorized { access in try await transport.career(path: path, method: method, query: query, body: body, access: access) }
+        guard method == "GET" else {
+            // 写请求前后都作废受影响的读（规则见 `ReadCache.affected`）：之前读到的可能已经过时，路上的读也不再写回。
+            purgeCache(afterWriteTo: path)
+            defer { purgeCache(afterWriteTo: path) }
+            return try await authorized { access in try await transport.career(path: path, method: method, query: query, body: body, access: access) }
+        }
+        let key = ReadCache.key(path: path, query: query)
+        let validates = ReadCache.validates(path: path, query: query)
+        guard let lifetime = ReadCache.lifetime(path: path, query: query) else {
+            if validates { return try await validatedRead(key: key, path: path) }
+            return try await authorized { access in try await transport.career(path: path, method: method, query: query, body: body, access: access) }
+        }
+        if lifetime == ReadCache.forever, readCache[key] == nil, let saved = ReadCache.readDisk(key) {
+            readCache[key] = (saved, .distantFuture)
+        }
+        let value: JSONValue = try await cachedRead(key: key, lifetime: lifetime) {
+            if validates { return try await self.validatedRead(key: key, path: path) }
+            return try await self.authorized { access in try await transport.career(path: path, method: method, query: query, body: body, access: access) }
+        }
+        if lifetime == ReadCache.forever { ReadCache.writeDisk(key, value) }
+        return value
+    }
+
+    /// 带 ETag 的读：手里有上一份时带 `If-None-Match`，304 就复用上一份。
+    private func validatedRead(key: String, path: String) async throws -> JSONValue {
+        let transport = self.transport, current = generation
+        let saved = validators[key]
+        let result = try await authorized { access in try await transport.validated(path: path, query: [:], etag: saved?.etag, access: access) }
+        guard current == generation else { throw APIError.unauthorized }
+        guard let value = result.value else {
+            guard let saved else { throw APIError.invalidResponse }
+            return saved.value
+        }
+        validators[key] = result.etag.map { ($0, value) }
+        return value
+    }
+
+    /// 作废用户数据的读缓存（长期缓存的 logo 和配置类不受影响）。窗口回到前台、后台任务落定、上传与 AI 对话时调用。
+    public func purgeCache() {
+        cacheEpoch += 1
+        readCache = readCache.filter { $0.value.expires == .distantFuture || ReadCache.configPaths.contains(Self.readPath($0.key)) }
+        readFlights = [:]
+    }
+
+    /// 只作废某个写请求影响到的读。
+    func purgeCache(afterWriteTo path: String) {
+        cacheEpoch += 1
+        readCache = readCache.filter { !ReadCache.affected(byWriteTo: path, key: $0.key) }
+        readFlights = readFlights.filter { !ReadCache.affected(byWriteTo: path, key: $0.key) }
+    }
+
+    private static func readPath(_ key: String) -> String {
+        key.hasPrefix("send:") ? String(key.dropFirst(5)) : String(key.split(separator: "?", maxSplits: 1).first ?? "")
+    }
+
+    private func cachedRead<T: Sendable>(key: String, lifetime: TimeInterval, _ load: @escaping @Sendable () async throws -> T) async throws -> T {
+        if let hit = readCache[key], hit.expires > Date(), let value = hit.value as? T { return value }
+        let epoch = cacheEpoch
+        let task: Task<any Sendable, Error>
+        if let flight = readFlights[key], flight.epoch == epoch { task = flight.task }
+        else { task = Task { () async throws -> any Sendable in try await load() }; readFlights[key] = (epoch, task) }
+        do {
+            let value = try await SharedRead.value(of: task)
+            if readFlights[key]?.task == task { readFlights[key] = nil }
+            guard let typed = value as? T else { throw APIError.invalidResponse }
+            if epoch == cacheEpoch {
+                readCache[key] = (typed, lifetime == ReadCache.forever ? .distantFuture : Date().addingTimeInterval(lifetime))
+            }
+            return typed
+        } catch {
+            // 只有请求本身失败才丢掉这次合并；调用方自己被取消时，请求照常跑完留给其他人。
+            if !(error is CancellationError), readFlights[key]?.task == task { readFlights[key] = nil }
+            throw error
+        }
+    }
+
+    private func dropAccountCaches() {
+        cacheEpoch += 1
+        readCache = [:]
+        readFlights = [:]
+        validators = [:]
+        images.removeAll()
+        imageDisk?.removeAll()
     }
 
     public func uploadAgentAttachment(_ upload: AgentAttachmentUpload) async throws -> JSONValue {
         let transport = self.transport
+        purgeCache(); defer { purgeCache() }
         return try await authorized { access in try await transport.uploadAgentAttachment(upload, access: access) }
     }
 
     public func uploadDataset(_ upload: DatasetUpload) async throws -> JSONValue {
         let transport = self.transport
+        purgeCache(afterWriteTo: "/api/datasets"); defer { purgeCache(afterWriteTo: "/api/datasets") }
         return try await authorized { access in try await transport.uploadDataset(upload, access: access) }
     }
     public func downloadDataset(id: String, limit: Int64) async throws -> DatasetFile {
@@ -242,8 +342,10 @@ public actor SessionCoordinator {
     public func listResumePage() async throws -> (resumes: [ResumeSummary], defaultID: String?) {
         struct Envelope: Decodable, Sendable { let resumes: [ResumeSummary]; let default_resume_id: String? }
         let current = generation
-        let result = try await request(Envelope.self, path: "/api/resumes")
+        // 与其他页面共用 `/api/resumes` 的读缓存和 ETag。
+        let value = try await careerRequest(path: "/api/resumes", method: "GET", query: [:], body: nil)
         guard current == generation, !disabled else { throw APIError.unauthorized }
+        let result = try JSONDecoder().decode(Envelope.self, from: JSONEncoder().encode(value))
         return (result.resumes, result.default_resume_id)
     }
 
@@ -255,7 +357,7 @@ public actor SessionCoordinator {
         return data
     }
 
-    /// 本人头像（`/api/assets/users/{本人}/assets/avatar/...`），只接受当前账号路径与 PNG/JPEG，最多 4 MiB，不缓存。
+    /// 本人头像（`/api/assets/users/{本人}/assets/avatar/...`），只接受当前账号路径与 PNG/JPEG，最多 4 MiB，同一路径在内存里复用。
     public func accountAvatar(path: String) async throws -> Data {
         guard !disabled, let account = try tokens.load(scope: scope)?.accountID else { throw APIError.unauthorized }
         let checked = try PaperAssets.path(path, account: account)
@@ -267,7 +369,7 @@ public actor SessionCoordinator {
     }
 
     /// 可编辑纸面里的简历图片（`/api/resumes/{id}/assets/...` 与本人 `/api/assets/users/{本人}/...`）：
-    /// 与纸面预览同一路径白名单，只接受 PNG/JPEG，单张最多 10 MiB，不缓存。
+    /// 与纸面预览同一路径白名单，只接受 PNG/JPEG，单张最多 10 MiB，同一路径在内存里复用。
     public func resumeImage(path: String) async throws -> (data: Data, contentType: String) {
         guard !disabled, let account = try tokens.load(scope: scope)?.accountID else { throw APIError.unauthorized }
         let checked = try PaperAssets.path(path, account: account)
@@ -293,14 +395,38 @@ public actor SessionCoordinator {
         }
     }
 
+    /// 单栏、有文字层的 PDF 先在本机取出文字只传 `.txt`，服务端省掉文件转换与 OCR；
+    /// 服务端还不认 `.txt`（415 `UNSUPPORTED_IMPORT_FORMAT`）时本次退回原文件，本进程之后都直接传原文件。
     public func importResume(_ upload: ResumeImportUpload) async throws -> JSONValue {
         let transport = self.transport
+        purgeCache(); defer { purgeCache() }
+        if !textImportUnsupported, let text = upload.textVariant() {
+            do { return try await authorized { access in try await transport.importResume(text, access: access) } }
+            catch APIError.server(415, _) { textImportUnsupported = true }
+            let original = upload.withIdempotencyKey(ResumeText.fallbackKey(upload.idempotencyKey))
+            return try await authorized { access in try await transport.importResume(original, access: access) }
+        }
         return try await authorized { access in try await transport.importResume(upload, access: access) }
+    }
+
+    /// 实时事件流（`GET /api/events`）：连着时逐个回调事件，正常结束（令牌到期、服务端重启）时返回，由调用方重连。
+    /// 401 不按登录失效处理（服务端可能还没对桌面开放这个接口），只抛给调用方退避；其他接口的登录状态不受影响。
+    public func streamEvents(onEvent: @escaping @Sendable (UserEvent) async -> Void) async throws {
+        guard !disabled else { throw APIError.unauthorized }
+        let current = generation
+        if access == nil || accessDeadline <= Date() { _ = try await refresh() }
+        guard generation == current, !disabled else { throw APIError.unauthorized }
+        let transport = self.transport, sent = access
+        do { try await transport.events(access: sent, onEvent: onEvent) }
+        catch APIError.unauthorized { throw APIError.server(status: 401, code: "EVENTS_UNAUTHORIZED") }
+        guard generation == current, !disabled else { throw APIError.unauthorized }
     }
 
     /// AI 助手 SSE。只在开始响应前处理 401 续期；已开始的流不重放，避免重复提交消息（消息自带幂等键）。
     public func streamAgent(path: String, method: String, body: JSONValue?, onEvent: @MainActor @Sendable (AgentEvent) async -> Void) async throws {
         let transport = self.transport, current = generation
+        // AI 对话可能经工具改简历、投递或面试：开始和结束都作废读缓存。
+        purgeCache(); defer { purgeCache() }
         try await authorized { access in
             try await transport.streamAgent(path: path, method: method, body: body, access: access, onEvent: onEvent)
         }
@@ -317,9 +443,21 @@ public actor SessionCoordinator {
         return result
     }
 
+    /// 图片路径带上传时间与随机串，同一路径内容不变：先查内存，再查本账号的磁盘缓存，都没有才下载；退出或换账号即清空。
     private func image(path: String, limit: Int) async throws -> DesktopImage {
-        let transport = self.transport
-        return try await authorized { access in try await transport.downloadImage(path: path, limit: limit, access: access) }
+        if let hit = images.get(path), hit.data.count <= limit { return hit }
+        let account = (try? tokens.load(scope: scope))?.accountID
+        if let account, let saved = imageDisk?.get(account: account, path: path), saved.data.count <= limit {
+            images.put(path, saved)
+            return saved
+        }
+        let transport = self.transport, current = generation
+        let image = try await authorized { access in try await transport.downloadImage(path: path, limit: limit, access: access) }
+        if current == generation {
+            images.put(path, image)
+            if let account, (try? tokens.load(scope: scope))?.accountID == account { imageDisk?.put(account: account, path: path, image: image) }
+        }
+        return image
     }
 
     private func authorized<T: Sendable>(_ send: @Sendable (String?) async throws -> T) async throws -> T {
@@ -388,6 +526,8 @@ public actor SessionCoordinator {
         guard result.session_protocol == 1, result.expires_in >= 0,
               !result.access_token.isEmpty, !result.refresh_token.isEmpty,
               expectedAccount == nil || expectedAccount == result.user.id else { throw APIError.invalidResponse }
+        // 新登录（不是续期）：上一个账号留下的读缓存一律不用。
+        if expectedAccount == nil { dropAccountCaches() }
         try tokens.save(DesktopCredentialRecord(accountID: result.user.id, refreshToken: result.refresh_token,
                                                generation: generation), scope: scope)
         access = result.access_token
@@ -398,6 +538,7 @@ public actor SessionCoordinator {
         disabled = true
         generation = UUID()
         access = nil
+        dropAccountCaches()
         flight = nil
         try tokens.clear(scope: scope)
     }
@@ -410,6 +551,7 @@ public actor SessionCoordinator {
         disabled = true
         generation = nextGeneration
         access = nil
+        dropAccountCaches()
         let shared = flight
         flight = nil
         let pendingExchange = exchange
@@ -470,5 +612,36 @@ public actor SessionCoordinator {
     private func base64url(_ data: Data) -> String {
         data.base64EncodedString().replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+    }
+}
+
+/// 等合并的读请求：调用方被取消时立即返回 `CancellationError`，共享的请求不受影响、继续给其他等待者。
+private enum SharedRead {
+    private final class Once: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<any Sendable, Error>?
+        private var finished = false
+        func set(_ next: CheckedContinuation<any Sendable, Error>) -> Bool {
+            lock.withLock { if finished { return false }; continuation = next; return true }
+        }
+        func finish(_ result: Result<any Sendable, Error>) {
+            let waiting: CheckedContinuation<any Sendable, Error>? = lock.withLock {
+                guard !finished else { return nil }
+                finished = true
+                defer { continuation = nil }
+                return continuation
+            }
+            waiting?.resume(with: result)
+        }
+    }
+
+    static func value(of task: Task<any Sendable, Error>) async throws -> any Sendable {
+        let once = Once()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard once.set(continuation) else { continuation.resume(throwing: CancellationError()); return }
+                Task { do { once.finish(.success(try await task.value)) } catch { once.finish(.failure(error)) } }
+            }
+        } onCancel: { once.finish(.failure(CancellationError())) }
     }
 }

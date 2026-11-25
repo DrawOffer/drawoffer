@@ -18,7 +18,6 @@ struct AccountSection: View {
 /// 桌面端不提供修改密码、微信绑定和注销账号（后端只接受 Web Cookie）；API Key 在客户端内列出、创建（明文只显示一次）和删除（AccountApiKeys.swift）。
 struct AccountView: View {
     @Environment(SessionStore.self) private var session
-    @Environment(WorkspaceRouter.self) private var router: WorkspaceRouter?
     @State private var profile: JSONValue?
     @State private var preferences: JSONValue?
     @State private var billing: BillingSummary?
@@ -99,9 +98,9 @@ struct AccountView: View {
                 Text("联系邮箱只用于找回账号；网申要填的电话、邮箱在")
                 Button("「求职画像」", action: openCareerProfile).buttonStyle(.plain).foregroundStyle(V3.link)
                 Text("里。")
-            }.font(V3.sans(12)).foregroundStyle(V3.fnt).frame(height: 14).padding(.top, 8)
+            }.font(V3.sans(12)).foregroundStyle(V3.fnt).frame(height: 14).padding(.top, 7)
         }.padding(.top, 41)
-        AccountApiKeySection(notify: { toast = $0 }).padding(.top, 48)
+        AccountApiKeySection(notify: { toast = $0 }).padding(.top, 47)
         // 退出登录：上下细线，红字浅红底胶囊
         HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 3) {
@@ -110,9 +109,9 @@ struct AccountView: View {
             }.frame(maxWidth: .infinity, alignment: .leading)
             Button("退出登录") { logoutOpen = true }.buttonStyle(AccountDangerPillStyle())
         }
-        .frame(height: 62)
+        .frame(height: 64)
         .overlay(alignment: .top) { AccountHairline() }.overlay(alignment: .bottom) { AccountHairline() }
-        .padding(.top, 52)
+        .padding(.top, 47)
         HStack(spacing: 12) {
             Button("隐私政策") { WebBridge.open("/privacy", api: session.api) }.buttonStyle(.plain).foregroundStyle(V3.blue)
             Text("·").foregroundStyle(Color(hex: 0xA8A8A4))
@@ -285,12 +284,12 @@ private struct AccountNameField: View {
                     .accessibilityLabel("昵称")
                 Text(error ?? "回车保存 · Esc 取消 · 最多 50 个字").font(V3.sans(12)).foregroundStyle(error == nil ? V3.fnt : V3.red)
             } else {
-                HStack(spacing: 8) {
+                HStack(spacing: 4) {
                     Text(name.nonEmptyValue ?? "未设置昵称").font(V3.serif(24)).foregroundStyle(V3.txt).lineLimit(1)
                     Button { error = nil; editing = true } label: {
                         Image(systemName: "pencil").font(.system(size: 12)).foregroundStyle(V3.fnt).frame(width: 20, height: 20).contentShape(Rectangle())
                     }.buttonStyle(.plain).accessibilityLabel("修改昵称").help("修改昵称")
-                }.padding(.leading, 28).frame(height: 34)
+                }.padding(.leading, 24).frame(height: 34)
             }
         }
     }
@@ -319,19 +318,21 @@ private struct AccountEmailRow: View {
         if editing {
             VStack(alignment: .leading, spacing: 0) {
                 Text("联系邮箱").font(V3.sans(14)).foregroundStyle(V3.txt).frame(height: 17).padding(.top, 16)
-                HStack(spacing: 12) {
+                HStack(spacing: 10) {
                     TextField("", text: $draft, prompt: Text("you@example.com").foregroundStyle(V3.fnt2)).textFieldStyle(.plain)
-                        .font(V3.sans(13.5)).foregroundStyle(V3.txt).focused($focused).disabled(saving)
-                        .padding(.horizontal, 12).frame(height: 31)
-                        .overlay(RoundedRectangle(cornerRadius: 7.5).stroke(error == nil ? V3.txt : V3.red))
+                        .font(V3.sans(14)).foregroundStyle(V3.txt).focused($focused).disabled(saving)
+                        .padding(.horizontal, 12).frame(height: 32)
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(error == nil ? V3.txt : V3.red))
                         .onSubmit { Task { await commit() } }
                         .onExitCommand { editing = false }
                         .accessibilityLabel("联系邮箱")
                     Button("取消") { editing = false }.buttonStyle(.plain).font(V3.sans(13)).foregroundStyle(V3.fnt).disabled(saving)
-                    Button(saving ? "保存中…" : "保存") { Task { await commit() } }.buttonStyle(V3ButtonStyle(kind: .dark, height: 28, small: true))
+                    Button(saving ? "保存中…" : "保存") { Task { await commit() } }.buttonStyle(AccountPillButtonStyle(kind: .dark, width: 64, height: 28, size: 13))
                         .disabled(saving || draft.trimmingCharacters(in: .whitespaces) == (email ?? ""))
-                }.padding(.top, 16)
-                Text(error ?? "留空保存即可清除联系邮箱。").font(V3.sans(12)).foregroundStyle(error == nil ? V3.fnt : V3.red).padding(.top, 8).padding(.bottom, 14)
+                }.padding(.top, 14)
+                // 稿内没有提示行：校验失败时才在输入框下显示红字；留空保存即清除联系邮箱
+                if let error { Text(error).font(V3.sans(12)).foregroundStyle(V3.red).padding(.top, 8) }
+                Color.clear.frame(height: 16)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .overlay(alignment: .bottom) { AccountHairline() }
@@ -355,6 +356,7 @@ private struct AccountLanguageMenu: View {
     let disabled: Bool
     let change: (String) -> Void
     private let options = [("zh-CN", "简体中文"), ("en-US", "English")]
+    @State private var hover = false
     var body: some View {
         Menu {
             ForEach(options, id: \.0) { option in
@@ -363,12 +365,14 @@ private struct AccountLanguageMenu: View {
                 }
             }
         } label: {
-            HStack(spacing: 5) {
-                Text(options.first { $0.0 == value }?.1 ?? "简体中文").font(V3.sans(14)).foregroundStyle(V3.sub)
-                Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .medium)).foregroundStyle(V3.fnt)
-            }
+            // 04.01：静止时就是右对齐的 14 sub 文字（无箭头）；04.04：悬停 / 展开时出现 73×25 的描边小下拉。
+            // 文字左右各 10.5 的内边距靠负的 trailing 抵回，静止态文字仍贴齐右边线。
+            Text(options.first { $0.0 == value }?.1 ?? "简体中文").font(V3.sans(14)).foregroundStyle(V3.sub)
+                .padding(.horizontal, 10.5).frame(height: 25)
+                .overlay(RoundedRectangle(cornerRadius: 7.5).stroke(hover ? V3.cl : Color.clear))
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().disabled(disabled).accessibilityLabel("界面语言")
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().disabled(disabled).accessibilityLabel("界面语言")
+        .onHover { hover = $0 }.padding(.trailing, -10.5)
     }
 }
 
@@ -379,6 +383,30 @@ private struct AccountDangerPillStyle: ButtonStyle {
             .padding(.horizontal, 16).frame(height: 33)
             .background(configuration.isPressed ? Color(hex: 0xF9E3E3) : Color(hex: 0xFDF0F0), in: Capsule())
             .contentShape(Capsule())
+    }
+}
+
+/// 弹窗里的胶囊按钮（稿内 `DrawOffer / V3 / Button`）：墨黑实心 / 白底浅描边，14 中粗字，32 高；`width` 为最小宽度。
+struct AccountPillButtonStyle: ButtonStyle {
+    enum Kind { case dark, ghost }
+    var kind: Kind
+    var width: CGFloat? = nil
+    var height: CGFloat = 32
+    var size: CGFloat = 14
+    @Environment(\.isEnabled) private var enabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        let pressed = configuration.isPressed
+        return configuration.label.font(V3.sans(size, weight: .medium)).lineLimit(1).fixedSize()
+            .foregroundStyle(kind == .dark ? Color.white : V3.txt)
+            .padding(.horizontal, 16).frame(minWidth: width, minHeight: height, maxHeight: height)
+            .background {
+                switch kind {
+                case .dark: Capsule().fill(pressed ? Color(hex: 0x0E0E0D) : V3.txt)
+                case .ghost: Capsule().fill(pressed ? V3.field : Color.white).overlay(Capsule().stroke(V3.cl))
+                }
+            }
+            .opacity(enabled ? 1 : 0.38).contentShape(Capsule())
     }
 }
 
@@ -401,23 +429,23 @@ struct AccountToast: Equatable {
     var message: String? = nil
 }
 
-/// `.v3-toast`：顶部居中、最小 320 宽、圆角 12 的白卡，3 秒后收起。
+/// 账号页与求职画像的提示：走第 16 页「顶部提示栏统一」的 `NoticeToast`，居中浮在页面顶部 20pt。
 struct AccountToastView: View {
     let toast: AccountToast
     let dismiss: () -> Void
+    @State private var item: NoticeToastItem?
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: toast.kind == .success ? "checkmark" : "exclamationmark.circle").font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(toast.kind == .error ? V3.red : toast.kind == .warn ? V3.orange : V3.green).frame(width: 16, height: 16).padding(.top, 2)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(toast.title).font(V3.sans(14, weight: .medium)).foregroundStyle(V3.txt)
-                if let message = toast.message { Text(message).font(V3.sans(12)).foregroundStyle(V3.sub) }
-            }.frame(maxWidth: .infinity, alignment: .leading)
+        NoticeToast(item: $item).padding(.top, 20)
+            .onAppear { item = Self.item(toast) }
+            .onChange(of: toast) { _, next in item = Self.item(next) }
+            .onChange(of: item) { _, next in if next == nil { dismiss() } }
+    }
+    private static func item(_ toast: AccountToast) -> NoticeToastItem {
+        switch toast.kind {
+        case .success: return .done(toast.title, toast.message)
+        case .error: return .failed(toast.title, toast.message)
+        case .warn: return .attention(toast.title, toast.message)
         }
-        .padding(.horizontal, 16).padding(.vertical, 14).frame(minWidth: 320).fixedSize()
-        .background(.white, in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(V3.cl))
-        .shadow(color: .black.opacity(0.12), radius: 12, y: 8).padding(.top, 28)
-        .task(id: toast.title) { try? await Task.sleep(for: .seconds(3)); dismiss() }
     }
 }
 
@@ -439,42 +467,46 @@ private struct AccountAvatarSheet: View {
     @State private var error: String?
     @State private var dragStart: AvatarCrop.Draft?
 
-    /// 裁剪区 412×240，圆窗直径 200（按 200/264 缩小显示）。
-    private let scale = 200 / AvatarCrop.window
+    /// 裁剪区 412×240，圆窗直径 178（04.08，按 178/264 缩小显示）。
+    private let scale = 178 / AvatarCrop.window
     private var currentAvatar: NSImage? { removeAvatar ? nil : avatar }
     private var initial: String { String((user.text("nickname").nonEmptyValue ?? "我").prefix(1)) }
     private var changed: Bool { draft != nil || (removeAvatar && !user.text("avatar_url").isEmpty) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("换头像").font(.system(size: 17, weight: .semibold)).foregroundStyle(V3.txt).frame(height: 22).padding(.top, 4)
-            Text("支持 JPG、PNG、WebP，最大 10 MB。").font(V3.sans(13)).foregroundStyle(V3.sub).frame(height: 16).padding(.top, 12)
-            crop.padding(.top, 22)
+            Text("换头像").font(V3.sans(18, weight: .medium)).foregroundStyle(V3.txt).frame(height: 22).padding(.top, 4)
+            Text("支持 JPG、PNG、WebP，最大 10 MB。").font(V3.sans(13)).foregroundStyle(V3.fnt).frame(height: 16).padding(.top, 12)
+            crop.padding(.top, 20)
             HStack(spacing: 14) {
-                Text("缩放").font(V3.sans(13)).foregroundStyle(V3.sub)
+                Text("缩放").font(V3.sans(13)).foregroundStyle(V3.fnt)
                 Slider(value: Binding(get: { draft?.zoom ?? 1 }, set: { value in if var next = draft { next.zoom = value; draft = AvatarCrop.clamp(next) } }),
-                       in: AvatarCrop.minZoom...AvatarCrop.maxZoom).controlSize(.small).disabled(draft == nil || saving).accessibilityLabel("缩放")
+                       in: AvatarCrop.minZoom...AvatarCrop.maxZoom).controlSize(.small).tint(V3.txt).disabled(draft == nil || saving).accessibilityLabel("缩放")
             }.frame(height: 21).padding(.top, 20)
             if let error { Text(error).font(V3.sans(12)).foregroundStyle(V3.red).padding(.top, 10) }
-            HStack(spacing: 10) {
-                Button("重新选择") { Task { await pick() } }.buttonStyle(V3ButtonStyle(kind: .ghost, height: 32)).disabled(saving)
-                Button("移除头像") { draft = nil; image = nil; removeAvatar = true }.buttonStyle(.plain).font(V3.sans(13)).foregroundStyle(V3.red)
+            HStack(spacing: 16) {
+                Button { Task { await pick() } } label: {
+                    HStack(spacing: 2) { Image(systemName: "arrow.up.to.line").font(.system(size: 13)); Text("重新选择") }
+                }.buttonStyle(.plain).font(V3.sans(13)).foregroundStyle(Color(hex: 0x2966D9)).disabled(saving)
+                Button("移除头像") { draft = nil; image = nil; removeAvatar = true }.buttonStyle(.plain).font(V3.sans(13)).foregroundStyle(V3.fnt)
                     .disabled(saving || (draft == nil && currentAvatar == nil)).opacity(saving || (draft == nil && currentAvatar == nil) ? 0.4 : 1)
                 Spacer()
-                Button("取消", action: close).buttonStyle(V3ButtonStyle(kind: .ghost, height: 32)).disabled(saving)
-                Button(saving ? "保存中…" : "保存") { Task { await save() } }.buttonStyle(V3ButtonStyle(kind: .dark, height: 32))
-                    .disabled(saving || !changed).keyboardShortcut(.defaultAction)
+                HStack(spacing: 8) {
+                    Button("取消", action: close).buttonStyle(AccountPillButtonStyle(kind: .ghost, width: 79)).disabled(saving)
+                    Button(saving ? "保存中…" : "保存") { Task { await save() } }.buttonStyle(AccountPillButtonStyle(kind: .dark, width: 100))
+                        .disabled(saving || !changed).keyboardShortcut(.defaultAction)
+                }
             }.padding(.top, 20)
         }
-        .padding(24).frame(width: 460)
+        .padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 20).frame(width: 460)
         .background { Button("", action: close).keyboardShortcut(.cancelAction).opacity(0).accessibilityHidden(true).disabled(saving) }
     }
 
-    /// 412×240、圆角 10 的浅灰区；圆窗外 45% 墨黑遮罩 + 白色细描边，底部提示胶囊。
+    /// 412×240、圆角 10 的深色区；圆窗外 45% 墨黑遮罩 + 白色描边；还没选图时底部有「点击选择图片」提示（稿内选图后无提示）。
     private var crop: some View {
         let window = AvatarCrop.window * scale
         return ZStack {
-            V3.field
+            V3.txt
             Group {
                 if let draft, let image {
                     let layout = AvatarCrop.layout(draft)
@@ -486,9 +518,11 @@ private struct AccountAvatarSheet: View {
             }
             Rectangle().fill(V3.txt.opacity(0.45))
                 .mask { Rectangle().overlay(Circle().frame(width: window, height: window).blendMode(.destinationOut)).compositingGroup() }
-            Circle().stroke(.white, lineWidth: 1.4).frame(width: window, height: window)
-            Text(draft == nil ? "点击选择图片" : "拖动调整位置").font(V3.sans(11, weight: .medium)).foregroundStyle(.white).padding(.horizontal, 12).frame(height: 22)
-                .background(V3.txt.opacity(0.8), in: Capsule()).frame(maxHeight: .infinity, alignment: .bottom).padding(.bottom, 10)
+            Circle().stroke(.white, lineWidth: 2).frame(width: window, height: window)
+            if draft == nil {
+                Text("点击选择图片").font(V3.sans(11, weight: .medium)).foregroundStyle(.white).padding(.horizontal, 12).frame(height: 22)
+                    .background(V3.txt.opacity(0.8), in: Capsule()).frame(maxHeight: .infinity, alignment: .bottom).padding(.bottom, 10)
+            }
         }
         .frame(width: 412, height: 240).clipShape(RoundedRectangle(cornerRadius: 10)).contentShape(Rectangle())
         .onTapGesture { if draft == nil { Task { await pick() } } }
@@ -570,16 +604,16 @@ private struct AccountLogoutSheet: View {
     let confirm: () -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("退出登录？").font(.system(size: 17, weight: .semibold)).foregroundStyle(V3.txt).frame(height: 22).padding(.top, 4)
+            Text("退出登录？").font(V3.sans(18, weight: .medium)).foregroundStyle(V3.txt).frame(height: 22).padding(.top, 4)
             Text(device.isEmpty ? "只退出当前设备，其他设备上的登录不受影响。" : "只退出当前设备（\(device)），其他设备上的登录不受影响。")
-                .font(V3.sans(13)).foregroundStyle(V3.sub).lineHeight(13, 18).fixedSize(horizontal: false, vertical: true).padding(.top, 12)
-            HStack(spacing: 10) {
+                .font(V3.sans(13)).foregroundStyle(V3.fnt).lineHeight(13, 18).fixedSize(horizontal: false, vertical: true).padding(.top, 12)
+            HStack(spacing: 8) {
                 Spacer()
-                Button("取消", action: close).buttonStyle(V3ButtonStyle(kind: .ghost, height: 32)).disabled(busy)
-                Button(busy ? "正在退出…" : "退出登录", action: confirm).buttonStyle(V3ButtonStyle(kind: .dark, height: 32)).disabled(busy).keyboardShortcut(.defaultAction)
+                Button("取消", action: close).buttonStyle(AccountPillButtonStyle(kind: .ghost, width: 79)).disabled(busy)
+                Button(busy ? "正在退出…" : "退出登录", action: confirm).buttonStyle(AccountPillButtonStyle(kind: .dark, width: 100)).disabled(busy).keyboardShortcut(.defaultAction)
             }.padding(.top, 20)
         }
-        .padding(24).frame(width: 460, alignment: .leading)
+        .padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 20).frame(width: 460, alignment: .leading)
         .background { Button("", action: close).keyboardShortcut(.cancelAction).opacity(0).accessibilityHidden(true).disabled(busy) }
     }
 }

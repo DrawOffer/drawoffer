@@ -2,12 +2,6 @@ import SwiftUI
 
 // 插图积木（Web `v3/art.tsx`）：坐标照设计稿，放在 `V3DotStage` 里。
 
-struct ArtBox<Content: View>: View {
-    let x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat
-    @ViewBuilder var content: () -> Content
-    var body: some View { content().frame(width: w, height: h).offset(x: x, y: y) }
-}
-
 struct ArtBar: View {
     let x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat
     var r: CGFloat = 1
