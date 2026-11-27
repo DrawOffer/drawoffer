@@ -22,7 +22,7 @@ public enum ResumeRequest {
               parts[2].allSatisfy({ $0.isASCII && $0.isNumber }) else { return false }
         if parts.count == 3 { return ["GET", "PUT", "DELETE"].contains(method) }
         if parts.count == 5, parts[3] == "assets" { return method == "DELETE" && !parts[4].isEmpty && parts[4].count <= 255 }
-        if parts.count == 5, parts[3] == "guide" { return method == "POST" && ["writes", "skills:compose", "experience:compose", "profile:compose"].contains(parts[4]) }
+        if parts.count == 5, parts[3] == "guide" { return method == "POST" && ["writes", "skills:compose", "experience:compose", "profile:compose", "materials:compose", "portrait:fill", "answer:extract"].contains(parts[4]) }
         if parts.count == 7, parts[3] == "section-reviews", parts[5] == "items" {
             let id = { (value: String) in !value.isEmpty && value.count <= 64 && value.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") } }
             return method == "PATCH" && id(parts[4]) && id(parts[6])
@@ -33,7 +33,7 @@ public enum ResumeRequest {
         if parts[3] == "default" { return method == "PUT" }
         // 写作引导、段落聚焦与检查简历（与后端 get_current_resume_user 白名单一致）
         if parts[3] == "guide" { return ["GET", "PUT", "PATCH"].contains(method) }
-        if ["section-review:analyze", "section-review:rewrite", "review:check"].contains(parts[3]) { return method == "POST" }
+        if ["section-review:analyze", "section-review:rewrite"].contains(parts[3]) { return method == "POST" }
         if parts[3] == "section-reviews" { return method == "GET" }
         return false
     }
@@ -71,6 +71,44 @@ public enum ResumeRequest {
     }
 }
 
+/// 新建简历弹窗的模板分类（Web `ResumeCreateDialog`）：只列有模板的岗位，换分类时选中的模板看不见就改选第一套。
+public enum ResumeCreatePicker {
+    public static let all = "all"
+    /// Web `templateUseCaseOptions` 的顺序。
+    public static let useCases = ["技术研发", "产品", "设计", "运营 / 市场", "职能"]
+
+    public static func categories(_ templates: [ResumeTemplate]) -> [(value: String, label: String)] {
+        [(all, "全部")] + useCases.filter { useCase in templates.contains { $0.useCases.contains(useCase) } }.map { ($0, $0) }
+    }
+
+    public static func visible(_ templates: [ResumeTemplate], category: String) -> [ResumeTemplate] {
+        category == all ? templates : templates.filter { $0.useCases.contains(category) }
+    }
+
+    /// 换到 `category` 后应选中的模板：原来的还在就不动，否则取这一类的第一套（这一类为空时不变）。
+    public static func selection(after category: String, in templates: [ResumeTemplate], current: String?) -> String? {
+        let list = visible(templates, category: category)
+        if let current, list.contains(where: { $0.id == current }) { return current }
+        return list.first?.id ?? current
+    }
+
+    /// 方向键换选：左右循环，上下按列数跳行，越界不动。
+    public static func move(_ ids: [String], current: String?, columns: Int, key: Key) -> String? {
+        guard !ids.isEmpty else { return current }
+        let index = current.flatMap { ids.firstIndex(of: $0) } ?? -1
+        let next: Int
+        switch key {
+        case .left: next = (index - 1 + ids.count) % ids.count
+        case .right: next = (index + 1) % ids.count
+        case .up: next = index - max(1, columns)
+        case .down: next = index + max(1, columns)
+        }
+        return ids.indices.contains(next) ? ids[next] : current
+    }
+
+    public enum Key: Sendable { case left, right, up, down }
+}
+
 /// `GET/POST/PATCH /api/resumes/{id}/share` 的 share 对象。
 public struct ResumeShare: Equatable, Sendable {
     public let token: String
@@ -89,6 +127,32 @@ public struct ResumeShare: Equatable, Sendable {
     }
 
     public func isExpired(now: Date = Date()) -> Bool { expiresAt.map { $0 <= now } ?? false }
+
+    /// 有效期三档（Web `EXPIRY_OPTIONS`）。
+    public enum Expiry: String, CaseIterable, Sendable {
+        case week = "7 天", month = "30 天", forever = "永久"
+        public func date(now: Date = Date()) -> Date? {
+            switch self {
+            case .week: now.addingTimeInterval(7 * 86_400)
+            case .month: now.addingTimeInterval(30 * 86_400)
+            case .forever: nil
+            }
+        }
+    }
+
+    /// Web `matchExpiry`：没有到期时间是「永久」；离现在起 7 / 30 天不到 1 小时算那一档，否则哪档都不选。
+    public func expiry(now: Date = Date()) -> Expiry? {
+        guard let expiresAt else { return .forever }
+        return [Expiry.week, .month].first { option in option.date(now: now).map { abs($0.timeIntervalSince(expiresAt)) < 3_600 } ?? false }
+    }
+
+    /// Web `formatShareExpiry`：「永久有效」「有效至 2026-10-27 18:00」「已于 … 过期」（北京时间）。
+    public func expiryLabel(now: Date = Date()) -> String {
+        guard let expiresAt else { return "永久有效" }
+        let formatter = Beijing.formatter(); formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        let label = formatter.string(from: expiresAt)
+        return isExpired(now: now) ? "已于 \(label) 过期" : "有效至 \(label)"
+    }
 
     /// Web `shareUrl`：站点 origin 与 API origin 相同，链接为 `{origin}/share/{token}`。
     public func url(origin: URL) -> URL { origin.appending(path: "share").appending(path: token) }

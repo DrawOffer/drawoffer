@@ -17,17 +17,26 @@ public class CoreTests
     }
 
     [Fact]
-    public async Task MockTemplatesCarryLayoutPlans()
+    public async Task MockTemplatesAreEmptyAfterSignIn()
     {
-        var templates = await new MockApiClient(signedIn: true).ListResumeTemplatesAsync();
-        Assert.Equal(9, templates.Count);
-        Assert.All(templates, template => Assert.NotNull(template.LayoutPlan));
+        // 客户端不携带模板，真实目录只来自后端
+        Assert.Empty(await new MockApiClient(signedIn: true).ListResumeTemplatesAsync());
     }
 
+    // 只是接口结构样例，不是可见模板
+    private const string TemplateShape = """
+        {"id":"7","key":"shape-sample-cn","name":"结构样例","description":null,"style_categories":[],"use_cases":[],
+         "data":{"schema_version":"canonical-resume.v1","sections":[]},
+         "style":{"schema_version":"template-definition.v1","template_key":"shape-sample-cn"},
+         "layout_plan":{"schema_version":"layout-plan.v1"},"use_count":3}
+        """;
+
     [Fact]
-    public async Task RenderRequestMatchesWebPresentationRule()
+    public void RenderRequestMatchesWebPresentationRule()
     {
-        var template = (await new MockApiClient(signedIn: true).ListResumeTemplatesAsync())[0];
+        var template = System.Text.Json.JsonSerializer.Deserialize<ResumeTemplate>(TemplateShape)!;
+        Assert.Equal(3, template.UseCount);
+        Assert.NotNull(template.LayoutPlan);
         var request = JsonNode.Parse(template.ToRenderRequest().ToJson())!;
         Assert.Equal(1, request["protocol_version"]!.GetValue<int>());
         Assert.Equal("resume-presentation.v1", request["style"]!["schema_version"]!.GetValue<string>());

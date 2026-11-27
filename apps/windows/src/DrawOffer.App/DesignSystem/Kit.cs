@@ -8,7 +8,7 @@ using static DrawOffer.App.DesignSystem.V3;
 
 namespace DrawOffer.App.DesignSystem;
 
-/// <summary>系统文件选择（FileOpenPicker / FileSavePicker 需要窗口句柄初始化）与剪贴板。</summary>
+/// <summary>系统文件选择（FileOpenPicker 需要窗口句柄初始化）与剪贴板。</summary>
 public static class Files
 {
     public static async Task<StorageFile?> PickAsync(params string[] extensions)
@@ -18,25 +18,6 @@ public static class Files
         foreach (var extension in extensions.Length > 0 ? extensions : ["*"]) picker.FileTypeFilter.Add(extension == "*" ? "*" : "." + extension.TrimStart('.'));
         WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(window));
         return await picker.PickSingleFileAsync();
-    }
-
-    public static async Task<IReadOnlyList<StorageFile>> PickManyAsync(params string[] extensions)
-    {
-        if (App.NativeWindow is not { } window) return [];
-        var picker = new Windows.Storage.Pickers.FileOpenPicker();
-        foreach (var extension in extensions.Length > 0 ? extensions : ["*"]) picker.FileTypeFilter.Add(extension == "*" ? "*" : "." + extension.TrimStart('.'));
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(window));
-        return await picker.PickMultipleFilesAsync();
-    }
-
-    /// <summary>另存为；返回 null 表示用户取消。</summary>
-    public static async Task<StorageFile?> SaveAsync(string suggestedName, string extension, string label)
-    {
-        if (App.NativeWindow is not { } window) return null;
-        var picker = new Windows.Storage.Pickers.FileSavePicker { SuggestedFileName = suggestedName };
-        picker.FileTypeChoices.Add(label, ["." + extension.TrimStart('.')]);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(window));
-        return await picker.PickSaveFileAsync();
     }
 
     public static async Task<byte[]> ReadAsync(StorageFile file)

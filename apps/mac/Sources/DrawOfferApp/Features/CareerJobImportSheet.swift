@@ -28,6 +28,10 @@ struct CareerJobImportSheet: View {
     @State private var error: String?
     @State private var dropping = false
     @State private var task: Task<Void, Never>?
+    /// 投递简历：nil 为还没读到列表；只有一份时直接选上，多份由用户自己选。岗位创建时同一事务绑定到待投递记录。
+    @State private var resumes: [JSONValue]?
+    @State private var resumeID = ""
+    @Environment(WorkspaceRouter.self) private var router: WorkspaceRouter?
 
     private static let limit = 60_000
     private var reviewing: Bool { tab == .manual && reviewSource != nil }
@@ -59,6 +63,7 @@ struct CareerJobImportSheet: View {
         .background(.white)
         .interactiveDismissDisabled(busy)
         .onDisappear { task?.cancel() }
+        .task { await loadResumes() }
     }
 
     // MARK: 头部与切换
@@ -98,7 +103,7 @@ struct CareerJobImportSheet: View {
         switch tab {
         case .text: "适合网页上能复制文字的岗位：职位、职责、要求和薪资一起粘进来，识别得更完整。"
         case .image: "适合 App 里不能复制的岗位：截一张包含职位名称和岗位要求的图，识别后逐项核对。"
-        case .manual: "适合内推、线下招聘的岗位：只填职位名称和公司就能创建，其余之后在岗位详情里补。"
+        case .manual: "适合内推、线下招聘的岗位：填好带 * 的四项就能创建，其余之后在岗位详情里补。"
         }
     }
 
@@ -109,7 +114,7 @@ struct CareerJobImportSheet: View {
                     .frame(width: 22, height: 22).background(Color(hex: 0xE3F3E9), in: Circle())
                 VStack(alignment: .leading, spacing: 2) {
                     Text("从\(reviewSource == .image ? "岗位截图" : "岗位文字")识别出 \(recognized.count) 个字段").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
-                    Text("没识别到的用橙色虚线标出，可以现在补，也可以之后改。").font(V3.sans(12)).foregroundStyle(V3.fnt)
+                    Text("没识别到的用橙色标出，带 * 的要补上，其余可以之后改。").font(V3.sans(12)).foregroundStyle(V3.fnt)
                 }
                 Spacer(minLength: 8)
                 Button("查看原文") { select(reviewSource ?? .text) }.buttonStyle(.plain).font(V3.sans(12, weight: .medium)).foregroundStyle(V3.blue)
@@ -208,10 +213,10 @@ struct CareerJobImportSheet: View {
                 grid([
                     field("job_title", "职位名称", "例如：后端开发工程师", required: true),
                     field("company_name", "公司名称", "例如：星河科技", required: true),
+                    choice("employment_type", "求职分类", [("internship", "实习"), ("campus", "校招"), ("full_time", "正式")], required: true),
+                    resumeCell,
                     field("salary_text", "薪资范围", "例如：25-40K，或面议"),
                     field("work_city", "工作城市", "例如：杭州", icon: "mappin"),
-                    choice("employment_type", "求职分类", [("internship", "实习"), ("campus", "校招"), ("full_time", "正式")]),
-                    choice("work_mode", "工作方式", [("onsite", "现场"), ("hybrid", "混合"), ("remote", "远程")]),
                 ])
                 HStack(alignment: .firstTextBaseline) {
                     Text(reviewing ? "其余信息" : "更多信息").font(V3.sans(12, weight: .medium)).foregroundStyle(V3.fnt)
@@ -243,7 +248,8 @@ struct CareerJobImportSheet: View {
                     ])
                 }
                 if expanded.contains("work") {
-                    section("工作与薪酬", [field("work_address", "详细地址", "填写办公地点或详细地址"), field("work_schedule", "工作安排", "例如：双休、弹性打卡")])
+                    section("工作与薪酬", [choice("work_mode", "工作方式", [("onsite", "现场"), ("hybrid", "混合"), ("remote", "远程")]),
+                                         field("work_address", "详细地址", "填写办公地点或详细地址"), field("work_schedule", "工作安排", "例如：双休、弹性打卡")])
                 }
                 if expanded.contains("company") {
                     section("公司与联系人", [
@@ -339,16 +345,17 @@ struct CareerJobImportSheet: View {
         }))
     }
 
-    private func choice(_ key: String, _ title: String, _ options: [(String, String)]) -> Cell {
+    /// 下拉字段：必填时不给「未填写」选项。
+    private func choice(_ key: String, _ title: String, _ options: [(String, String)], required: Bool = false) -> Cell {
         let value = form[key] ?? ""
         return Cell(id: key, wide: false, view: AnyView(VStack(alignment: .leading, spacing: 6) {
-            label(key, title, required: false)
+            label(key, title, required: required)
             Menu {
-                Button("未填写") { form[key] = "" }
-                ForEach(options, id: \.0) { option in Button(option.1) { form[key] = option.0 } }
+                if !required { Button("未填写") { form[key] = "" } }
+                ForEach(options, id: \.0) { option in Button(option.1) { form[key] = option.0; error = nil } }
             } label: {
                 HStack {
-                    Text(options.first { $0.0 == value }?.1 ?? "未填写").font(V3.sans(13)).foregroundStyle(value.isEmpty ? (missing(key) ? V3.orange : ImportInk.placeholder) : V3.txt)
+                    Text(options.first { $0.0 == value }?.1 ?? (required ? "请选择" : "未填写")).font(V3.sans(13)).foregroundStyle(value.isEmpty ? (missing(key) ? V3.orange : ImportInk.placeholder) : V3.txt)
                     Spacer(minLength: 4)
                     Image(systemName: "chevron.down").font(.system(size: 10, weight: .medium)).foregroundStyle(V3.fnt)
                 }
@@ -356,6 +363,33 @@ struct CareerJobImportSheet: View {
                 .background(.white, in: RoundedRectangle(cornerRadius: 8)).overlay(box(key)).contentShape(Rectangle())
             }
             .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).accessibilityLabel(title)
+        }))
+    }
+
+    /// 投递简历（必填）：一份简历都没有时引导去新建。
+    private var resumeCell: Cell {
+        Cell(id: "resume_id", wide: false, view: AnyView(VStack(alignment: .leading, spacing: 6) {
+            label("resume_id", "投递简历", required: true)
+            if resumes?.isEmpty == true {
+                HStack(spacing: 8) {
+                    Text("还没有简历").font(V3.sans(13)).foregroundStyle(V3.fnt)
+                    Button("去新建") { cancel(); router?.jump(.section(.resumes)) }.buttonStyle(.plain).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.blue)
+                }.frame(height: 38)
+            } else {
+                Menu {
+                    ForEach(resumes ?? [], id: \.self) { item in Button(item.text("title")) { resumeID = item.text("id"); error = nil } }
+                } label: {
+                    HStack {
+                        Text(resumes?.first { $0.text("id") == resumeID }?.text("title") ?? "请选择").font(V3.sans(13))
+                            .foregroundStyle(resumeID.isEmpty ? ImportInk.placeholder : V3.txt).lineLimit(1)
+                        Spacer(minLength: 4)
+                        Image(systemName: "chevron.down").font(.system(size: 10, weight: .medium)).foregroundStyle(V3.fnt)
+                    }
+                    .padding(.horizontal, 12).frame(height: 38)
+                    .background(.white, in: RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(V3.sk2)).contentShape(Rectangle())
+                }
+                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).disabled(resumes == nil).accessibilityLabel("投递简历")
+            }
         }))
     }
 
@@ -443,8 +477,17 @@ struct CareerJobImportSheet: View {
         preview = NSImage(data: data); error = nil
     }
 
+    @discardableResult private func loadResumes() async -> [JSONValue]? {
+        guard let items = try? await api.careerRequest(path: "/api/resumes", method: "GET", query: [:], body: nil)["resumes"]?.items else { return nil }
+        resumes = items
+        if items.count == 1 && resumeID.isEmpty { resumeID = items[0].text("id") }
+        return items
+    }
+
     private func parse() async {
         let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 没有简历就建不了岗位，识别前先拦下，不白扣积分
+        if resumes?.isEmpty == true { error = "导入岗位要先选一份投递简历，你还没有简历，请先新建。"; return }
         if tab == .image && image == nil { error = "请上传岗位截图。"; return }
         if tab == .text && normalized.isEmpty { error = "请输入岗位文字。"; return }
         if tab == .text && normalized.count > Self.limit { error = "岗位文字不能超过 60000 个字符。"; return }
@@ -479,8 +522,15 @@ struct CareerJobImportSheet: View {
     }
 
     private func create() async {
-        let required = [("job_title", "职位名称"), ("company_name", "公司名称")].filter { (form[$0.0] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        if !required.isEmpty { error = "请先填写" + required.map(\.1).joined(separator: "、"); return }
+        var required = [("job_title", "职位名称"), ("company_name", "公司名称"), ("employment_type", "求职分类")]
+            .filter { (form[$0.0] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.map(\.1)
+        if resumeID.isEmpty && resumes != nil { required.append("投递简历") }
+        if !required.isEmpty { error = "请先填写" + required.joined(separator: "、"); return }
+        if resumeID.isEmpty {
+            // 列表没读到：重读一次让用户选，不放行没绑简历的岗位
+            error = await loadResumes() != nil ? "请先填写投递简历" : "简历列表加载失败，请稍后重试。"
+            return
+        }
         busy = true; error = nil
         defer { busy = false }
         do {
@@ -503,6 +553,7 @@ struct CareerJobImportSheet: View {
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.map(JSONValue.string))
         fields["salary_months_per_year"] = Double(value("salary_months_per_year")).map(JSONValue.number) ?? .null
         fields["source_type"] = .string("manual")
+        fields["resume_id"] = .string(resumeID)
         return .object(fields)
     }
 

@@ -67,16 +67,6 @@ struct MockLinkStyle: ButtonStyle {
     }
 }
 
-/// 下拉箭头（Web `Caret`）：10 × 10 的折线。
-struct MockCaret: View {
-    var color = MockPalette.fnt
-    var body: some View {
-        Path { path in path.move(to: CGPoint(x: 2.5, y: 3.75)); path.addLine(to: CGPoint(x: 5, y: 6.25)); path.addLine(to: CGPoint(x: 7.5, y: 3.75)) }
-            .stroke(color, style: StrokeStyle(lineWidth: 1.1, lineCap: .round, lineJoin: .round))
-            .frame(width: 10, height: 10).offset(y: -1).accessibilityHidden(true)
-    }
-}
-
 /// 分段选择（macOS 稿：浅灰底、选中白块带细阴影）。
 struct MockSeg<Value: Hashable>: View {
     let label: String
@@ -148,41 +138,6 @@ extension MockConfirmCard where Extra == EmptyView {
     }
 }
 
-/// `.mi3-form`：462 宽的表单卡，标题 17（导入记录用 20 衬线），说明 13；底部一条分隔线上是 72 高的按钮行。
-struct MockFormCard<Content: View, Left: View, Foot: View>: View {
-    let title: String
-    var sub: String? = nil
-    var serif = false
-    var subColor = MockPalette.fnt
-    var width: CGFloat = 462
-    let close: () -> Void
-    /// false：按钮行上面没有分隔线，按钮行按自身高度（Figma 02.02 / 02.05 的弹窗）
-    var footLine = true
-    var footTop: CGFloat = 20
-    var footBottom: CGFloat = 0
-    @ViewBuilder var content: () -> Content
-    @ViewBuilder var left: () -> Left
-    @ViewBuilder var foot: () -> Foot
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(verbatim: title).font(serif ? V3.serif(20) : V3.sans(17, weight: .medium)).foregroundStyle(MockPalette.ink).frame(height: serif ? 28 : 24, alignment: .leading)
-            if let sub { Text(verbatim: sub).font(V3.sans(13)).foregroundStyle(subColor).frame(height: 20, alignment: .leading).padding(.top, 6) }
-            content()
-            HStack(spacing: 10) {
-                left()
-                Spacer(minLength: 0)
-                foot()
-            }
-            .frame(maxWidth: .infinity).frame(height: footLine ? 72 : 38)
-            .overlay(alignment: .top) { if footLine { Rectangle().fill(MockPalette.line).frame(height: 1).padding(.horizontal, -33) } }
-            .padding(.top, footTop)
-        }
-        .padding(.horizontal, 33).padding(.top, 29).padding(.bottom, footBottom)
-        .frame(width: width, alignment: .leading)
-        .background { Button("", action: close).keyboardShortcut(.cancelAction).opacity(0).accessibilityHidden(true) }
-    }
-}
-
 // MARK: 提示条
 
 struct MockNotice: Equatable {
@@ -231,14 +186,6 @@ enum MockRand {
         for unit in text.unicodeScalars { value = (value ^ UInt32(truncatingIfNeeded: unit.value & 0xFFFF)) &* 16777619 }
         return value
     }
-}
-
-private enum Wave {
-    static let rowW = 1000.0, rowStep = 5.0, barW = 2.6, rowScale = 1.625
-    static let rowBars = Int(rowW / rowStep), orangeBars = 17
-    static let ghost: [Double] = [6, 23, 11, 10, 22, 19, 16, 28, 31, 26, 32, 31, 38, 18, 22, 32, 30, 10, 26, 18, 27, 23, 8, 15, 23, 19, 19, 19, 28, 31, 19, 19, 36, 21, 15, 20, 24, 19, 39, 25, 28, 30, 8, 12, 17, 15, 13, 9, 23, 7, 15, 15, 25, 31, 19, 10, 14, 10, 10, 10, 7, 8, 7, 3, 5, 3]
-    static let ghostBlue = 53, ghostStep = 5.5
-    static let ghostBars = Int(rowW / ghostStep)
 }
 
 /// 面试中的大声纹（900 × 100）：you 跟着麦克风，interviewer 说话时持续起伏，rest 是静止的灰声纹，flat 是一条线。
@@ -294,21 +241,6 @@ struct MockLiveVoiceprint: View {
     }
 }
 
-/// 设备检测的小声纹（165 × 24）。
-struct MockMiniVoiceprint: View {
-    let values: [Double]
-    var body: some View {
-        Canvas { context, _ in
-            for index in 0..<33 {
-                let value = values.isEmpty ? 0 : values[min(values.count - 1, Int(Double(index) / 33 * Double(values.count)))]
-                let height = max(2, min(1, value * 2.4) * 22)
-                context.fill(Path(roundedRect: CGRect(x: Double(index) * 5, y: 12 - height / 2, width: 2.6, height: height), cornerRadius: 1.3), with: .color(MockPalette.blue))
-            }
-        }
-        .frame(width: 165, height: 24).accessibilityHidden(true)
-    }
-}
-
 /// 一段声音的音量记录：每次音量变化推进一格（面试中、设备检测用）。
 struct MockLevelHistory: ViewModifier {
     let level: Float
@@ -319,16 +251,4 @@ struct MockLevelHistory: ViewModifier {
             next.append(Double(value)); history = next
         }
     }
-}
-
-// MARK: 摘要四列（首页、结束页共用）
-
-struct MockTally: Identifiable {
-    var value: String
-    var unit: String? = nil
-    var label: String
-    var tone: Color? = nil
-    var text: String
-    var dot: Color? = nil
-    var id: String { label }
 }

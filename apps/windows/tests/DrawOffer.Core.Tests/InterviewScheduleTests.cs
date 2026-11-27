@@ -31,9 +31,7 @@ public class InterviewScheduleTests
     [Fact]
     public void DefaultCalendarAndUnzonedInputUseBeijingTime()
     {
-        var date = ScheduleCalendar.LocalDate(new DateOnly(2030, 1, 2), TimeSpan.FromHours(9));
-        Assert.Equal(TimeSpan.FromHours(8), date.Offset);
-        Assert.Equal(new DateTimeOffset(2030, 1, 2, 1, 0, 0, TimeSpan.Zero), date.ToUniversalTime());
+        var date = new DateTimeOffset(2030, 1, 2, 9, 0, 0, TimeSpan.FromHours(8));
         Assert.Equal(date, CareerApplication.Date("2030-01-02T09:00:00"));
         Assert.All(ScheduleCalendar.MonthDays(date), day =>
         {
@@ -76,8 +74,6 @@ public class InterviewScheduleTests
         Assert.Equal(2, lanes["1"].Count);
         Assert.Equal(1, lanes["2"].Index);
         Assert.Equal(1, lanes["3"].Count);
-        var window = Appointment("4", "2029-12-31T09:00:00Z", "2030-01-02T10:00:00Z", window: true);
-        Assert.Equal(["1", "2", "3"], ScheduleCalendar.Upcoming([window, c, a, b], At("2030-01-01T08:00:00Z")).Select(x => x.Id));
     }
 
     [Fact]

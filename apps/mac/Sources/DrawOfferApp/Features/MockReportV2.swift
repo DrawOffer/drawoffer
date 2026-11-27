@@ -14,6 +14,8 @@ struct MockReportV2: View {
     var changed: () -> Void = {}
     /// 「练这 N 道」「练这一处」：带着题目进面试设置（Figma 09 · 02 配置页的练习卡）。
     var practicePlan: (MockPracticePlan) -> Void = { _ in }
+    /// 完整记录里「再练一场」：按这场挂的投递开一场新的完整模拟（投递 id，可空）。
+    var restart: (String?) -> Void = { _ in }
 
     private static let maxReEvaluate = 3
 
@@ -28,7 +30,6 @@ struct MockReportV2: View {
     @State private var saving = false
     @State private var busy = false
     @State private var notice: MockNotice?
-    @State private var next: NextInterview?
     @State private var player = InterviewerVoice()
     @State private var playing: String?
 
@@ -59,7 +60,6 @@ struct MockReportV2: View {
         }
         .task(id: id) { await load() }
         .task(id: "\(id)-\(detail?["report"]?["total_score"]?.numberValue ?? -1)") { await loadContext() }
-        .task(id: detail?.display("job_application_id") ?? "") { await loadNext() }
         .onDisappear { player.stop() }
         .centeredSheet(item: $judging) { item in
             MockJudgeDialog(question: item, busy: saving, save: { depth in Task { await saveJudge(item, depth) } }, close: { judging = nil })
@@ -80,7 +80,9 @@ struct MockReportV2: View {
         let canEdit = { (q: MockRV.Question) in !deleted && q.turns.contains(where: \.editable) }
         let anyRecording = detail.text("answer_mode") == "voice" && view.questions.contains(where: hasRecording)
         if reading.on {
-            MockReviewRecord(view: view, initial: reading.at, playing: playing, play: deleted ? nil : { toggle($0, detail) }) {
+            MockReviewRecord(view: view, initial: reading.at, playing: playing, play: deleted ? nil : { toggle($0, detail) },
+                             open: { id in reading = (nil, false); question = id },
+                             restart: { restart(detail.display("job_application_id").nonEmptyValue) }) {
                 MockBackCrumb(label: view.title) { reading = (nil, false) }
             }
         } else if let question, let index = view.questions.firstIndex(where: { $0.id == question }) {
@@ -95,15 +97,13 @@ struct MockReportV2: View {
             }
             .id(current.id)
         } else {
-            MockReviewOverview(view: view, next: next, open: { question = $0 }, practice: { start($0, detail, view) }) {
+            MockReviewOverview(view: view, open: { question = $0 }, practice: { start($0, detail, view) }) {
                 MockBackCrumb(label: "全部记录", action: records)
             } actions: {
-                Button("翻看面试记录") { reading = (nil, true) }.buttonStyle(MockPillStyle(kind: .ghost, height: 40, padding: 20))
-                if !focus.isEmpty {
-                    Button("练这 \(focus.count) 道") { start(focus, detail, view) }.buttonStyle(MockPillStyle(height: 40, padding: 20))
-                } else {
-                    Button(busy ? "正在准备…" : "再练一次") { Task { await repeatSession() } }.buttonStyle(MockPillStyle(height: 40, padding: 20)).disabled(busy)
+                if focus.isEmpty {
+                    Button(busy ? "正在准备…" : "再练一次") { Task { await repeatSession() } }.buttonStyle(MockLinkStyle(size: 13, color: ROC.sub)).fontWeight(.medium).disabled(busy)
                 }
+                Button("完整面试记录") { reading = (nil, true) }.buttonStyle(MockLinkStyle(size: 13, color: ROC.sub)).fontWeight(.medium)
             } memory: {
                 RRMemorySection(mockID: detail.display("id"), pastCount: view.pastCount) { target in
                     practice(PracticeFocus(kind: target.text("kind").nonEmptyValue ?? "topic", ref: target.text("ref"), label: target.text("label")))
@@ -118,7 +118,7 @@ struct MockReportV2: View {
 
     private func start(_ questions: [MockRV.Question], _ detail: JSONValue, _ view: MockRV.View) {
         guard !questions.isEmpty else { return }
-        practicePlan(MockPracticePlan(back: view.title, items: questions.prefix(3).map(MockRV.practiceItem),
+        practicePlan(MockPracticePlan(back: view.title, items: questions.prefix(3).map { MockRV.practiceItem($0, origin: "mock:\(id)") },
                                       applicationID: detail.display("job_application_id").nonEmptyValue,
                                       interviewType: detail.text("interview_type").nonEmptyValue, difficulty: detail.text("difficulty").nonEmptyValue,
                                       mode: detail.text("answer_mode").nonEmptyValue, resumeID: detail.display("resume_id").nonEmptyValue))
@@ -142,17 +142,6 @@ struct MockReportV2: View {
     private func loadContext() async {
         guard detail != nil else { return }
         context = try? await session.api.careerRequest(path: "/api/mock-interviews/review-context", method: "GET", query: ["kind": "mock", "id": id], body: nil)
-    }
-
-    private func loadNext() async {
-        guard let application = detail?.display("job_application_id"), !application.isEmpty else { next = nil; return }
-        let now = Date()
-        let query = ["status": "scheduled", "start_at": ISO8601DateFormatter().string(from: now), "application_id": application]
-        guard let result = try? await session.api.careerRequest(path: "/api/interview-sessions", method: "GET", query: query, body: nil) else { return }
-        guard let first = (result["items"]?.items ?? []).sorted(by: { $0.text("start_at") < $1.text("start_at") }).first,
-              let date = CareerApplication.date(first.text("start_at")) else { next = nil; return }
-        let parts = Beijing.calendar.dateComponents([.month, .day], from: date)
-        next = NextInterview(label: first.text("stage_label"), date: String(format: "%02d-%02d", parts.month ?? 0, parts.day ?? 0), days: MockMap.dayDiff(now, date))
     }
 
     private func toggle(_ item: MockRV.Question, _ detail: JSONValue) {

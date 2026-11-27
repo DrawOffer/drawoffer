@@ -106,19 +106,6 @@ public sealed partial class SessionViewModel(IApiClient api) : ObservableObject
     /// <summary>浏览器登录：打开授权页后等待 `drawoffer://` 回调；`BrowserLoginPending` 用于界面显示等待状态（Mac `SessionStore`）。</summary>
     [ObservableProperty] private bool _browserLoginPending;
 
-    public async Task<Uri> BeginBrowserLoginAsync(string clientVersion)
-    {
-        if (Api is not HttpApiClient client) throw new InvalidOperationException("Desktop HTTP client required");
-        ++_operation;
-        ErrorMessage = null;
-        var challenge = await client.Coordinator.BeginBrowserLoginAsync(clientVersion);
-        Apply(null);
-        BrowserLoginPending = true;
-        return challenge.AuthorizeUri;
-    }
-
-    public void CancelBrowserLogin() => BrowserLoginPending = false;
-
     public async Task CompleteBrowserLoginAsync(Uri callback)
     {
         // 没有进行中的浏览器登录时忽略回调（例如重复点击了旧页面的“打开 DrawOffer”）。

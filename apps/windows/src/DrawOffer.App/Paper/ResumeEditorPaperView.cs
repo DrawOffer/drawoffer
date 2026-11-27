@@ -40,13 +40,9 @@ public sealed record ResumeEditorCommand(JsonObject Json)
 {
     public static ResumeEditorCommand Undo => new(new JsonObject { ["type"] = "undo" });
     public static ResumeEditorCommand Redo => new(new JsonObject { ["type"] = "redo" });
-    public static ResumeEditorCommand Focus => new(new JsonObject { ["type"] = "focus" });
-    public static ResumeEditorCommand ResetOrder => new(new JsonObject { ["type"] = "reset-order" });
-    public static ResumeEditorCommand Jump(string? id) => new(new JsonObject { ["type"] = "jump", ["nodeId"] = id is null ? null : JsonValue.Create(id) });
     public static ResumeEditorCommand Reorder(IEnumerable<string> ids) => new(new JsonObject { ["type"] = "reorder", ["nodeIds"] = new JsonArray(ids.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray()) });
     public static ResumeEditorCommand Rename(string id, string title) => new(new JsonObject { ["type"] = "rename", ["nodeId"] = id, ["title"] = title });
     public static ResumeEditorCommand Remove(string id) => new(new JsonObject { ["type"] = "remove", ["nodeId"] = id });
-    public static ResumeEditorCommand Add(string kind, string title) => new(new JsonObject { ["type"] = "add", ["kind"] = kind, ["title"] = title });
     /// <summary>临时高亮这几行、把改法预览在纸上；同一 source 再发一次即替换，两项都空即清除。</summary>
     public static ResumeEditorCommand Decorate(string source, IEnumerable<string> highlight, IEnumerable<PaperLineChange> preview) => new(new JsonObject
     {

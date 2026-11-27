@@ -5,17 +5,8 @@ import SwiftUI
 struct WorkspaceView: View {
     @Environment(SessionStore.self) private var session
     @State private var selection: WorkspaceSection? = .home
-    private struct LoginRequest: Identifiable {
-        let id = UUID()
-        let template: ResumeTemplate?
-        let reasonOverride: String?
-        init(template: ResumeTemplate?, reasonOverride: String? = nil) {
-            self.template = template; self.reasonOverride = reasonOverride
-        }
-        var reason: String { reasonOverride ?? template.map { "登录后继续使用「\($0.name)」。" } ?? "登录后查看和同步你的简历。" }
-    }
-    @State private var loginRequest: LoginRequest?
-    @State private var pendingCreateKey: String?
+    /// 整窗登录页是否打开。
+    @State private var loginShown = false
     private struct ChatTarget: Equatable { let token = UUID(); let sessionID: String?; let initial: String?; var model: String? = nil; var draft: String? = nil }
     @State private var chat: ChatTarget?
     @State private var agentSessions = AgentSessionsModel()
@@ -29,6 +20,10 @@ struct WorkspaceView: View {
     @State private var announcements = AnnouncementCenter()
     @State private var plansPresented = false
     @State private var careerProfile = false
+    /// 额度弹窗打开时停在哪个标签（"credits" 为积分页）。
+    @State private var plansTab: String?
+    /// 整窗反馈页（10.03–10.05）是否打开。
+    @State private var feedbackShown = false
     /// 首页星图“去练”带过去的练习焦点（模拟面试首页读取后清空）。
     @State private var mockFocus: PracticeFocus?
     @State private var mockFullScreen = false
@@ -40,6 +35,7 @@ struct WorkspaceView: View {
     /// 首页“选择文件”导入简历：我的简历页收到后打开导入。
     @State private var importRequest: UUID?
     @State private var openApplication: String?
+    @State private var openDataset: String?
     /// 第 17 页：侧栏可以收起（⌃⌘S 或左上角开关），收起后开关浮在内容区同一位置。
     @AppStorage("sidebarVisible") private var sidebarVisible = true
 
@@ -65,7 +61,7 @@ struct WorkspaceView: View {
                              openChat: { id in chat = ChatTarget(sessionID: id, initial: nil); selection = .assistant },
                              newChat: { chat = ChatTarget(sessionID: nil, initial: nil); selection = .assistant },
                              requestLogin: { requestLogin() },
-                             openPlans: { plansPresented = true },
+                             openPlans: { plansTab = nil; plansPresented = true },
                              openCareerProfile: { careerProfile = true; selection = .account },
                              chatDeleted: { id in if chat?.sessionID == id { chat = nil; selection = .home } },
                              toggleSidebar: { withAnimation(.easeOut(duration: 0.18)) { sidebarVisible = false } })
@@ -100,16 +96,22 @@ struct WorkspaceView: View {
         .centeredAlert("此功能尚未开放", isPresented: $featureNotice) {
             Button("知道了", role: .cancel) {}
         } message: { Text("此功能将在后续版本开放。你已输入的内容会保留，可以继续浏览模板。") }
+        // 反馈得积分（10.03–10.05）：整窗页面盖住侧栏，右上角「← 返回」回到原处；未登录时「登录后提交」叠出登录页
+        .overlay {
+            if feedbackShown {
+                FeedbackPage(back: { feedbackShown = false }, login: { loginShown = true }).transition(.opacity)
+            }
+        }
         // 登录按 macOS 稿 01 页「02 · 登录页」做成整窗页面（盖住侧栏），右上角「暂不登录」回到游客模式
         .overlay {
-            if loginRequest != nil {
-                SignInView(fullPage: true, dismiss: { loginRequest = nil }).transition(.opacity)
+            if loginShown {
+                SignInView(fullPage: true, dismiss: { loginShown = false }).transition(.opacity)
             }
         }
         .centeredSheet(isPresented: Binding(get: { announcements.detail != nil }, set: { if !$0 { announcements.detail = nil } })) {
             AnnouncementDetailSheet().environment(announcements)
         }
-        .centeredSheet(isPresented: $plansPresented) { PlansSheet() }
+        .centeredSheet(isPresented: $plansPresented) { PlansSheet(initialTab: plansTab) }
         // 断网时窗口顶部 20pt 常驻一枚警告胶囊（第 16 页 E 组 / Web `PageUpdateNotice`），网络恢复自动消失。
         // 恢复后换成一闪而过的「网络已恢复」（E2 → A1）。
         .overlay(alignment: .top) {
@@ -157,13 +159,17 @@ struct WorkspaceView: View {
             case .section(let section): selection = section
             case .draft(let text): chat = ChatTarget(sessionID: nil, initial: nil, draft: String(text.prefix(4000))); selection = .assistant
             case .editResume(let id): editResumeID = id; selection = .resumes
-            case .plans: plansPresented = true
+            case .plans: plansTab = nil; plansPresented = true
+            case .credits: plansTab = "credits"; plansPresented = true
+            case .feedback: feedbackShown = true
             case .application(let id): openApplication = id; selection = .jobs
             case .mock(let focus): mockFocus = focus; selection = .mock
             case .mockSession(let id): mockSession = id; selection = .mock
             case .mockPractice(let plan): mockPlan = plan; selection = .mock
             case .mockFor(let application): mockApplication = application; selection = .mock
             case .job(let target): openJob = target; selection = .jobs
+            case .dataset(let id): openDataset = id; selection = .datasets
+            case .careerProfile: careerProfile = true; selection = .account
             case nil: break
             }
         }
@@ -171,23 +177,17 @@ struct WorkspaceView: View {
         .onChange(of: session.phase) { previous, current in
             if case .signedIn(let nextUser) = current {
                 if case .signedIn(let oldUser) = previous, oldUser.id != nextUser.id {
-                    pendingCreateKey = nil
                     focusResumeID = nil
                     editResumeID = nil
                     chat = nil
-                    loginRequest = nil
                     selection = .home
                 }
-                let template = loginRequest?.template
-                loginRequest = nil
-                // 登录前选中的示例模板：回到模板页，按 key 匹配真实模板后打开创建弹窗
-                if let template { pendingCreateKey = template.key; selection = .templates }
+                loginShown = false
             } else if case .signedIn = previous {
-                pendingCreateKey = nil
                 focusResumeID = nil
                 editResumeID = nil
                 chat = nil
-                loginRequest = nil
+                loginShown = false
                 selection = .home
             }
         }
@@ -206,18 +206,16 @@ struct WorkspaceView: View {
                                openChat: { id in chat = ChatTarget(sessionID: id, initial: nil); selection = .assistant },
                                chatsChanged: { Task { await agentSessions.load(api: session.api, account: user?.id ?? "") } })
             } else {
-                GuestHomeView(requireAccount: { requestLogin(reason: "登录 DrawOffer，开始你的第一份简历。") })
+                GuestHomeView(requireAccount: { requestLogin() })
             }
-        case .datasets: DatasetLibraryView(requireAccount: { requestLogin(reason: "登录后管理你的资料库。") })
-                case .mock: MockInterviewView(requireAccount: { requestLogin(reason: "登录后开始模拟面试。") }, showSchedule: { selection = .schedule }, navigate: { selection = $0 }, incomingFocus: $mockFocus, incomingSession: $mockSession, incomingPlan: $mockPlan, incomingApplication: $mockApplication, fullScreen: $mockFullScreen)
-        case .schedule: InterviewScheduleView(requireAccount: { requestLogin(reason: "登录后管理面试安排。") })
-        case .jobs: JobsBoardView(requireAccount: { requestLogin(reason: "登录后管理岗位和求职进度。") }, openApplication: $openApplication, openJob: $openJob)
+        case .datasets: DatasetLibraryView(openDataset: $openDataset)
+                case .mock: MockInterviewView(showSchedule: { selection = .schedule }, navigate: { selection = $0 }, incomingFocus: $mockFocus, incomingSession: $mockSession, incomingPlan: $mockPlan, incomingApplication: $mockApplication, fullScreen: $mockFullScreen)
+        case .schedule: InterviewScheduleView()
+        case .jobs: JobsBoardView(openApplication: $openApplication, openJob: $openJob)
         case .templates:
-            TemplatesView(pendingCreateKey: $pendingCreateKey,
-                          requireLogin: { loginRequest = LoginRequest(template: $0) },
-                          onCreated: { id in editResumeID = id.isEmpty ? nil : id; selection = .resumes })
+            TemplatesView(onCreated: { id in editResumeID = id.isEmpty ? nil : id; selection = .resumes })
         case .resumes:
-            ResumesView(focusResumeID: $focusResumeID, editResumeID: $editResumeID, browse: { selection = .templates }, login: { requestLogin() }, importRequest: importRequest)
+            ResumesView(focusResumeID: $focusResumeID, editResumeID: $editResumeID, importRequest: importRequest)
         case .assistant:
             if user != nil, let chat {
                 AssistantChatView(sessionID: chat.sessionID, initialMessage: chat.initial,
@@ -229,19 +227,17 @@ struct WorkspaceView: View {
                                       if running { agentSessions.runningIDs.insert(id) } else { agentSessions.runningIDs.remove(id) }
                                   })
                     .id(chat.token)
-            } else { PlaceholderView(section: .assistant) }
+            } else { Color.white }
         case .opportunities:
-            if user != nil { JobPoolView(openApplication: { openApplication = $0; selection = .jobs }) }
-            else { PlaceholderView(section: .opportunities) }
+            if user != nil { JobPoolView(openApplication: { openApplication = $0; selection = .jobs }, openCareerProfile: { careerProfile = true; selection = .account }) }
         case .account:
-            if user != nil { AccountSection(career: $careerProfile) } else { PlaceholderView(section: .account) }
-        case let section?: PlaceholderView(section: section)
+            if user != nil { AccountSection(career: $careerProfile) }
         }
     }
 
-    private func requestLogin(reason: String? = nil) {
+    private func requestLogin() {
         if user != nil { featureNotice = true; return }
-        loginRequest = LoginRequest(template: nil, reasonOverride: reason)
+        loginShown = true
     }
 
 }
@@ -252,43 +248,5 @@ struct WebActionStyle: ButtonStyle {
         configuration.label.font(.system(size: 13, weight: .medium))
             .foregroundStyle(.white).opacity(enabled ? 1 : 0.5).padding(.horizontal, 14).frame(height: 32)
             .background(Color(hex: 0x17191C).opacity(configuration.isPressed ? 0.8 : 1), in: RoundedRectangle(cornerRadius: 6))
-    }
-}
-
-struct EmptyResumeArt: View {
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            Canvas { context, _ in
-                for x in stride(from: 0, through: 504, by: 12) {
-                    for y in stride(from: 0, through: 236, by: 12) {
-                        context.fill(Path(ellipseIn: CGRect(x: x, y: y, width: 1, height: 1)), with: .color(.gray.opacity(0.15)))
-                    }
-                }
-            }
-            VStack(alignment: .leading, spacing: 14) {
-                RoundedRectangle(cornerRadius: 2).fill(Color(hex: 0x17191C)).frame(width: 48, height: 7)
-                Rectangle().fill(Color(hex: 0xDCDCD8)).frame(width: 72, height: 3)
-                ForEach(0..<3) { _ in RoundedRectangle(cornerRadius: 4).stroke(Color(hex: 0xE9E9E5), style: StrokeStyle(lineWidth: 1, dash: [3])).frame(height: 28) }
-            }.padding(16).frame(width: 132, height: 176).background(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 5)).overlay(RoundedRectangle(cornerRadius: 5).stroke(Color(hex: 0xE4E4E0)))
-                .shadow(color: .black.opacity(0.04), radius: 8, y: 4).offset(x: 186, y: 30)
-            chip("教育经历", x: 90, y: 68, angle: -4)
-            chip("项目经历", x: 336, y: 110, angle: 3)
-            chip("专业技能", x: 104, y: 158, angle: 2)
-        }.accessibilityHidden(true)
-    }
-    private func chip(_ title: String, x: CGFloat, y: CGFloat, angle: Double) -> some View {
-        Label(title, systemImage: "square.grid.2x2").font(.system(size: 11)).padding(10).background(.white)
-            .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color(hex: 0xE4E4E0)))
-            .rotationEffect(.degrees(angle)).offset(x: x, y: y)
-    }
-}
-
-struct PlaceholderView: View {
-    let section: WorkspaceSection
-    var body: some View {
-        ContentUnavailableView(section.title, systemImage: section.symbol,
-            description: Text("原生版本待实现"))
-            .navigationTitle(section.title)
     }
 }

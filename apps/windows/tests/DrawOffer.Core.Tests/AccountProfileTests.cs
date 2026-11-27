@@ -34,12 +34,8 @@ public class AccountProfileTests
     {
         var profile=JsonNode.Parse("""{"personal":{"name":"虚构","email":"a@example.com"},"has_id_number":false,"catalog":{"fields":{"a":{"scope":"personal","key":"height","label":"身高"},"b":{"scope":"personal","key":"name","label":"姓名"},"c":{"scope":"personal","key":"x","label":"站点","site":"example"}}}}""")!;
         Assert.Equal(new[]{"gender","birth_date","phone","ethnicity","political_status","native_place","id_number"},CareerProfileRules.Missing(profile));
-        Assert.Equal(new[]{"height"},CareerProfileRules.MoreRows(profile).Select(x=>x.Key));
         var experience=JsonNode.Parse("""{"sections":[{"kind":"work","entries":[{"id":"1","fields":{"单位":"虚构公司"},"intern":true}]},{"kind":"skills","lines":["编程：Swift、Python；工具: Git"],"entries":[]}]}""")!;
-        var group=Assert.Single(CareerProfileRules.Groups(experience));Assert.Equal("internship",group.Key);
-        Assert.Equal("虚构公司",CareerProfileRules.EntryTitle(Assert.Single(group.Items).Entry));
         Assert.Equal(new[]{"Swift","Python","Git"},CareerProfileRules.Skills(experience).Select(x=>x.Name));
-        Assert.Equal("15K–25K / 月",CareerProfileRules.SalaryText(JsonNode.Parse("""{"salary_min":15000,"salary_max":25000,"salary_period":"month"}""")!));
     }
 
     [Fact]

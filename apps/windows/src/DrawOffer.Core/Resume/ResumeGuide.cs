@@ -126,12 +126,6 @@ public static class ResumeGuideModel
         public bool DegreeFirst { get; set; }
         public bool InlineExtra { get; set; }
 
-        public EntryFormat Copy() => new()
-        {
-            Lines = Lines.Select(x => (x.Slots.ToList(), x.Delimiter)).ToList(), Dash = Dash, Date = Date with { }, Joiner = Joiner,
-            DegreeFirst = DegreeFirst, InlineExtra = InlineExtra,
-        };
-
         public bool Equals(EntryFormat? other) =>
             other is not null && Lines.Count == other.Lines.Count
             && Lines.Zip(other.Lines).All(x => x.First.Slots.SequenceEqual(x.Second.Slots) && x.First.Delimiter == x.Second.Delimiter)

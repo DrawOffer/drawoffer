@@ -57,9 +57,6 @@ public sealed class Sidebar : Grid
         Render();
     }
 
-    /// <summary>侧栏顶行的空白处作为窗口拖动区（品牌与铃铛之间）。</summary>
-    public FrameworkElement DragRegion => (FrameworkElement)Children[0];
-
     User? SignedInUser => App.Session.Phase == SessionViewModel.SessionPhase.SignedIn ? App.Session.User : null;
 
     public void Render()

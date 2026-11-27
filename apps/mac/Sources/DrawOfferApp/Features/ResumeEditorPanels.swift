@@ -145,7 +145,7 @@ struct TemplateSwitchSheet: View {
         let current = Self.key(template) == currentKey
         return Button { Task { await choose(template) } } label: {
             VStack(alignment: .leading, spacing: 7) {
-                TemplateThumbnail(template: template, guest: false, radius: 4)
+                TemplateThumbnail(template: template, radius: 4)
                     .overlay(RoundedRectangle(cornerRadius: 4).stroke(current ? V3.txt : hovered == template.id ? Color(hex: 0xC9C9C4) : .clear,
                                                                        lineWidth: current ? 1.5 : 1))
                     .overlay { if applying == template.id { ZStack { Color.white.opacity(0.7); ProgressView().controlSize(.small) }.clipShape(RoundedRectangle(cornerRadius: 4)) } }
@@ -218,7 +218,12 @@ struct TypeCard: View {
             textSection
             marginSection
         }
-        .padding(20).frame(width: 320).background(Color.white).disabled(disabled)
+        // 06.2 `.wbs-card`：白底、#e4e4e0 细边、圆角 14、浅阴影，内边距上 18 左右下 20
+        .padding(.top, 18).padding(.horizontal, 20).padding(.bottom, 20).frame(width: 320)
+        .background(.white, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(V3.cl))
+        .shadow(color: Color(hex: 0x1D1D1B).opacity(0.08), radius: 12, y: 6)
+        .disabled(disabled)
     }
 
     private func head<Trailing: View>(_ title: String, @ViewBuilder trailing: () -> Trailing) -> some View {

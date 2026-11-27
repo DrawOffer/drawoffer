@@ -60,33 +60,8 @@ public enum AvatarCrop {
 
 /// 求职资料页（Web `account/CareerProfilePage.tsx`）里与界面无关的规则。
 public enum CareerProfileRules {
-    public struct Row: Sendable {
-        public let key: String; public let label: String; public let options: [String]?; public let hint: String?
-        public init(key: String, label: String, options: [String]?, hint: String?) { self.key = key; self.label = label; self.options = options; self.hint = hint }
-    }
-    public static let basic = [
-        Row(key: "name", label: "姓名", options: nil, hint: nil),
-        Row(key: "gender", label: "性别", options: ["男", "女", "其他", "不愿透露"], hint: nil),
-        Row(key: "birth_date", label: "出生日期", options: nil, hint: "填到日，例如 2003-05-18；只知道年月就填 2003-05"),
-        Row(key: "phone", label: "手机号", options: nil, hint: nil),
-        Row(key: "email", label: "邮箱", options: nil, hint: nil),
-    ]
-    public static let links = [
-        Row(key: "github", label: "GitHub", options: nil, hint: "填主页地址或用户名"),
-        Row(key: "website", label: "个人网站", options: nil, hint: "以 http:// 或 https:// 开头"),
-        Row(key: "portfolio_url", label: "作品集", options: nil, hint: "以 http:// 或 https:// 开头"),
-    ]
-    public static let identity = [
-        Row(key: "ethnicity", label: "民族", options: nil, hint: nil),
-        Row(key: "political_status", label: "政治面貌", options: ["中共党员", "中共预备党员", "共青团员", "群众", "其他"], hint: nil),
-        Row(key: "native_place", label: "籍贯", options: nil, hint: nil),
-        Row(key: "home_city", label: "家庭所在城市", options: nil, hint: nil),
-    ]
     /// 网申最常问的几项：右上角“还差 N 项”只数这些（再加证件号码）。
     public static let common = ["name", "gender", "birth_date", "phone", "email", "ethnicity", "political_status", "native_place"]
-    public static let entrySupplements: [String: [String]] = ["education": ["gpa", "major_rank", "courses", "study_mode", "advisor"], "work": ["department"], "project": [], "other": []]
-    public static let entryFields: [String: [String]] = ["education": ["学校", "专业", "学历学位", "开始时间", "结束时间"], "work": ["单位", "职位", "开始时间", "结束时间"],
-                                                        "project": ["项目名称", "角色", "开始时间", "结束时间"], "other": ["名称", "开始时间", "结束时间"]]
     public static let textKinds: Set<String> = ["skills", "profile", "interests"]
     public static let skillLevels = [("basic", "了解"), ("familiar", "熟悉"), ("proficient", "熟练")]
 
@@ -96,39 +71,7 @@ public enum CareerProfileRules {
         return profile["has_id_number"]?.bool == true ? keys : keys + ["id_number"]
     }
 
-    /// 目录里其余“个人”字段（不含网站专属与已展示的）。
-    public static func moreRows(_ profile: JSONValue) -> [(key: String, label: String)] {
-        let shown = Set((basic + links + identity).map(\.key))
-        guard case .object(let fields) = profile["catalog"]?["fields"] ?? .null else { return [] }
-        return fields.values.filter { $0.text("scope") == "personal" && $0.text("site").isEmpty && !shown.contains($0.text("key")) && $0.text("key") != "summary" }
-            .map { ($0.text("key"), $0.text("label")) }.sorted { $0.key < $1.key }
-    }
-
     public static func entryKind(_ kind: String) -> String { ["education", "work", "project"].contains(kind) ? kind : "other" }
-
-    public struct Item: Sendable { public let sectionIndex: Int; public let entry: JSONValue; public let kind: String }
-    public struct Group: Sendable { public let key: String; public let label: String; public var items: [Item] }
-
-    public static func groups(_ experience: JSONValue) -> [Group] {
-        var result = [("education", "教育"), ("internship", "实习"), ("work", "工作"), ("project", "项目"), ("campus", "校园"), ("other", "奖项与证书")].map { Group(key: $0.0, label: $0.1, items: []) }
-        for (index, section) in (experience["sections"]?.items ?? []).enumerated() {
-            let raw = section.text("kind")
-            if textKinds.contains(raw) { continue }
-            let kind = entryKind(raw)
-            for entry in section["entries"]?.items ?? [] {
-                let key = kind == "work" ? (entry["intern"]?.bool == true ? "internship" : "work") : raw == "activity" ? "campus" : kind
-                if let position = result.firstIndex(where: { $0.key == key }) { result[position].items.append(Item(sectionIndex: index, entry: entry, kind: kind)) }
-            }
-        }
-        return result.filter { !$0.items.isEmpty }
-    }
-
-    public static func entryTitle(_ entry: JSONValue) -> String {
-        let fields = entry["fields"] ?? .null
-        for key in ["学校", "单位", "所属单位", "项目名称", "名称"] where !fields.text(key).isEmpty { return fields.text(key) }
-        if case .object(let all) = fields, let first = all.keys.sorted().first, let value = all[first]?.stringValue, !value.isEmpty { return value }
-        return "未命名"
-    }
 
     /// 技能：已标熟练度的列表；还没有时从简历技能行里拆出名字（未标注）。
     public static func skills(_ experience: JSONValue?) -> [(name: String, level: String?)] {
@@ -151,11 +94,5 @@ public enum CareerProfileRules {
             }
         }
         return Array(names.prefix(60))
-    }
-
-    public static func salaryText(_ intent: JSONValue) -> String {
-        let values = [intent["salary_min"]?.numberValue, intent["salary_max"]?.numberValue].compactMap { $0 }
-        guard !values.isEmpty else { return "" }
-        return values.map { "\(Int(($0 / 1000).rounded()))K" }.joined(separator: "–") + " / " + (intent.text("salary_period") == "year" ? "年" : "月")
     }
 }

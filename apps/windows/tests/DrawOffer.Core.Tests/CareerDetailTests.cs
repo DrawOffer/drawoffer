@@ -41,7 +41,6 @@ public class CareerDetailTests {
         Assert.Equal("10.08 14:00–15:00 · 视频面试 · 面试官 李老师",model.Next.Detail);
         Assert.Equal(CareerDetailAction.RecordReview,model.Next.Primary?.Action);
         Assert.Equal(new[]{CareerDetailAction.Reschedule,CareerDetailAction.CancelSession},model.Next.Secondary.Select(x=>x.Action));
-        Assert.Equal(CareerTone.Blue,model.Next.Accent);
         Assert.Equal("31",model.CurrentSession?.Text("id"));
         Assert.Equal(new[]{"一面 · 技术基础","技术笔试","简历筛选","提交投递"},model.History.Select(x=>x.Title));
         Assert.True(model.History[0].Highlight==CareerTone.Blue&&model.History[0].SessionId=="31");
@@ -84,7 +83,7 @@ public class CareerDetailTests {
         var source="""{"id":"4","status":"active","lifecycle_status":"terminated","termination_reason":"company_rejected","terminated_at":"2030-10-05T02:00:00Z","archived_at":null,"current_stage_type":"interview","current_stage_label":"二面","offer_status":"none","applied_at":"2030-09-01T02:00:00Z","stages":[{"id":"8","sequence_no":1,"stage_type":"interview","stage_label":"二面","entered_at":"2030-09-20T02:00:00Z"}]}""";
         var model=new CareerDetailModel(Json(source),[],Now,Shanghai);
         Assert.True(model.Ended&&model.Steps.Last().State==CareerDetailStepState.Failed);
-        Assert.True(model.Next.Title=="流程已结束：二面未通过"&&model.Next.Accent==CareerTone.Red);
+        Assert.True(model.Next.Title=="流程已结束：二面未通过");
         Assert.True(model.Next.Primary?.Action==CareerDetailAction.ViewReview&&model.Next.Primary?.Dark==false);
     }
 

@@ -12,8 +12,7 @@ struct CareerDeliverySheet: View {
     let close: () -> Void
     let saved: () -> Void
 
-    /// Web `CHANNELS`。
-    static let channels = ["招聘官网", "同事内推", "校园招聘", "BOSS 直聘", "猎聘", "拉勾", "牛客", "实习僧", "邮件投递", "其他"]
+    static let channels = CareerRecordApplied.channels
 
     @State private var appliedAt: Date?
     @State private var channel = ""
@@ -42,7 +41,7 @@ struct CareerDeliverySheet: View {
                     field("投递日期") { dateField }
                     field("渠道") { channelField }
                 }
-                field("投递简历", hint: "可选，会出现在关联资料") { resumeField }
+                field("投递简历", hint: "会出现在关联资料") { resumeField }
                 notesField
                 if let error { Text(error).font(V3.sans(12.5)).foregroundStyle(V3.red) }
             }
@@ -131,7 +130,6 @@ struct CareerDeliverySheet: View {
     @ViewBuilder private var resumeField: some View {
         if picking {
             Menu {
-                Button("不关联简历") { resumeID = nil; picking = false }
                 ForEach(resumes ?? [], id: \.self) { item in
                     Button(item.text("title")) { resumeID = item.text("id"); picking = false }
                 }

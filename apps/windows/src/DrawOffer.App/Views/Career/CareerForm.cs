@@ -105,17 +105,6 @@ public sealed partial class CareerForm : UserControl
     bool NeedsStage => _kind is "stage" or "apply" or "schedule-current" or "arranged" or "schedule";
     bool Creation => _kind == "import" || (_kind is "arranged" or "schedule" && _selectedExisting.Length == 0);
 
-    IReadOnlyList<string> StageOptions
-    {
-        get
-        {
-            if (_kind == "offer") return ["offer"];
-            if (_staged || _reuseCurrentStage) return [_stage];
-            var options = CareerStage.NextStages(_current ?? _applications.FirstOrDefault(a => a.Id == _selectedExisting));
-            return _kind == "schedule" ? options.Where(o => o is "assessment" or "written_test" or "ai_interview" or "interview").ToArray() : options;
-        }
-    }
-
     bool ShowSchedule => _stage is "assessment" or "written_test" or "ai_interview" or "interview";
     bool StartsPending => _current?.Stage == "pending" || Creation;
     bool IsHR => _stage == "interview" && _label == "HR 面";

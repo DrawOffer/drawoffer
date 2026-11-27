@@ -43,23 +43,18 @@ struct MockVoiceSession: View {
     var body: some View {
         Group {
             switch phase {
-            case .prep: MockPrepStage(detail: local, changed: changed, home: home, onCheckDevice: { phase = .check })
+            case .prep: MockPrepStage(detail: local, changed: changed, home: home, onCheckDevice: { phase = .check }, onDone: { phase = .check })
             case .check:
-                MockDeviceCheck(detail: local, busy: busy, onStart: start, onBack: { dialog = "back" }, onSwitchToText: { dialog = "text" })
+                MockDeviceCheck(detail: local, busy: busy == "abandon" || busy == "text" ? busy : nil, onStart: start, onBack: { phase = .prep },
+                                onSwitchToText: { dialog = "text" }, onCancel: { dialog = "abandon" })
             default: interview
             }
         }
         .overlay { MockNoticeToast(notice: $notice) }
         .modifier(MockSessionDialogs(detail: local, dialog: $dialog, busy: busy, voice: true, skip: skip, end: end))
-        .mockDialog($dialog, "back") {
-            let preparing = local.text("status") == "preparing"
-            MockSessionConfirm(title: "返回修改设置？", desc: preparing ? "题目还在准备，返回后这场记为已放弃，不扣积分。" : "返回后这场记为已放弃，改好设置再开始新的一场。",
-                            confirm: "返回改设置", cancel: preparing ? "继续准备" : "继续面试", busy: busy == "back", busyLabel: "正在返回…",
-                            onConfirm: { leaveCheck("back") }, onCancel: { dialog = nil })
-        }
         .mockDialog($dialog, "text") {
             MockSessionConfirm(title: "改为文字面试？", desc: "沿用同一套题目，改成打字作答，也可以语音转文字。", confirm: "改为文字面试",
-                            busy: busy == "text", busyLabel: "正在切换…", onConfirm: { leaveCheck("text") }, onCancel: { dialog = nil })
+                            busy: busy == "text", busyLabel: "正在切换…", onConfirm: switchToText, onCancel: { dialog = nil })
         }
         .onAppear {
             if local == .null { local = detail }
@@ -68,7 +63,6 @@ struct MockVoiceSession: View {
         }
         .onChange(of: detail) { _, value in
             local = value
-            if phase == .prep && value.text("status") == "in_progress" { phase = .check }
             if phase == .check || phase == .prep { question = MockSession.current(value) }
         }
         .onDisappear { recorder.cancel(); voice.stop() }
@@ -106,7 +100,7 @@ struct MockVoiceSession: View {
             MockSessionFrame {
                 MockSessionHead(detail: local, timer: MockSessionText.elapsed(local, now: timeline.date)) {
                     Button("跳过此题") { dialog = "skip" }.buttonStyle(MockLinkStyle()).disabled(skipLocked)
-                    Button("放弃") { dialog = "abandon" }.buttonStyle(MockLinkStyle()).disabled(busy != nil || phase == .closing)
+                    Button("取消本场") { dialog = "abandon" }.buttonStyle(MockLinkStyle()).disabled(busy != nil || phase == .closing)
                     Button("结束并评估") { dialog = "finish" }.buttonStyle(MockBorderedPillStyle()).disabled(busy != nil || phase == .closing || phase == .submitting)
                 }
                 MockCenterLine(text: phase == .closing ? "面试结束" : MockSessionText.eyebrow(local, shownQuestion), top: 175)
@@ -304,186 +298,20 @@ struct MockVoiceSession: View {
             do {
                 _ = try await session.api.careerRequest(path: path(kind), method: "POST", query: [:], body: nil)
                 recorder.cancel(); voice.stop(); dialog = nil; changed()
-            } catch { notice = MockNotice(title: kind == "finish" ? "没有结束面试" : "没有放弃面试", message: MockInterviewText.error(error)) }
+            } catch { notice = MockNotice(title: kind == "finish" ? "没有结束面试" : "没有取消本场", message: MockInterviewText.error(error)) }
             busy = nil
         }
     }
 
-    /// 检查设备阶段：返回修改是放弃本场回首页；改为文字面试沿用同一份题目（`POST answer-mode`）。
-    private func leaveCheck(_ target: String) {
-        busy = target
+    /// 检查设备阶段改为文字面试：沿用同一份题目（`POST answer-mode`）。
+    private func switchToText() {
+        busy = "text"
         Task {
             do {
-                if target == "back" {
-                    if ["preparing", "preparation_failed", "in_progress"].contains(local.text("status")) { _ = try await session.api.careerRequest(path: path("abandon"), method: "POST", query: [:], body: nil) }
-                    dialog = nil; home()
-                } else {
-                    _ = try await session.api.careerRequest(path: path("answer-mode"), method: "POST", query: [:], body: .object(["answer_mode": .string("text")]))
-                    dialog = nil; changed()
-                }
+                _ = try await session.api.careerRequest(path: path("answer-mode"), method: "POST", query: [:], body: .object(["answer_mode": .string("text")]))
+                dialog = nil; changed()
             } catch { notice = MockNotice(title: "操作没有完成", message: MockInterviewText.error(error)) }
             busy = nil
         }
-    }
-}
-
-// MARK: 检查设备（Figma 09 · 03 开始前 03.03 先试一下声音、03.04 这台设备暂时没法语音面试；Web `DeviceCheckStage`）
-
-struct MockDeviceCheck: View {
-    @Environment(SessionStore.self) private var session
-    let detail: JSONValue
-    let busy: String?
-    let onStart: () -> Void
-    let onBack: () -> Void
-    let onSwitchToText: () -> Void
-
-    private enum Trial { case idle, listening, recognizing, ok, empty, failed }
-    private enum Speaker { case idle, playing, confirm, heard, unheard, unsupported }
-    @State private var mic = MicrophoneProbe()
-    @State private var recorder = VoiceRecorder()
-    @State private var heardVoice = false
-    @State private var quiet = false
-    @State private var trial: Trial = .idle
-    @State private var speaker: Speaker = .idle
-    @State private var player = InterviewerVoice()
-    @State private var trialStart = Date()
-    @State private var trialVoiceAt: Date?
-    @State private var history: [Double] = []
-
-    private static let phrase = "我准备好了，可以开始了"
-    private static let threshold: Float = 0.06
-
-    var body: some View {
-        let granted = mic.permission == .granted
-        let blocked = mic.permission == .denied || mic.permission == .error
-        let silent = granted && quiet && !heardVoice
-        let micBad = blocked || silent
-        let speakerBad = speaker == .unheard
-        let preparing = detail.text("status") == "preparing"
-        let ready = granted && trial == .ok && !preparing
-        MockSessionFrame {
-            MockSessionHead(detail: detail, back: (busy == "back" ? "正在返回…" : "面试设置", busy != nil, onBack))
-            MockCenterLine(text: "开始前", top: 175)
-            if mic.permission == .unavailable {
-                MockCenterLine(text: "这台设备暂时没法语音面试", top: 203, size: 46, line: 64, color: MockPalette.ink, serif: true)
-                MockCenterLine(text: "同一套 \(detail["question_count"]?.integer ?? 0) 道题可以改成打字作答，题目不用重新准备。", top: 277, size: 15, line: 26, color: MockPalette.sub)
-                VStack(alignment: .leading, spacing: 20) {
-                    row("没有检测到麦克风", sub: { Text("插上耳机或外接麦克风后再试") }, state: nil)
-                    divider
-                    row("系统没有可用的输入设备", sub: { Text("在“系统设置 › 声音 › 输入”里选一个麦克风") }, state: nil)
-                }.frame(width: 600, alignment: .leading).offset(x: 384, y: 339)
-                MockSessionFoot(goal: detail.text("practice_goal")) {
-                    Button("重新检测") { recheck() }.buttonStyle(MockLinkStyle())
-                    Button(busy == "text" ? "正在切换…" : "改为文字面试", action: onSwitchToText).buttonStyle(MockPillStyle()).disabled(busy != nil)
-                }
-            } else {
-                MockCenterLine(text: "先试一下声音", top: 203, size: 46, line: 64, color: MockPalette.ink, serif: true)
-                MockCenterLine(text: "安静环境、戴耳机效果更好。", top: 277, size: 15, line: 26, color: MockPalette.sub)
-                VStack(alignment: .leading, spacing: 20) {
-                    row("麦克风", sub: {
-                        if blocked {
-                            Text("在“系统设置 › 隐私与安全性 › 麦克风”中允许 DrawOffer，然后重新检测").foregroundStyle(MockPalette.orange)
-                        } else {
-                            Button { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Sound-Settings.extension?input")!) } label: {
-                                Text(verbatim: "\(mic.deviceName.nonEmptyValue ?? "默认麦克风") ⌄").foregroundStyle(silent ? MockPalette.orange : MockPalette.fnt).lineLimit(1).frame(maxWidth: 240, alignment: .leading)
-                            }.buttonStyle(.plain).accessibilityLabel("选择麦克风")
-                        }
-                    }, wave: granted, state: blocked ? (false, "没有权限") : silent ? (false, "没听到声音") : granted ? (true, "正常") : nil, waiting: "正在请求…")
-                    divider
-                    row("读一句话试试", sub: {
-                        Text(verbatim: trial == .empty || trial == .failed ? "没听清，靠近麦克风再读一遍" : "请读：\(Self.phrase)")
-                            .foregroundStyle(trial == .empty || trial == .failed ? MockPalette.orange : MockPalette.fnt)
-                        if granted && [.empty, .failed, .ok].contains(trial) { Button("再读一遍") { beginTrial() }.buttonStyle(MockLinkStyle(blue: true)) }
-                    }, state: !granted ? nil : trial == .ok ? (true, "识别成功") : trial == .empty || trial == .failed ? (false, "没听清") : nil,
-                        waiting: !granted ? "等麦克风可用" : trial == .recognizing ? "正在识别…" : "正在听…")
-                    divider
-                    row("面试官声音", sub: {
-                        Button("▶ \(speaker == .idle ? "试听" : "再听一次")") { Task { await preview() } }.buttonStyle(MockLinkStyle()).disabled(speaker == .playing)
-                        if speakerBad { Text("调大音量或换耳机").foregroundStyle(MockPalette.orange) }
-                        if speaker == .unsupported { Text("面试时可以看字幕作答") }
-                        if speaker == .confirm {
-                            Button("听得到") { speaker = .heard }.buttonStyle(MockLinkStyle(blue: true))
-                            Button("听不到") { speaker = .unheard }.buttonStyle(MockLinkStyle())
-                        }
-                    }, state: speaker == .heard ? (true, "听得到") : speaker == .unheard ? (false, "听不到") : speaker == .unsupported ? (false, "没能播放") : nil,
-                        waiting: speaker == .confirm ? "听到了吗？" : speaker == .playing ? "正在播放…" : "还没试听")
-                }.frame(width: 600, alignment: .leading).offset(x: 384, y: 339)
-                MockSessionFoot(goal: detail.text("practice_goal")) {
-                    Button(busy == "text" ? "正在切换…" : micBad || speakerBad ? "改为文字面试" : "不方便说话？改为文字面试", action: onSwitchToText).buttonStyle(MockLinkStyle()).disabled(busy != nil)
-                    if micBad || speakerBad {
-                        Button("重新检测") { recheck() }.buttonStyle(MockPillStyle())
-                    } else {
-                        Button(preparing ? "题目还在准备…" : "开始语音面试") { mic.stop(); recorder.cancel(); player.stop(); onStart() }.buttonStyle(MockPillStyle()).disabled(!ready)
-                    }
-                }
-            }
-        }
-        .modifier(MockLevelHistory(level: mic.level, history: $history))
-        .task { if mic.permission == .idle { await mic.start() } }
-        .onChange(of: mic.level) { _, level in
-            if level > Self.threshold * 1.5 { heardVoice = true; quiet = false }
-            if trial == .listening && level > Self.threshold { trialVoiceAt = Date() }
-        }
-        .task(id: "\(mic.permission == .granted)-\(heardVoice)") {
-            guard mic.permission == .granted, !heardVoice else { return }
-            try? await Task.sleep(for: .seconds(5))
-            if !Task.isCancelled, !heardVoice { quiet = true }
-        }
-        .onChange(of: mic.permission, initial: true) { _, value in if value == .granted && trial == .idle { beginTrial() } }
-        .task(id: trial == .listening) {
-            // 读完一句并停顿约 1.2 秒结束试读；最长 12 秒
-            while trial == .listening && !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(200))
-                if let at = trialVoiceAt, Date().timeIntervalSince(at) >= 1.2 { await finishTrial(); return }
-                if Date().timeIntervalSince(trialStart) >= 12 { await finishTrial(); return }
-            }
-        }
-        .onDisappear { mic.stop(); recorder.cancel(); player.stop() }
-    }
-
-    private var divider: some View { Rectangle().fill(MockPalette.line).frame(width: 600, height: 1) }
-
-    /// `.mi3-check`：一行 84 高，左边标题 + 一行说明，右边状态（蓝点正常、橙点有问题、灰点等待）。
-    private func row<Sub: View>(_ title: String, @ViewBuilder sub: () -> Sub, wave: Bool = false, state: (Bool, String)?, waiting: String = "") -> some View {
-        ZStack(alignment: .topLeading) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(verbatim: title).font(V3.sans(15, weight: .medium)).foregroundStyle(MockPalette.ink).frame(height: 22)
-                HStack(spacing: 12) { sub() }.font(V3.sans(13)).foregroundStyle(MockPalette.fnt).lineLimit(1).frame(height: 20)
-            }
-            if wave { MockMiniVoiceprint(values: history).offset(x: 280, y: 24) }
-            if !(state == nil && waiting.isEmpty) {
-                let color = state.map { $0.0 ? MockPalette.blue : MockPalette.orange } ?? MockPalette.mute
-                HStack(spacing: 8) { Circle().fill(color).frame(width: 7, height: 7); Text(verbatim: state?.1 ?? waiting) }
-                    .font(V3.sans(13, weight: .medium)).foregroundStyle(color).frame(height: 20)
-                    .frame(width: 600, alignment: .trailing).offset(y: 13)
-            }
-        }
-        .frame(width: 600, height: 64, alignment: .topLeading)
-    }
-
-    private func beginTrial() {
-        recorder.cancel(); trialVoiceAt = nil; trialStart = Date(); trial = .listening
-        Task { await recorder.start(api: session.api, interviewID: detail.display("id"), questionID: "", purpose: "device_check") }
-    }
-    private func finishTrial() async {
-        trial = .recognizing
-        do {
-            let text = try await recorder.stop().text.trimmingCharacters(in: .whitespacesAndNewlines)
-            trial = text.isEmpty ? .empty : .ok
-            if !text.isEmpty { heardVoice = true; quiet = false }
-        } catch { trial = .failed }
-    }
-    private func recheck() {
-        heardVoice = false; quiet = false; trial = .idle; speaker = .idle; recorder.cancel()
-        Task { await mic.start() }
-    }
-    private func preview() async {
-        player.stop(); speaker = .playing
-        do {
-            player.play(try await session.api.mockAudio(path: "/api/mock-interviews/\(detail.display("id"))/speech/playback", method: "POST", body: .object([:])))
-            try? await Task.sleep(for: .milliseconds(300))
-            while player.playing { try? await Task.sleep(for: .milliseconds(200)) }
-            speaker = .confirm
-        } catch { speaker = .unsupported }
     }
 }

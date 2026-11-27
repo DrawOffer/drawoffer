@@ -24,7 +24,6 @@ enum V3 {
     static let red = Color(hex: 0xD64545)
     static let redSoft = Color(hex: 0xFBF2F2)
     static let purple = Color(hex: 0x8A5CC7)
-    static let purpleSoft = Color(hex: 0xF3EEFA)
 
     static func sans(_ size: CGFloat, weight: Font.Weight = .regular) -> Font { LibraryTypography.sans(size, weight: weight) }
     static func serif(_ size: CGFloat) -> Font { LibraryTypography.serif(size) }
@@ -335,11 +334,6 @@ struct V3Dialog<Body: View, Foot: View, Left: View>: View {
     @ViewBuilder var content: () -> Body
     @ViewBuilder var left: () -> Left
     @ViewBuilder var foot: () -> Foot
-    /// false：正文自己排内边距（新建简历这类分区弹窗）。
-    var padded = true
-
-    func bodyPadding(_ on: Bool) -> Self { var copy = self; copy.padded = on; return copy }
-
     /// `@container dialog (max-width: 500px)`：窄弹窗用 24/20 内边距、关闭按钮 20/16、页脚 72 高，左侧为空时按钮靠左。
     private var narrow: Bool { width <= 500 }
     private var hasLeft: Bool { Left.self != EmptyView.self }
@@ -347,8 +341,8 @@ struct V3Dialog<Body: View, Foot: View, Left: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 0) { content() }
-                .frame(maxWidth: .infinity, maxHeight: padded ? nil : .infinity, alignment: .topLeading)
-                .padding(.horizontal, padded ? (narrow ? 20 : 32) : 0).padding(.top, padded ? (narrow ? 24 : 28) : 0).padding(.bottom, padded ? 24 : 0)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(.horizontal, narrow ? 20 : 32).padding(.top, narrow ? 24 : 28).padding(.bottom, 24)
             Group {
                 if narrow {
                     VStack(alignment: .leading, spacing: 10) {
@@ -554,5 +548,91 @@ extension View {
     /// 文字链（蓝色「重新加载」等）悬停时显示手形光标。
     func pointingHandCursor() -> some View {
         onHover { inside in if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() } }
+    }
+}
+
+/// 统一弹窗（Web `StandardDialog`，Figma 00 · 06N「DrawOffer / Dialog」）：衬线标题 + 一句灰色副标题 → 正文 → 底部。
+/// 上 24、左右和下 32，区块间距 24，底部无分隔线；宽度按弹窗固定。有「取消」就不放右上 ×，没有取消的只读 / 提示类才放。
+/// 底部：左侧一句说明或文字链，右侧次按钮（描边）+ 唯一的墨黑主按钮。
+struct V3StandardDialog<Content: View, Note: View, Actions: View>: View {
+    let title: String
+    var subtitle: String? = nil
+    var width: CGFloat = 462
+    var showClose = false
+    let close: () -> Void
+    @ViewBuilder var content: () -> Content
+    @ViewBuilder var note: () -> Note
+    @ViewBuilder var actions: () -> Actions
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title).font(V3.serif(20)).foregroundStyle(V3.txt).lineHeight(20, 28, .serif).fixedSize(horizontal: false, vertical: true)
+                if let subtitle, !subtitle.isEmpty {
+                    Text(subtitle).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.sub).lineHeight(13, 20).fixedSize(horizontal: false, vertical: true)
+                }
+            }.padding(.trailing, showClose ? 36 : 0)
+            if Content.self != EmptyView.self {
+                VStack(alignment: .leading, spacing: 24) { content() }.font(V3.sans(13)).foregroundStyle(V3.txt)
+            }
+            HStack(spacing: 12) {
+                HStack(spacing: 0) { note() }.font(V3.sans(13)).foregroundStyle(V3.sub).frame(maxWidth: .infinity, alignment: .leading)
+                actions()
+            }
+        }
+        .padding(.top, 24).padding(.horizontal, 32).padding(.bottom, 32)
+        .frame(width: width, alignment: .leading)
+        .overlay(alignment: .topTrailing) {
+            if showClose {
+                Button(action: close) {
+                    Image(systemName: "xmark").font(.system(size: 11, weight: .medium)).foregroundStyle(V3.fnt).frame(width: 24, height: 24).contentShape(Rectangle())
+                }.buttonStyle(.plain).keyboardShortcut(.cancelAction).accessibilityLabel("关闭").padding(.top, 20).padding(.trailing, 20)
+            }
+        }
+        .background { if !showClose { Button("", action: close).keyboardShortcut(.cancelAction).opacity(0).accessibilityHidden(true) } }
+    }
+}
+
+extension V3StandardDialog where Content == EmptyView {
+    init(title: String, subtitle: String? = nil, width: CGFloat = 462, showClose: Bool = false, close: @escaping () -> Void,
+         @ViewBuilder note: @escaping () -> Note, @ViewBuilder actions: @escaping () -> Actions) {
+        self.init(title: title, subtitle: subtitle, width: width, showClose: showClose, close: close, content: { EmptyView() }, note: note, actions: actions)
+    }
+}
+
+/// 统一弹窗里的信息行（Web `DialogField`）：左 84 宽灰标签、右侧 Medium 值，可带一个蓝色文字操作。
+struct V3DialogField<Value: View, Action: View>: View {
+    let label: String
+    var muted = false
+    @ViewBuilder var value: () -> Value
+    @ViewBuilder var action: () -> Action
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+            Text(label).foregroundStyle(V3.fnt).frame(width: 84, alignment: .leading)
+            value().font(V3.sans(13, weight: muted ? .regular : .medium)).foregroundStyle(muted ? V3.fnt : V3.txt)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            action().padding(.leading, 12)
+        }.font(V3.sans(13)).lineHeight(13, 20).padding(.vertical, 4)
+    }
+}
+
+extension V3DialogField where Action == EmptyView, Value == Text {
+    init(_ label: String, _ text: String, muted: Bool = false) {
+        self.init(label: label, muted: muted, value: { Text(text) }, action: { EmptyView() })
+    }
+}
+
+/// 统一弹窗底部左侧的文字链：文字后跟细尖括号。
+struct V3TextLink: View {
+    let title: String
+    var chevron = true
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 2) {
+                Text(title)
+                if chevron { Image(systemName: "chevron.right").font(.system(size: 9, weight: .medium)) }
+            }.font(V3.sans(13)).foregroundStyle(V3.link).contentShape(Rectangle())
+        }.buttonStyle(.plain).pointingHandCursor()
     }
 }

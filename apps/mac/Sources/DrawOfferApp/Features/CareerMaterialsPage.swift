@@ -25,8 +25,10 @@ struct CareerMaterialsPage: View {
     var openProgress: (() -> Void)? = nil
     /// 从投递详情带过来的文件（「从电脑选」「上传录音」）：打开时直接进底部浮层。
     var intentFiles: [URL] = []
-    /// 带着文件进来、全部处理完以后（回到投递详情）。
-    var processed: (() -> Void)? = nil
+    /// 资料库里点开一份资料：进资料预览页（Web `onOpenAsset`）；没有时下载后用系统应用打开。
+    var openAsset: ((String) -> Void)? = nil
+    /// 带着文件进来、全部处理完以后（回到投递详情）；有文件没读出内容时带一句说明出去。
+    var processed: ((String?) -> Void)? = nil
 
     @State private var pending: [CareerPendingFile] = []
     @State private var processing = false
@@ -247,8 +249,9 @@ struct CareerMaterialsPage: View {
     private func hasRecord(_ sessionID: String) -> Bool { !InterviewRecord.parse(details[sessionID]?["session"]?.text("questions_markdown")).isEmpty }
     private func isWritten(_ sessionID: String) -> Bool { rounds.first { $0.session?.text("id") == sessionID }?.kind == .written }
 
-    /// 默认怎么处理（Web `suggest`）：面试记录只在第一次生成；笔试轮的文档先提取笔试题。
+    /// 默认怎么处理（Web `suggest`）：资料库里传的多是普通资料，默认只保存；否则面试记录只在第一次生成，笔试轮的文档先提取笔试题。
     private func suggest(_ media: Bool, into sessionID: String) -> CareerUploadChoice {
+        if fromLibrary { return .save }
         if media { return hasRecord(sessionID) || isWritten(sessionID) ? .save : .record }
         if isWritten(sessionID) { return (details[sessionID]?["session"]?["written_questions"]?.items ?? []).isEmpty ? .written : .save }
         return hasRecord(sessionID) ? .save : .record
@@ -300,7 +303,8 @@ struct CareerMaterialsPage: View {
     }
 
     private func trayRow(_ item: CareerPendingFile) -> some View {
-        let options: [(CareerUploadChoice, String)] = item.media
+        // 只有笔试轮能存笔试题，面试轮不给这个选项
+        let options: [(CareerUploadChoice, String)] = item.media || !isWritten(item.sessionID)
             ? [(.record, "整理成面试记录"), (.save, "只保存")]
             : [(.record, "整理成面试记录"), (.written, "提取笔试题"), (.save, "只保存")]
         let recorded = hasRecord(item.sessionID)
@@ -342,6 +346,12 @@ struct CareerMaterialsPage: View {
         guard !processing else { return }
         processing = true; failure = nil; notice = nil
         var left = pending.filter { $0.error != nil }
+        // 没读出内容的文件：处理完会回到投递详情，缩略图上的说明看不到，改用提示带出去
+        var unread: [String] = []
+        func markUnread(_ item: CareerPendingFile, _ assetID: String, _ text: String) {
+            unreadable[assetID] = text
+            unread.append("「\(item.name)」\(text)")
+        }
         for item in pending where item.error == nil {
             do {
                 var upload = try DatasetUpload.snapshot(item.url, session: item.sessionID, limit: Int64(item.media ? CareerPendingFile.maxMediaBytes : CareerPendingFile.maxDocumentBytes))
@@ -350,7 +360,7 @@ struct CareerMaterialsPage: View {
                 let response = try await api.uploadDataset(upload)
                 let assetID = response["asset"]?.text("id") ?? response.text("id")
                 guard !item.media, item.choice != .save, !assetID.isEmpty else { continue }
-                guard await waitForParse(assetID) else { unreadable[assetID] = "读不出文字，已保存为资料"; continue }
+                guard await waitForParse(assetID) else { markUnread(item, assetID, "读不出文字，已保存为资料"); continue }
                 if item.choice == .record {
                     do {
                         let draft = try await api.careerRequest(path: "/api/interview-sessions/\(item.sessionID)/record:structure", method: "POST", query: [:],
@@ -360,7 +370,7 @@ struct CareerMaterialsPage: View {
                         _ = try await api.careerRequest(path: "/api/interview-sessions/\(item.sessionID)", method: "PUT", query: [:],
                                                         body: .object(["questions_markdown": markdown.isEmpty ? .null : .string(markdown), "base_lock_version": fresh["session"]?["lock_version"] ?? .number(1)]))
                     } catch APIError.server(_, "INTERVIEW_QUESTIONS_NOT_FOUND") {
-                        unreadable[assetID] = "没找到面试问题，已保存为资料"
+                        markUnread(item, assetID, "没找到面试问题，已保存为资料")
                     } catch { unreadable[assetID] = "没能整理成面试记录，已保存为资料"; notice = CareerErrors.message(error) }
                 } else {
                     do {
@@ -380,6 +390,9 @@ struct CareerMaterialsPage: View {
                             _ = try await api.careerRequest(path: "/api/interview-sessions/\(item.sessionID)", method: "PUT", query: [:],
                                                             body: .object(["questions_markdown": extracted["markdown"] ?? .null, "base_lock_version": lock]))
                         }
+                    } catch APIError.server(_, "INTERVIEW_QUESTIONS_NOT_FOUND") {
+                        // 文件里不是笔试题时不写空题单，文件照常留在这一轮
+                        markUnread(item, assetID, "文件里没有笔试题，已保存为资料")
                     } catch { unreadable[assetID] = "没能提取笔试题，已保存为资料"; notice = CareerErrors.message(error) }
                 }
             } catch {
@@ -391,7 +404,7 @@ struct CareerMaterialsPage: View {
         pending = left
         processing = false
         changed()
-        if left.isEmpty { processed?() }
+        if left.isEmpty, let processed { processed(unread.isEmpty ? nil : unread.joined(separator: "；")) }
     }
 
     /// 文档解析是异步的：最多等 60 秒。
@@ -409,6 +422,7 @@ struct CareerMaterialsPage: View {
     // MARK: 行为
 
     private func open(_ asset: JSONValue) {
+        if let openAsset { openAsset(asset.text("id")); return }
         Task {
             do {
                 failure = nil
@@ -547,8 +561,8 @@ enum CareerUploadChoice: Hashable { case record, save, written }
 /// 07.02 浮层里待处理的一份文件；格式或大小本地就不对时带 `error`，不会上传。
 struct CareerPendingFile: Identifiable {
     /// Web `DEFAULT_DATASET_LIMITS`：录音视频 500MB，文档 10MB。
-    static let media = ["webm", "m4a", "mp3", "wav", "ogg", "mp4", "mov"]
-    static let documents = ["pdf", "docx", "md", "txt"]
+    static let media = CareerDropRule.media
+    static let documents = CareerDropRule.documents
     static let maxMediaBytes = 500 * 1024 * 1024
     static let maxDocumentBytes = 10 * 1024 * 1024
 

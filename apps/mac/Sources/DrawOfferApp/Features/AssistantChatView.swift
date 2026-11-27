@@ -62,7 +62,8 @@ final class AgentSessionsModel {
 }
 
 /// AI 对话（Figma 02B · AI 对话；流程对齐 Web `features/assistant/AssistantPage.tsx`）：会话消息、流式回复与准备过程、追问选项、
-/// 修改建议写在回复里、对话卡片、附加资料与附件、编辑最后一条、上下文用量与停止生成。消息带固定幂等键，中断后刷新即可确认结果。
+/// 修改建议写在回复里、对话卡片、附加资料与附件、改任意一条提问并在版本间切换、回复的有用 / 没用、回答中先排队或插话的待发送消息、
+/// 上下文用量与停止生成。消息带固定幂等键，中断后刷新即可确认结果。
 struct AssistantChatView: View {
     @Environment(SessionStore.self) private var session
     @Environment(WorkspaceRouter.self) private var router
@@ -104,7 +105,19 @@ struct AssistantChatView: View {
     @State private var models: [JSONValue] = []
     @State private var hoveredMessage: Int?
     @State private var modelID: String?
-    @State private var steering = false
+    /// 回答进行中输入的消息（Web `QueuedMessages`），只在内存里。
+    @State private var queue: [AgentQueuedMessage] = []
+    @State private var compacting = false
+    /// 这一轮怎么结束的（run.completed / failed / cancelled），正常结束才自动发出下一条待发送消息。
+    @State private var runOutcome: String?
+    @State private var switchingVersion = false
+    /// 回复评价：本地刚选的（按序号）、展开原因的那条、刚提交后显示「已收到，谢谢」的那条。
+    @State private var ratings: [Int: AgentRating] = [:]
+    @State private var ratingOpen: Int?
+    @State private var ratingNote = ""
+    @State private var ratingThanks: Int?
+    /// 找岗位还差的项（有「开始找岗位」卡片时才读画像算）。
+    @State private var jobMissing: [(key: String, label: String)]?
     @State private var savingDocument: String?
     @State private var contexts: [JSONValue] = []
     @State private var contextGroups: [JSONValue] = []
@@ -179,7 +192,8 @@ struct AssistantChatView: View {
                                  active: previewActive, unavailable: unavailableFiles,
                                  activate: { previewActive = $0 }, closeTab: closePreview, close: { previewOpen = false },
                                  save: { savingDocument = $0.content }, markUnavailable: { unavailableFiles.insert($0) },
-                                 fullscreen: $previewFullscreen)
+                                 fullscreen: $previewFullscreen,
+                                 profileChanged: { profile, intent in jobMissing = JobReadiness.missing(profile: profile, intent: intent) })
                     .frame(width: previewFullscreen ? nil : previewWidth)
                     .frame(maxWidth: previewFullscreen ? .infinity : previewWidth)
             }
@@ -286,7 +300,7 @@ struct AssistantChatView: View {
         } else {
             VStack(alignment: .leading, spacing: 12) {
                 if let runID, let snapshot = processes[runID] { AssistantProcessFold(snapshot: snapshot) }
-                NativeMarkdownView(source: streaming, size: bodySize, line: bodyLine).textSelection(.enabled)
+                NativeMarkdownView(source: AgentReplyText.stabilizeStreaming(AgentReplyText.clean(streaming, streaming: true)), size: bodySize, line: bodyLine).textSelection(.enabled)
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -354,8 +368,6 @@ struct AssistantChatView: View {
         }
     }
 
-    private var lastUserIndex: Int? { messages.lastIndex { $0.text("role") == "user" } }
-
     private func row(_ message: JSONValue, index: Int) -> some View {
         let user = message.text("role") == "user"
         return HStack(spacing: 0) {
@@ -397,8 +409,9 @@ struct AssistantChatView: View {
                     .background(V3.field, in: RoundedRectangle(cornerRadius: 12))
                     .overlay(alignment: .bottomTrailing) {
                         if !message.text("content").isEmpty {
-                            messageActions(message, index: index, editable: canEdit(index)).alignmentGuide(.bottom) { $0[.top] - 6 }
-                                .opacity(hoveredMessage == index || copiedMessage == index ? 1 : 0)
+                            // 改过的提问：版本切换 ‹ 2/3 › 一直露出，不必悬停
+                            messageActions(message, index: index, editable: canEdit(index)).frame(height: 22).fixedSize().offset(y: 28)
+                                .opacity(hoveredMessage == index || copiedMessage == index || AgentVersions(message["versions"]) != nil ? 1 : 0)
                         }
                     }
             }
@@ -434,7 +447,7 @@ struct AssistantChatView: View {
             }
             let files = message["attachments"]?.items ?? []
             if !files.isEmpty { messageAttachments(files) }
-            NativeMarkdownView(source: message.text("content").nilIfEmpty ?? (message.text("message_type") == "clarification" ? "需要你补充一些信息。" : ""), size: bodySize, line: bodyLine)
+            NativeMarkdownView(source: AgentReplyText.clean(message.text("content")).nilIfEmpty ?? (message.text("message_type") == "clarification" ? "需要你补充一些信息。" : ""), size: bodySize, line: bodyLine)
                 .textSelection(.enabled)
                 .environment(\.openURL, OpenURLAction { url in openDrawOfferLink(url) })
             if message.text("status") == "stopped" { Text("已停止生成").font(V3.sans(11)).foregroundStyle(V3.fnt).padding(.top, 6) }
@@ -442,16 +455,104 @@ struct AssistantChatView: View {
             if !cards.isEmpty || document != nil {
                 AssistantActionCards(cards: cards, sessionID: currentID, sequenceNo: message["sequence_no"]?.numberValue.map { Int($0) },
                                      document: document, activeKey: activePreviewKey, openPreview: openPreview,
-                                     changed: { replaceCard(at: index, $0) })
+                                     changed: { replaceCard(at: index, $0) },
+                                     jobMissing: jobMissing, send: sending ? nil : { text in Task { await send(text) } })
                     .padding(.top, 16)
+            }
+            // 选了没用：操作行回到正文下方常显，下面接暖纸色的原因区（02B-15 · 15.2）
+            if ratingOpen == AgentBranch.sequence(message), AgentBranch.ratable(message) {
+                replyActions(message, index: index).padding(.top, 8)
+                ratingPanel(message).padding(.top, 10)
             }
         }
         .overlay(alignment: .bottomLeading) {
-            if !message.text("content").isEmpty {
-                messageActions(message, index: index, editable: false).alignmentGuide(.bottom) { $0[.top] - 4 }
-                    .opacity(hoveredMessage == index || copiedMessage == index ? 1 : 0)
+            if !message.text("content").isEmpty, ratingOpen != AgentBranch.sequence(message) || !AgentBranch.ratable(message) {
+                replyActions(message, index: index).fixedSize().offset(y: 30)
+                    .opacity(hoveredMessage == index || copiedMessage == index || ratingThanks == AgentBranch.sequence(message) ? 1 : 0)
             }
         }
+    }
+
+    /// 回复下方（02B-15 · 15.1）：复制、重新生成 | 有用、没用，后面一行灰字「时间 · 内容由 AI 生成…」，评价后换成「已收到，谢谢」。
+    private func replyActions(_ message: JSONValue, index: Int) -> some View {
+        let seq = AgentBranch.sequence(message)
+        let rating = ratings[seq] ?? AgentRating(message["rating"])
+        let regenerable = AgentBranch.regenerable(messages, busy: sending || switchingVersion || editingIndex != nil)?.reply == seq && seq > 0
+        return HStack(spacing: 4) {
+            actionIcon(copiedMessage == index ? "checkmark" : "doc.on.doc", label: copiedMessage == index ? "已复制" : "复制消息") { copy(AgentReplyText.clean(message.text("content")), index: index) }
+            if regenerable { actionIcon("arrow.clockwise", label: "重新生成") { Task { await regenerate() } } }
+            if AgentBranch.ratable(message), currentID != nil {
+                Rectangle().fill(V3.line).frame(width: 1, height: 14).padding(.horizontal, 4)
+                actionIcon(rating?.up == true ? "hand.thumbsup.fill" : "hand.thumbsup", label: "有用", chosen: rating?.up == true) { rateUp(seq) }
+                actionIcon(rating?.up == false ? "hand.thumbsdown.fill" : "hand.thumbsdown", label: "没用", chosen: rating?.up == false) { rateDown(seq) }
+            }
+            if ratingThanks == seq {
+                Text("已收到，谢谢").font(V3.sans(12)).foregroundStyle(V3.sub).padding(.leading, 6)
+            } else {
+                let time = ResumeSummary.parseTimestamp(message.text("created_at")).map(Self.timeLabel)
+                Text([time, "内容由 AI 生成，可能不准确，请核对重要信息"].compactMap { $0 }.joined(separator: " · "))
+                    .font(V3.sans(12)).foregroundStyle(V3.fnt).lineLimit(1).padding(.leading, 6)
+            }
+        }.frame(height: 26)
+    }
+
+    private func actionIcon(_ symbol: String, label: String, chosen: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 11.5)).frame(width: 24, height: 24)
+                .background(chosen ? V3.field : .clear, in: RoundedRectangle(cornerRadius: 6)).contentShape(Rectangle())
+        }.buttonStyle(.plain).foregroundStyle(chosen ? V3.txt : V3.fnt).help(label).accessibilityLabel(label)
+            .accessibilityAddTraits(chosen ? .isSelected : [])
+    }
+
+    private func copy(_ text: String, index: Int) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        copiedMessage = index
+        Task { try? await Task.sleep(for: .seconds(2)); if copiedMessage == index { copiedMessage = nil } }
+    }
+
+    /// 「这条回复哪里不太好？」（02B-15 · 15.2）：原因每点一下就保存，可多选；补一句回车发送后收起并道谢。
+    private func ratingPanel(_ message: JSONValue) -> some View {
+        let seq = AgentBranch.sequence(message)
+        let rating = ratings[seq] ?? AgentRating(message["rating"])
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("这条回复哪里不太好？").font(V3.sans(13)).foregroundStyle(V3.txt)
+                Spacer()
+                Button { ratingOpen = nil } label: { Image(systemName: "xmark").font(.system(size: 10.5)).foregroundStyle(Color(hex: 0x6C6C65)).frame(width: 24, height: 24).contentShape(Rectangle()) }
+                    .buttonStyle(.plain).accessibilityLabel("收起")
+            }
+            FlowLayout(spacing: 8) {
+                ForEach(AgentRating.reasons, id: \.key) { reason in
+                    let on = rating?.up == false && rating?.reasons.contains(reason.key) == true
+                    Button { rate(seq, (rating ?? AgentRating(up: false)).toggling(reason.key)) } label: {
+                        HStack(spacing: 5) {
+                            if on { Image(systemName: "checkmark").font(.system(size: 9.5, weight: .semibold)) }
+                            Text(reason.label)
+                        }
+                        .font(V3.sans(12, weight: on ? .medium : .regular)).foregroundStyle(on ? V3.txt : Color(hex: 0x3D3D39))
+                        .padding(.horizontal, 12).frame(height: 28)
+                        .background(.white, in: Capsule()).overlay(Capsule().strokeBorder(on ? V3.txt : Color(hex: 0xE4E4E0)))
+                        .contentShape(Capsule())
+                    }.buttonStyle(.plain).accessibilityAddTraits(on ? .isSelected : [])
+                }
+            }
+            HStack(spacing: 6) {
+                TextField("", text: Binding(get: { ratingNote }, set: { ratingNote = String($0.prefix(500)) }))
+                    .textFieldStyle(.plain).font(V3.sans(13)).foregroundStyle(V3.txt).accessibilityLabel("补充说明")
+                    .background(alignment: .leading) {
+                        if ratingNote.isEmpty { Text("还想补充一句？（选填）").font(V3.sans(13)).foregroundStyle(V3.fnt).allowsHitTesting(false) }
+                    }
+                    .onSubmit { sendRatingNote(seq) }
+                Button { sendRatingNote(seq) } label: {
+                    Image(systemName: "arrow.up").font(.system(size: 11, weight: .semibold)).foregroundStyle(.white).frame(width: 28, height: 28).background(V3.txt, in: Circle())
+                }.buttonStyle(.plain).accessibilityLabel("发送补充说明")
+            }
+            .padding(.leading, 16).padding([.trailing, .vertical], 4)
+            .background(.white, in: Capsule()).overlay(Capsule().stroke(Color(hex: 0xE4E4E0)))
+        }
+        .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 16)
+        .background(Color(hex: 0xFAF9F5), in: RoundedRectangle(cornerRadius: 10))
     }
 
     /// 同一轮回复里第一条助手消息才挂折叠行。
@@ -469,12 +570,7 @@ struct AssistantChatView: View {
             if let date = ResumeSummary.parseTimestamp(message.text("created_at")) {
                 Text(Self.timeLabel(date)).font(V3.number(12, weight: .regular)).foregroundStyle(V3.fnt).frame(height: 18).padding(.trailing, 2)
             }
-            Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(message.text("content"), forType: .string)
-                copiedMessage = index
-                Task { try? await Task.sleep(for: .seconds(2)); if copiedMessage == index { copiedMessage = nil } }
-            } label: { Image(systemName: copiedMessage == index ? "checkmark" : "doc.on.doc").font(.system(size: 11)).frame(width: 22, height: 22).contentShape(Rectangle()) }
+            Button { copy(message.text("content"), index: index) } label: { Image(systemName: copiedMessage == index ? "checkmark" : "doc.on.doc").font(.system(size: 11)).frame(width: 22, height: 22).contentShape(Rectangle()) }
                 .buttonStyle(.plain).foregroundStyle(V3.fnt).help(copiedMessage == index ? "已复制" : "复制消息")
                 .accessibilityLabel(copiedMessage == index ? "已复制消息" : "复制消息")
             if editable {
@@ -482,12 +578,29 @@ struct AssistantChatView: View {
                     Image(systemName: "pencil").font(.system(size: 11)).frame(width: 22, height: 22).contentShape(Rectangle())
                 }.buttonStyle(.plain).foregroundStyle(V3.fnt).help("编辑").accessibilityLabel("编辑这条消息")
             }
+            if let versions = AgentVersions(message["versions"]) { versionSwitch(versions) }
         }
     }
 
+    /// 改过的提问（Web `VersionSwitcher`）：‹ 2/3 › 在各个版本之间切换，回答和后面的对话跟着换；回答进行中不能切。
+    private func versionSwitch(_ versions: AgentVersions) -> some View {
+        let disabled = sending || switchingVersion || editingIndex != nil
+        return HStack(spacing: 2) {
+            Button { if let previous = versions.previous { Task { await switchVersion(previous) } } } label: {
+                Image(systemName: "chevron.left").font(.system(size: 10, weight: .medium)).frame(width: 22, height: 22).contentShape(Rectangle())
+            }.buttonStyle(.plain).disabled(disabled || versions.previous == nil).opacity(disabled || versions.previous == nil ? 0.5 : 1)
+                .help("上一个版本").accessibilityLabel("上一个版本")
+            Text(versions.label).font(V3.number(12, weight: .regular)).foregroundStyle(V3.sub).frame(minWidth: 28)
+            Button { if let next = versions.next { Task { await switchVersion(next) } } } label: {
+                Image(systemName: "chevron.right").font(.system(size: 10, weight: .medium)).frame(width: 22, height: 22).contentShape(Rectangle())
+            }.buttonStyle(.plain).disabled(disabled || versions.next == nil).opacity(disabled || versions.next == nil ? 0.5 : 1)
+                .help("下一个版本").accessibilityLabel("下一个版本")
+        }.foregroundStyle(V3.sub).accessibilityElement(children: .contain).accessibilityLabel("提问的版本")
+    }
+
+    /// 任意一条提问都能改（分支）：改出的新版本和原来那一版都保留；带附件、回答追问的不能改，回答进行中也不能改。
     private func canEdit(_ index: Int) -> Bool {
-        !sending && currentID != nil && index == lastUserIndex && (messages[index]["sequence_no"]?.numberValue ?? 0) > 0
-            && messages[index]["clarification_answers"] == nil
+        currentID != nil && AgentBranch.editable(messages[index], in: messages, busy: sending || switchingVersion)
     }
 
     /// 编辑框（02B·08 E ②）：气泡被输入框原位替换，右对齐；Esc 或「取消」还原，内容没变时「发送」置灰。
@@ -743,6 +856,9 @@ struct AssistantChatView: View {
                     .shadow(color: .black.opacity(0.07), radius: 10, y: 6).padding(.bottom, 8)
             }
             if !screenshots.isEmpty { screenshotStrip(screenshots, removable: true).padding(.bottom, 8) }
+            if !queue.isEmpty {
+                VStack(spacing: 6) { ForEach(queue) { queueCard($0) } }.padding(.bottom, 8)
+            }
             if let topic, !topicTagHidden { topicTag(topic).padding(.leading, 4).padding(.bottom, 8) }
             if !contexts.isEmpty {
                 FlowLayout(spacing: 6) { ForEach(contexts, id: \.self) { contextChip($0) } }.padding(.leading, 4).padding(.bottom, 11)
@@ -797,6 +913,7 @@ struct AssistantChatView: View {
                                if let first = slashMatches.first { runSlash(first.id) }
                                else if let mention = mentionQuery, let first = contextGroups.flatMap({ $0["items"]?.items ?? [] })
                                 .first(where: { mention.isEmpty || $0.text("label").localizedCaseInsensitiveContains(mention) }) { pickMention(first) }
+                               else if sending { queueDraft() }
                                else if canSend { Task { await send(draft) } }
                            },
                            escape: {
@@ -811,6 +928,12 @@ struct AssistantChatView: View {
                     if !draft.contains("@") { mentionDismissed = false }
                     if draft.hasSuffix("@") { Task { await loadContexts() } }
                 }
+            if sending, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // 回答中也能发：消息先进待发送卡片，回答结束后自动发出
+                Button { queueDraft() } label: {
+                    Image(systemName: "arrow.up").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white).frame(width: 32, height: 32).background(V3.txt, in: Circle())
+                }.buttonStyle(.plain).help("回答结束后自动发送").accessibilityLabel("加入待发送").padding(.trailing, -4)
+            }
             if sending, runID != nil {
                 Button { Task { await cancel() } } label: {
                     RoundedRectangle(cornerRadius: 2).fill(.white).frame(width: 10, height: 10).frame(width: 32, height: 32).background(V3.txt, in: Circle())
@@ -823,6 +946,31 @@ struct AssistantChatView: View {
             }
         }.padding(.leading, 18).padding([.trailing, .vertical], 12).frame(minHeight: 57)
             .background(.white, in: RoundedRectangle(cornerRadius: 17.5)).overlay(RoundedRectangle(cornerRadius: 17.5).stroke(Color(hex: 0xD6D6D0)))
+    }
+
+    /// 待发送卡片（Web `QueuedMessages`）：一行正文 + 灰字说明，右侧「立即发送 / 发送」、编辑、删除；插入中的卡片虚线边。
+    private func queueCard(_ item: AgentQueuedMessage) -> some View {
+        let insertable = AgentQueue.canInsert(queue, running: sending, runID: runID, compacting: compacting)
+        return HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(item.content).font(V3.sans(14)).foregroundStyle(V3.txt).lineLimit(1).truncationMode(.tail).frame(height: 20)
+                Text(item.caption(running: sending)).font(V3.sans(12)).foregroundStyle(item.error != nil ? Color(hex: 0xC2410C) : V3.fnt).lineLimit(1).frame(height: 18)
+            }.frame(maxWidth: .infinity, alignment: .leading).help(item.content)
+            if item.state == .queued {
+                HStack(spacing: 2) {
+                    Button(sending ? "立即发送" : "发送") { sendQueuedNow(item) }
+                        .buttonStyle(.plain).font(V3.sans(13, weight: .medium)).foregroundStyle(insertable ? V3.link : V3.fnt2)
+                        .padding(.horizontal, 8).frame(height: 28).disabled(!insertable)
+                    Button { editQueued(item) } label: { Image(systemName: "pencil").font(.system(size: 12)).frame(width: 28, height: 28).contentShape(Rectangle()) }
+                        .buttonStyle(.plain).foregroundStyle(V3.fnt).help("编辑").accessibilityLabel("编辑待发送消息")
+                    Button { queue.removeAll { $0.id == item.id } } label: { Image(systemName: "trash").font(.system(size: 12)).frame(width: 28, height: 28).contentShape(Rectangle()) }
+                        .buttonStyle(.plain).foregroundStyle(V3.fnt).help("删除").accessibilityLabel("删除待发送消息")
+                }
+            }
+        }
+        .padding(.leading, 14).padding([.trailing, .vertical], 8)
+        .background(.white, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color(hex: 0xE4E4DE), style: StrokeStyle(lineWidth: 1, dash: item.state == .inserting ? [4, 3] : [])))
     }
 
     /// 输入框上方的引用标签（02B·03 · Context/Resume）：白底细边圆角 6.5、23 高，图标 + 名称 + 灰色类型 + ×。
@@ -967,8 +1115,8 @@ struct AssistantChatView: View {
             && prompt.range(of: "(?:生成|整理成|写|输出|制作|准备).{0,30}(?:文档|\\.md|markdown)", options: [.regularExpression, .caseInsensitive]) != nil
     }
 
-    /// 生成中也可插话（服务端开放 steering 时），消息会排进当前运行。
-    private var canSend: Bool { (!sending || (steering && runID != nil)) && ready != false && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    /// 回答进行中按发送不打断 AI：消息进待发送卡片（`queueDraft`），可再点「立即发送」插进当前回答。
+    private var canSend: Bool { !sending && ready != false && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var currentModelName: String? { models.first { $0.text("id") == modelID }?.text("name").nilIfEmpty ?? modelName }
 
     /// Web 文档生成规则：完整回复中有一级 Markdown 标题时视为可保存的文档。
@@ -987,12 +1135,12 @@ struct AssistantChatView: View {
         previewTabs = []; previewActive = nil; previewOpen = false; unavailableFiles = []
         screenshots = []; notice = nil; contextUsage = nil; clarificationPage = 0; otherAnswers = [:]
         processes = [:]; live = AssistantProcessSnapshot(); editingIndex = nil; floating = nil
+        queue = []; ratings = [:]; ratingOpen = nil; ratingThanks = nil; jobMissing = nil
         let api = self.api
         async let readiness = try? api.careerRequest(path: "/api/agent/readiness", method: "GET", query: [:], body: nil)
         async let model = try? api.careerRequest(path: "/api/agent/model", method: "GET", query: [:], body: nil)
         let (readyValue, modelValue) = await (readiness, model)
         if case .bool(let flag) = readyValue?["ready"] { ready = flag } else { ready = readyValue == nil ? nil : false }
-        if case .bool(let flag) = readyValue?["steering"] { steering = flag }
         modelName = modelValue?["model"]?.text("name").nilIfEmpty
         if let list = try? await api.careerRequest(path: "/api/agent/models", method: "GET", query: [:], body: nil) {
             models = list["models"]?.items ?? []
@@ -1029,6 +1177,7 @@ struct AssistantChatView: View {
             if let list = try? await api.careerRequest(path: "/api/agent/proposals", method: "GET", query: ["session_id": id], body: nil), currentID == id {
                 proposals = list["proposals"]?.items ?? []
             }
+            await refreshJobReadiness()
         } catch {
             if case APIError.unauthorized = error { session.reportAuthenticationFailure() }
             if currentID == id { self.error = AgentRequest.errorMessage(error) }
@@ -1057,38 +1206,35 @@ struct AssistantChatView: View {
         return id
     }
 
-    private func send(_ text: String, replyTo: Int? = nil, clarificationAnswers: [JSONValue]? = nil, kickoff: Bool = false) async {
+    /// `queued`：待发送卡片里的消息，带它自己的引用，不动输入框里的草稿、引用和附件。
+    private func send(_ text: String, replyTo: Int? = nil, clarificationAnswers: [JSONValue]? = nil, kickoff: Bool = false, queued: [JSONValue]? = nil) async {
         let content = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if replyTo == nil, screenshots.contains(where: { $0.status != .ready }) {
+        if replyTo == nil, queued == nil, screenshots.contains(where: { $0.status != .ready }) {
             notice = screenshots.contains { $0.status == .uploading } ? "附件还在上传，请稍候。" : "有附件没有上传成功，请重试或移除。"
             return
         }
-        if sending, steering, let runID, !content.isEmpty { await steer(content, runID: runID); return }
         guard !content.isEmpty, !sending else { return }
         sending = true; error = nil; streaming = ""; status = nil; creditBlock = nil; floating = nil
-        let attached = contexts
+        let attached = queued ?? contexts
         do {
             let id = try await ensureSession(title: knowledge?.name)
-            var body: [String: JSONValue] = ["content": .string(content), "idempotency_key": .string(UUID().uuidString.lowercased())]
+            // Web：明确要文档时在发出的内容后追加输出要求，本地气泡仍显示原话
+            let sent = Self.isDocumentRequest(content) ? content + "\n\n请输出完整 Markdown 文档，以一级标题开头；如果资料不足，请先询问，不要编造经历或数据。" : content
+            var body: [String: JSONValue] = ["content": .string(sent), "idempotency_key": .string(UUID().uuidString.lowercased())]
             // 图谱节点的对话：只有第一条带知识点；kickoff 是打开动作本身，不显示
             let knowledgeFirst = knowledge != nil && !messages.contains { $0.text("role") == "user" }
             if let knowledge, knowledgeFirst {
                 body["knowledge_point"] = .string(knowledge.key)
                 if kickoff { body["knowledge_kickoff"] = .bool(true) }
             }
-            if !attached.isEmpty {
-                body["contexts"] = .array(attached.map { item in
-                    var ref: [String: JSONValue] = ["type": .string(item.text("type")), "id": .string(item.text("id")), "presentation": .string("mention")]
-                    if !item.text("version_id").isEmpty { ref["version_id"] = .string(item.text("version_id")) }
-                    return .object(ref)
-                })
-            }
-            let files = replyTo == nil ? screenshots : []
+            if !attached.isEmpty { body["contexts"] = Self.contextRefs(attached) }
+            let files = replyTo == nil && queued == nil ? screenshots : []
             if !files.isEmpty { body["attachment_ids"] = .array(files.compactMap(\.attachmentID).map(JSONValue.string)) }
             if let replyTo { body["reply_to_sequence_no"] = .number(Double(replyTo)) }
             if let clarificationAnswers { body["clarification_answers"] = .array(clarificationAnswers) }
-            draft = ""; contexts = []; answers = [:]
-            if replyTo == nil { screenshots = [] }
+            if queued == nil { draft = ""; contexts = [] }
+            answers = [:]
+            if replyTo == nil, queued == nil { screenshots = [] }
             let sentFiles: [JSONValue] = files.map { .object(["file_name": .string($0.label), "kind": .string($0.kind), "file_size": .number(Double($0.size))]) }
             var local: [String: JSONValue] = ["role": .string("user"), "content": .string(content), "contexts": .array(attached), "attachments": .array(sentFiles)]
             if let knowledge, knowledgeFirst { local["knowledge_point"] = .object(["key": .string(knowledge.key), "name": .string(knowledge.name), "kickoff": .bool(kickoff)]) }
@@ -1105,6 +1251,132 @@ struct AssistantChatView: View {
             self.error = AgentRequest.errorMessage(error)
         }
     }
+
+    static func contextRefs(_ items: [JSONValue]) -> JSONValue {
+        .array(items.map { item in
+            var ref: [String: JSONValue] = ["type": .string(item.text("type")), "id": .string(item.text("id")), "presentation": .string("mention")]
+            if !item.text("version_id").isEmpty { ref["version_id"] = .string(item.text("version_id")) }
+            return .object(ref)
+        })
+    }
+
+    // MARK: 待发送消息（Web `QueuedMessages`）
+
+    /// 回答进行中按发送：消息不打断 AI，先放到输入框上方的待发送卡片里。
+    private func queueDraft() {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        if !screenshots.isEmpty { notice = "带附件的消息请在回答结束后发送。"; return }
+        guard let next = AgentQueue.adding(queue, AgentQueuedMessage(id: UUID().uuidString.lowercased(), content: text, contexts: contexts)) else {
+            notice = "最多先排 \(AgentQueue.maximum) 条消息。"; return
+        }
+        queue = next; draft = ""; contexts = []; notice = nil
+    }
+
+    /// 立即发送：回答中插进当前这次回答（`POST /api/agent/runs/{id}/steer`，AI 做完手上这一步就接上）；没在回答时就是普通发送。
+    private func sendQueuedNow(_ item: AgentQueuedMessage) {
+        guard sending else {
+            queue.removeAll { $0.id == item.id }
+            Task { await send(item.content, queued: item.contexts) }
+            return
+        }
+        guard let runID, AgentQueue.canInsert(queue, running: true, runID: runID, compacting: compacting) else { return }
+        let key = UUID().uuidString.lowercased()
+        queue = AgentQueue.inserting(queue, id: item.id, runID: runID, key: key)
+        Task {
+            var body: [String: JSONValue] = ["content": .string(item.content), "idempotency_key": .string(key)]
+            if !item.contexts.isEmpty { body["contexts"] = Self.contextRefs(item.contexts) }
+            do { _ = try await api.careerRequest(path: "/api/agent/runs/\(runID)/steer", method: "POST", query: [:], body: .object(body)) }
+            catch {
+                if case APIError.unauthorized = error { session.reportAuthenticationFailure() }
+                queue = AgentQueue.returned(queue, key: key, error: AgentRequest.errorMessage(error))
+            }
+        }
+    }
+
+    /// 编辑：放回输入框（输入框里已有内容时不覆盖）。
+    private func editQueued(_ item: AgentQueuedMessage) {
+        guard draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, contexts.isEmpty else {
+            notice = "先发送或清空输入框里的内容，再编辑这条消息。"; return
+        }
+        queue.removeAll { $0.id == item.id }
+        draft = item.content; contexts = item.contexts
+    }
+
+    /// 回答结束：没接上的插入查一次回执，确实没用上的退回卡片；正常结束后自动发出第一条待发送消息。
+    private func settleQueue(sessionID id: String, completed: Bool) async {
+        for item in queue where item.state == .inserting {
+            guard let run = item.runID, let key = item.submissionKey else { continue }
+            let receipt = try? await api.careerRequest(path: "/api/agent/runs/\(run)/steer/\(key)", method: "GET", query: [:], body: nil)
+            queue = ["accepted", "applied"].contains(receipt?.text("state") ?? "") ? AgentQueue.accepted(queue, key: key) : AgentQueue.returned(queue, key: key, error: nil)
+        }
+        guard completed, currentID == id, !sending, let next = AgentQueue.next(queue) else { return }
+        queue.removeAll { $0.id == next.id }
+        await send(next.content, queued: next.contexts)
+    }
+
+    // MARK: 回复评价（02B-15）
+
+    private func rate(_ seq: Int, _ next: AgentRating) {
+        guard let id = currentID, seq > 0 else { return }
+        let previous = ratings[seq] ?? messages.first { AgentBranch.sequence($0) == seq }.flatMap { AgentRating($0["rating"]) }
+        ratings[seq] = next
+        Task {
+            do { _ = try await api.careerRequest(path: "/api/agent/sessions/\(id)/messages/\(seq)/rating", method: "PUT", query: [:], body: next.json) }
+            catch {
+                if case APIError.unauthorized = error { session.reportAuthenticationFailure() }
+                if currentID == id { ratings[seq] = previous; if previous == nil { ratings.removeValue(forKey: seq) } }
+            }
+        }
+    }
+
+    private func currentRating(_ seq: Int) -> AgentRating? { ratings[seq] ?? messages.first { AgentBranch.sequence($0) == seq }.flatMap { AgentRating($0["rating"]) } }
+
+    private func rateUp(_ seq: Int) {
+        ratingOpen = nil
+        rate(seq, AgentRating(up: true))
+        thank(seq)
+    }
+
+    /// 点「没用」：还不是没用时记一条并展开原因；已经是没用时只收起 / 展开原因区。
+    private func rateDown(_ seq: Int) {
+        let current = currentRating(seq)
+        if current?.up != false { rate(seq, AgentRating.down(from: current)); ratingNote = ""; ratingOpen = seq }
+        else { ratingNote = current?.note ?? ""; ratingOpen = ratingOpen == seq ? nil : seq }
+    }
+
+    private func sendRatingNote(_ seq: Int) {
+        rate(seq, (currentRating(seq) ?? AgentRating(up: false)).withNote(ratingNote))
+        ratingOpen = nil
+        thank(seq)
+    }
+
+    private func thank(_ seq: Int) {
+        ratingThanks = seq
+        Task { try? await Task.sleep(for: .seconds(2.4)); if ratingThanks == seq { ratingThanks = nil } }
+    }
+
+    // MARK: 找匹配岗位要先补画像（02B-16）
+
+    /// 有「开始找岗位」卡片时读一次求职画像算还差什么；最后一条回复里的卡片、画像没填好时自动在右侧打开画像（每张卡只开一次）。
+    private func refreshJobReadiness() async {
+        let gates = messages.enumerated().flatMap { index, message in
+            (message["cards"]?.items ?? []).filter { $0.text("type") == "profile_gate" }.map { (index, $0.text("id")) }
+        }
+        guard !gates.isEmpty else { return }
+        if jobMissing == nil {
+            async let career = try? api.careerRequest(path: "/api/account/career-profile", method: "GET", query: [:], body: nil)
+            async let portrait = try? api.careerRequest(path: "/api/account/user-profile", method: "GET", query: [:], body: nil)
+            let (profile, intent) = await (career, portrait)
+            guard profile != nil || intent != nil else { return }
+            jobMissing = JobReadiness.missing(profile: profile, intent: intent)
+        }
+        guard let last = gates.last, last.0 == messages.count - 1, jobMissing?.isEmpty == false, !Self.openedGates.contains(last.1) else { return }
+        Self.openedGates.insert(last.1)
+        openPreview(.careerProfile)
+    }
+
+    @MainActor private static var openedGates = Set<String>()
 
     // MARK: 首页知识图谱的对话（Figma 02A·10 ②–④）
 
@@ -1160,11 +1432,11 @@ struct AssistantChatView: View {
         return .handled
     }
 
-    /// 编辑最后一条消息（02B·08 E）：`POST …/messages/{seq}:edit`，这条之后的回复会被新的回复替换。
-    private func submitEdit(_ index: Int) async {
+    /// 改一条提问（02B·08 E）：`POST …/messages/{seq}:edit` 发出新版本，原来那一版及其后的对话保留可切回（‹ 1/2 ›）。
+    private func submitEdit(_ index: Int, content raw: String? = nil) async {
         guard let id = currentID, messages.indices.contains(index), !sending,
               let seq = messages[index]["sequence_no"]?.numberValue.map({ Int($0) }) else { return }
-        let content = editDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let content = (raw ?? editDraft).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !content.isEmpty else { return }
         let original = messages[index]
         editingIndex = nil; error = nil; streaming = ""; status = nil; creditBlock = nil
@@ -1174,8 +1446,36 @@ struct AssistantChatView: View {
                      body: .object(["content": .string(content), "idempotency_key": .string(UUID().uuidString.lowercased())]), sessionID: id)
     }
 
+    /// 重新生成 = 原样重发最后一条提问：沿用编辑接口，它会替换这一轮的回复并保留引用的资料。
+    private func regenerate() async {
+        guard let target = AgentBranch.regenerable(messages, busy: sending || switchingVersion),
+              let index = messages.firstIndex(where: { $0.text("role") == "user" && AgentBranch.sequence($0) == target.question }) else { return }
+        ratingOpen = nil
+        await submitEdit(index, content: messages[index].text("content"))
+    }
+
+    /// 切到提问的另一个版本：后端重排可见分支并让模型从那一版接着聊，这里换成返回的消息。
+    private func switchVersion(_ seq: Int) async {
+        guard let id = currentID, !sending, !switchingVersion else { return }
+        switchingVersion = true
+        defer { switchingVersion = false }
+        do {
+            let result = try await api.careerRequest(path: "/api/agent/sessions/\(id)/messages/\(seq):switch", method: "POST", query: [:], body: nil)
+            guard currentID == id else { return }
+            if let list = result["session"]?["messages"]?.items { messages = list }
+            if let usage = result["session"]?["context_usage"], usage != .null { contextUsage = usage }
+            ratingOpen = nil; error = nil
+            if let list = try? await api.careerRequest(path: "/api/agent/proposals", method: "GET", query: ["session_id": id], body: nil), currentID == id {
+                proposals = list["proposals"]?.items ?? []
+            }
+        } catch {
+            if case APIError.unauthorized = error { session.reportAuthenticationFailure() }
+            if currentID == id { self.error = AgentRequest.errorMessage(error) }
+        }
+    }
+
     private func stream(path: String, method: String, body: JSONValue?, sessionID id: String) async {
-        sending = true; phaseStarted = Date(); live = AssistantProcessSnapshot(); processExpanded = false
+        sending = true; phaseStarted = Date(); live = AssistantProcessSnapshot(); processExpanded = false; runOutcome = nil
         defer {
             if let runID, processes[runID] != nil, processes[runID]?.ended == nil { processes[runID]?.ended = Date() }
             sending = false; runID = nil; status = nil
@@ -1193,6 +1493,9 @@ struct AssistantChatView: View {
         streaming = ""
         if currentID == id { await reload(id) }
         sessionsChanged()
+        // 等这一轮的 sending 收起后再处理待发送消息
+        let completed = !["failed", "cancelled"].contains(runOutcome ?? "") && error == nil && creditBlock == nil
+        Task { await settleQueue(sessionID: id, completed: completed) }
     }
 
     /// 准备过程：同一份改动同时记在当前显示（`live`）和按 runId 保留的快照里。
@@ -1226,6 +1529,18 @@ struct AssistantChatView: View {
         case "assistant.activity.clear": live = AssistantProcessSnapshot(); processExpanded = false
         case "tool.started": if live.activities.isEmpty { status = "正在调用工具…" }
         case "assistant.delta": streaming += data.text("delta")
+        case "assistant.delta.reset": streaming = ""
+        case "user.message.accepted", "user.message.applied":
+            // 插进当前回答的待发送消息被接上：从卡片里移走，作为一条用户消息出现在对话里
+            let key = data.text("submissionKey")
+            guard !key.isEmpty, let item = queue.first(where: { $0.submissionKey == key }) else { break }
+            queue = AgentQueue.accepted(queue, key: key)
+            let seq = data["userSequenceNo"]?.integer ?? 0
+            if !messages.contains(where: { $0.text("role") == "user" && (seq > 0 && AgentBranch.sequence($0) == seq) }) {
+                messages.append(.object(["role": .string("user"), "content": .string(data.text("content").nilIfEmpty ?? item.content),
+                                         "contexts": data["contexts"] ?? .array(item.contexts), "sequence_no": .number(Double(seq))]))
+            }
+        case "run.completed": runOutcome = "completed"
         case "assistant.message.completed":
             var message: [String: JSONValue] = ["role": .string("assistant"), "content": .string(data.text("content")),
                                                 "sequence_no": data["sequenceNo"] ?? .null, "run_id": .string(runID ?? "")]
@@ -1242,14 +1557,18 @@ struct AssistantChatView: View {
             let window = data["contextWindow"] ?? contextUsage?["context_window"] ?? .null
             contextUsage = .object(["tokens": data["tokens"] ?? .null, "context_window": window, "breakdown": data["breakdown"] ?? contextUsage?["breakdown"] ?? .null])
         case "context.compaction.started": status = "正在压缩上下文…"
-        case "user.message.rejected": error = AgentRequest.errorMessage(APIError.server(status: 409, code: data.text("error")))
+        case "user.message.rejected":
+            let key = data.text("submissionKey")
+            if !key.isEmpty, queue.contains(where: { $0.submissionKey == key }) { queue = AgentQueue.returned(queue, key: key, error: "没有插入成功，可以再试一次。") }
+            else { error = AgentRequest.errorMessage(APIError.server(status: 409, code: data.text("error"))) }
         case "run.failed":
+            runOutcome = "failed"
             let code = data.text("error")
             if ["CREDIT_INSUFFICIENT", "PAID_CREDIT_REQUIRED"].contains(code),
                let last = messages.last(where: { $0.text("role") == "user" }) {
                 creditBlock = (code == "CREDIT_INSUFFICIENT" ? "exhausted" : "model", last.text("content"))
             } else { error = AgentRequest.errorMessage(APIError.server(status: 500, code: code)) }
-        case "run.cancelled": status = nil; if !streaming.isEmpty { messages.append(.object(["role": .string("assistant"), "content": .string(streaming + "\n\n（已停止生成）")])); streaming = "" }
+        case "run.cancelled": runOutcome = "cancelled"; status = nil; if !streaming.isEmpty { messages.append(.object(["role": .string("assistant"), "content": .string(streaming + "\n\n（已停止生成）")])); streaming = "" }
         default: break
         }
     }
@@ -1275,9 +1594,9 @@ struct AssistantChatView: View {
 
     /// 05.01：积分不足的白卡；开通会员 / 购买积分打开会员与积分弹窗的对应标签。
     private func creditNotice(_ block: (kind: String, content: String)) -> some View {
-        let title = block.kind == "exhausted" ? "本月额度已用完，未能生成回复"
+        let title = block.kind == "exhausted" ? "积分已用完，这次回复没有完成"
             : currentModelName.map { "\($0) 暂不可用于当前额度" } ?? "这项功能暂不可用于当前额度"
-        let body = block.kind == "exhausted" ? "你的消息已保留，额度恢复后可以直接重新发送。" : "当前额度只能使用基础模型，可以改用基础模型重新发送。"
+        let body = block.kind == "exhausted" ? "你的消息已保留，充值后可以直接重新发送。" : "当前额度只能使用基础模型，可以改用基础模型重新发送。"
         var fallback: (label: String, action: () -> Void)?
         if block.kind == "model", let free = freeModel {
             fallback = (label: "改用 \(free.text("name")) 重新发送", action: { Task { await chooseModel(free); creditBlock = nil; await send(block.content) } })
@@ -1365,21 +1684,6 @@ struct AssistantChatView: View {
         }
     }
 
-    /// 插话：`POST /api/agent/runs/{id}/steer`，回执的应用结果随当前流的 `user.message.applied/rejected` 返回。
-    private func steer(_ content: String, runID: String) async {
-        let key = UUID().uuidString.lowercased()
-        do {
-            _ = try await api.careerRequest(path: "/api/agent/runs/\(runID)/steer", method: "POST", query: [:],
-                                            body: .object(["content": .string(content), "idempotency_key": .string(key)]))
-            draft = ""
-            messages.append(.object(["role": .string("user"), "content": .string(content)]))
-            status = "已插入，将在当前步骤后处理"
-        } catch {
-            if case APIError.unauthorized = error { session.reportAuthenticationFailure() }
-            self.error = AgentRequest.errorMessage(error)
-        }
-    }
-
     private func chooseModel(_ model: JSONValue) async {
         let id = model.text("id")
         guard id != modelID else { return }
@@ -1394,6 +1698,8 @@ struct AssistantChatView: View {
     private func compact() async {
         guard let currentID, !sending else { return }
         error = nil
+        compacting = true
+        defer { compacting = false }
         await stream(path: "/api/agent/sessions/\(currentID)/compact", method: "POST",
                      body: .object(["idempotency_key": .string(UUID().uuidString.lowercased())]), sessionID: currentID)
     }
@@ -1401,6 +1707,7 @@ struct AssistantChatView: View {
     private func newConversation() {
         currentID = nil; messages = []; proposals = []; streaming = ""; error = nil; title = "新对话"
         screenshots = []; contexts = []; contextUsage = nil; processes = [:]; live = AssistantProcessSnapshot(); editingIndex = nil
+        queue = []; ratings = [:]; ratingOpen = nil; jobMissing = nil
     }
 
     private func cancel() async {

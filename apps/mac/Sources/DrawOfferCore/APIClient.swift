@@ -30,7 +30,7 @@ public enum APIError: Error, Equatable {
     case invalidResponse
 }
 
-/// 离线 mock：模板来自 apps/native/shared/fixtures（后端布局编译器生成，内容虚构）。
+/// 离线 mock：客户端不携带模板，登录后模板列表为空，真实目录只来自 `GET /api/resume-templates`。
 /// 需后端：登录目前不校验密码，任意邮箱都能进。
 public actor MockAPIClient: APIClient {
     private var user: User?
@@ -54,7 +54,7 @@ public actor MockAPIClient: APIClient {
 
     public func listResumeTemplates() async throws -> [ResumeTemplate] {
         guard user != nil else { throw APIError.unauthorized }
-        return []  // 不再随包携带示例模板
+        return []
     }
 }
 

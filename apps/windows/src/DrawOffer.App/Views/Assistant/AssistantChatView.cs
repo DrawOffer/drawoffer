@@ -1,5 +1,4 @@
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using DrawOffer.App.DesignSystem;
 using DrawOffer.Core.Agent;
 using DrawOffer.Core.Api;
@@ -658,11 +657,6 @@ public sealed partial class AssistantChatView : UserControl
         if (selected) AutomationProperties.SetItemStatus(button, "已选择");
         return button;
     }
-
-    /// <summary>Web `isDocumentRequest`：明确要求生成文档（且没有否定）的请求。</summary>
-    public static bool IsDocumentRequest(string prompt) =>
-        !Regex.IsMatch(prompt, "(?:不要|不必|不用|不需要|无需|别).{0,8}(?:生成|整理|写|输出|制作|准备)")
-        && Regex.IsMatch(prompt, @"(?:生成|整理成|写|输出|制作|准备).{0,30}(?:文档|\.md|markdown)", RegexOptions.IgnoreCase);
 
     /// <summary>Web 文档生成规则：完整回复中有一级 Markdown 标题时视为可保存的文档。</summary>
     public static string? DocumentTitle(string content) =>

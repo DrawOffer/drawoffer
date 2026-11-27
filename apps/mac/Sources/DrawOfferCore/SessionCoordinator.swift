@@ -229,6 +229,12 @@ public actor SessionCoordinator {
         }
     }
 
+    /// 未登录时的公开接口（匿名反馈、交流群链接）：不带凭据直接发，不刷新会话。
+    public func anonymousRequest(path: String, method: String, body: JSONValue?) async throws -> JSONValue {
+        guard FeedbackRequest.allowed(path: path, method: method) else { throw APIError.invalidResponse }
+        return try await transport.career(path: path, method: method, query: [:], body: body, access: nil)
+    }
+
     public func careerRequest(path: String, method: String, query: [String: String], body: JSONValue?) async throws -> JSONValue {
         guard CareerRequest.allowed(path: path, method: method) else { throw APIError.invalidResponse }
         let transport = self.transport

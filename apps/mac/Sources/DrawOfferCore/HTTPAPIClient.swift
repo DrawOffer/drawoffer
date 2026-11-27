@@ -253,9 +253,9 @@ final class DesktopTransport: DesktopRequesting {
     }
 
     func career(path: String, method: String, query: [String: String], body: JSONValue?, access: String?) async throws -> JSONValue {
-        guard CareerRequest.allowed(path: path, method: method), !query.keys.contains(where: { !["scope", "cursor", "limit", "week_start", "timezone", "application_id", "include_archived", "v", "job_application_id", "resume_id", "status", "folder_id", "confirm_contents", "start_at", "end_at", "type", "q", "prefix", "session_id", "include_history", "keyword", "company_ids", "city", "job_category", "recruitment_type", "job_id", "page", "page_size", "sort", "industry", "direction"].contains($0) }) else { throw APIError.invalidResponse }
+        guard CareerRequest.allowed(path: path, method: method), !query.keys.contains(where: { !["scope", "cursor", "limit", "week_start", "timezone", "application_id", "include_archived", "v", "job_application_id", "resume_id", "status", "folder_id", "confirm_contents", "start_at", "end_at", "type", "q", "prefix", "session_id", "include_history", "keyword", "company_ids", "city", "job_category", "recruitment_type", "job_id", "page", "page_size", "sort", "industry", "direction", "published_within", "exclude_joined", "intent", "seed"].contains($0) }) else { throw APIError.invalidResponse }
         var url = URLComponents(url: origin.appending(path: path), resolvingAgainstBaseURL: false)!
-        url.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
+        url.queryItems = JobPool.queryItems(query)
         var request = URLRequest(url: url.url!)
         request.httpMethod = method
         var payload = body
@@ -264,6 +264,12 @@ final class DesktopTransport: DesktopRequesting {
                   case .object(var fields) = body else { throw APIError.invalidResponse }
             fields.removeValue(forKey: "__idempotency_key"); payload = .object(fields)
             request.setValue(key, forHTTPHeaderField: "Idempotency-Key")
+        }
+        if method == "PUT", path.hasSuffix("/text"), DatasetRequest.allowed(path: path, method: method) {
+            // MD / TXT 原地保存带当前版本（`If-Match`），别处改过时服务端回 412。
+            guard let (tag, fields) = DatasetViewer.textSave(path: path, body: body) else { throw APIError.invalidResponse }
+            payload = fields
+            request.setValue(tag, forHTTPHeaderField: "If-Match")
         }
         request.timeoutInterval = 180
         request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")

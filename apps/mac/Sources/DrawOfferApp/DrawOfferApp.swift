@@ -91,9 +91,6 @@ struct DrawOfferApp: App {
                     .disabled(session == nil)
             }
         }
-        Settings {
-            Text("设置（待实现）").padding(Tokens.Space.s6)
-        }
     }
 }
 

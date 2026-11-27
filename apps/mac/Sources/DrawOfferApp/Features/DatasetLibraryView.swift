@@ -1,5 +1,4 @@
 import AppKit
-import AVKit
 import CoreText
 import Foundation
 import DrawOfferCore
@@ -15,11 +14,12 @@ private struct LibraryQueued: Identifiable {
 struct DatasetLibraryView: View {
     @Environment(SessionStore.self) private var session
     @Environment(WorkspaceRouter.self) private var router: WorkspaceRouter?
-    let requireAccount: () -> Void
+    /// 别处要打开某一份资料（`WorkspaceRouter.Jump.dataset`）：进资料预览页后清空。
+    var openDataset: Binding<String?> = .constant(nil)
     @State private var datasets: [DatasetRecord] = []
     @State private var folders: [JSONValue] = []
     @State private var limits: JSONValue = .null
-    /// "home" / "files" / 项目 id / "app:<投递 id>"（求职进程项目）。
+    /// "home" / "files" / 项目 id / "app:<投递 id>"（求职进程项目）/ "ds:<资料 id>"（资料预览页）。
     @State private var view = "home"
     @State private var tab = "mine"
     @State private var applications: [JSONValue] = []
@@ -45,13 +45,9 @@ struct DatasetLibraryView: View {
     @State private var name = ""
     @State private var destination = ""
     @State private var sessions: [JSONValue] = []
-    @State private var preview = ""
-    @State private var mediaFile: DatasetFile?
-    @State private var player: AVPlayer?
     @State private var sheetError: String?
     @State private var queue: [LibraryQueued] = []
     @State private var queueID: UUID?
-    @State private var pending = ""
     @State private var active = true
     @State private var loadID = UUID()
     @State private var uploadTask: Task<Void,Never>?
@@ -90,6 +86,7 @@ struct DatasetLibraryView: View {
             let width = min(V3Page<EmptyView>.maxWidth(card: card), max(0, card - gutter * 2))
             Group {
                 if view.hasPrefix("app:") { jobProject(String(view.dropFirst(4))) }
+                else if view.hasPrefix("ds:") { viewer(String(view.dropFirst(3))) }
                 else {
                     VStack(alignment:.leading,spacing:0) {
                         header(width:width).padding(.horizontal,gutter)
@@ -114,13 +111,12 @@ struct DatasetLibraryView: View {
         .task(id:account + refresh.uuidString + "jobs") { await loadJobs() }
         .task(id:account + "storage" + "\(datasets.count):\(datasets.reduce(0) { $0 + ($1.raw["file_size"]?.numberValue ?? 0) })") { await loadStorage() }
             .onChange(of:account) { _, id in
-                player?.pause(); player = nil; mediaFile?.discard(); mediaFile = nil; uploadTask?.cancel(); queue.forEach { $0.upload.discard() }; queue = []; action = nil; selected = []; datasets = []; folders = []; loaded = false; limits = .null; preview = ""; error = nil; sheetError = nil; notice = nil; busy = false; view = "home"; tab = "mine"; query = ""; sessions = []; applications = []; jobSessions = []; jobState = "loading"; storage = nil; draft = nil
+                uploadTask?.cancel(); queue.forEach { $0.upload.discard() }; queue = []; action = nil; selected = []; datasets = []; folders = []; loaded = false; limits = .null; error = nil; sheetError = nil; notice = nil; busy = false; view = "home"; tab = "mine"; query = ""; sessions = []; applications = []; jobSessions = []; jobState = "loading"; storage = nil; draft = nil
                 batchMode = false; conflictID = nil
-                if !id.isEmpty && !pending.isEmpty { let next = pending; pending = ""; action = next; name = "" } else { pending = "" }
             }
-            .onChange(of:action) { _, value in if value != "media" { player?.pause(); player = nil; mediaFile?.discard(); mediaFile = nil } }
+            .onChange(of:openDataset.wrappedValue,initial:true) { _, id in if let id, DatasetRequest.id(id) { view = "ds:" + id; openDataset.wrappedValue = nil } }
             .onChange(of:view) { draft = nil; addMenu = false }
-            .onDisappear { active = false; loadID = UUID(); player?.pause(); player = nil; mediaFile?.discard(); mediaFile = nil; uploadTask?.cancel(); queue.forEach { $0.upload.discard() } }
+            .onDisappear { active = false; loadID = UUID(); uploadTask?.cancel(); queue.forEach { $0.upload.discard() } }
             .centeredSheet(isPresented:Binding(get:{action != nil},set:{if !$0 && !busy { if action == "upload" { discardStaged() }; action = nil }})) { sheet }
             .centeredAlert("项目里已有同名文件",isPresented:Binding(get:{conflictID != nil && action == nil},set:{ if !$0 { conflictID = nil } })) { conflictActions } message: { Text(conflictMessage) }
             .onDrop(of:[UTType.fileURL],isTargeted:nil) { providers in
@@ -410,7 +406,7 @@ struct DatasetLibraryView: View {
     @ViewBuilder private func jobProject(_ id:String) -> some View {
         if let project = jobProjects.first(where:{ $0.id == id }) {
             CareerApplicationDetailView(application:CareerApplication(project.application),api:session.api,back:{ view = "home"; tab = "jobs"; Task { await loadJobs(background:true) } },
-                                        perform:{ _,app in router?.jump(.application(app.id)) },libraryMaterials:true).id(id)
+                                        perform:{ _,app in router?.jump(.application(app.id)) },libraryMaterials:true,openDataset:{ go("ds:" + $0) }).id(id)
         } else if jobState == "loading" {
             V3Loading("正在加载项目…").frame(maxWidth:.infinity,maxHeight:.infinity)
         } else {
@@ -419,6 +415,28 @@ struct DatasetLibraryView: View {
                 Button("返回资料库") { view = "home"; tab = "jobs" }.buttonStyle(V3ButtonStyle(kind:.ghost))
             }.frame(maxWidth:.infinity,maxHeight:.infinity)
         }
+    }
+    /// 资料预览页（08）：页头的 ⋯ 菜单沿用本页的重命名 / 移动 / 管理关联 / 删除弹窗，改完换 `refresh` 让预览页重读。
+    private func viewer(_ id:String) -> some View {
+        DatasetViewerPage(datasetID:id,api:session.api,reload:refresh,trail:viewerTrail,back:{ go("home") },
+                          rename:{ show("rename",$0.raw) },
+                          move:{ selected = [$0.id]; show("move") },
+                          associate:{ show("associate",$0.raw); Task { await loadSessions() } },
+                          remove:{ selected = [$0.id]; show("deleteBatch") },
+                          practice:{ record in
+                              guard let source = DatasetViewer.experienceSource(record) else { return }
+                              router?.jump(.mock(PracticeFocus(kind:"experience",ref:source.entry,label:record.displayName,resumeID:source.resume,scope:"packaged")))
+                          })
+    }
+    /// 资料路径：属于某条求职进程的写「求职进程 / 公司 · 岗位」，在项目里的写「我的项目 / 项目名」，否则「全部文件」。
+    private func viewerTrail(_ record:DatasetRecord) -> [DatasetViewerCrumb] {
+        if let project = jobProjects.first(where:{ $0.nodes.contains { $0.datasets.contains { $0.id == record.id } } }) {
+            return [DatasetViewerCrumb(label:"求职进程") { go("home"); tab = "jobs" }, DatasetViewerCrumb(label:project.name) { go("app:" + project.id) }]
+        }
+        let folder = record.raw.text("folder_id")
+        guard DatasetRequest.id(folder) else { return [DatasetViewerCrumb(label:"全部文件") { go("files") }] }
+        let name = record.raw.text("folder_name").nonEmptyValue ?? folders.first { $0.text("id") == folder }?.text("name") ?? "项目"
+        return [DatasetViewerCrumb(label:"我的项目") { go("home"); tab = "mine" }, DatasetViewerCrumb(label:name) { go(folder) }]
     }
     /// 空状态（06.01 / 06.02）：去掉灰底舞台的三张纸（求职进程多一枚录音条）→ 17 中粗标题 → 两行 13 灰字 → 31 高胶囊按钮；不放黑色按钮。
     private func blank<Actions:View>(title:String,lines:[String],audio:Bool = false,@ViewBuilder actions:() -> Actions) -> some View {
@@ -682,23 +700,23 @@ struct DatasetLibraryView: View {
         .padding(.bottom,28)
     }
     private func show(_ kind:String,_ item:JSONValue = .null) {
-        guard !busy else { return }; if account.isEmpty { pending = kind == "createFolder" ? kind : "createFolder"; requireAccount(); return }
-        target = item; action = kind; sheetError = nil; preview = ""; name = kind == "renameFolder" ? item.text("name") : kind == "createFolder" ? "" : item.text("file_name"); descriptionText = ""; pickQuery = ""; picked = []
+        guard !busy, !account.isEmpty else { return }
+        target = item; action = kind; sheetError = nil; name = kind == "renameFolder" ? item.text("name") : kind == "createFolder" ? "" : item.text("file_name"); descriptionText = ""; pickQuery = ""; picked = []
         destination = kind == "associate" ? item.text("interview_session_id") : kind == "move" ? "" : folders.first?.text("id") ?? ""
     }
     /// 弹窗外壳（10 页 02.01 / 03.01–03.03）：左右 31、顶部 30 内边距；20 号衬线标题、12.5 灰字说明（距标题 4）；
     /// 底部 88 高的按钮行带顶部分隔线，按钮一律靠右（32 高：Bordered「取消」+ 墨黑主按钮），管理关联左侧放红字「取消关联」。
     private var sheet: some View {
         let kind = action ?? ""
-        let width: CGFloat = kind == "preview" ? 640 : kind == "media" ? 640 : kind == "upload" ? 560 : kind == "associate" ? 540 : ["move","pick","createFolder"].contains(kind) ? 480 : 440
+        let width: CGFloat = kind == "upload" ? 560 : kind == "associate" ? 540 : ["move","pick","createFolder"].contains(kind) ? 480 : 440
         return VStack(alignment:.leading,spacing:0) {
             VStack(alignment:.leading,spacing:0) {
-                Text(sheetTitle).font(V3.serif(kind == "preview" || kind == "media" ? 22 : 20)).foregroundStyle(V3.txt).lineLimit(1).frame(height:29)
+                Text(sheetTitle).font(V3.serif(20)).foregroundStyle(V3.txt).lineLimit(1).frame(height:29)
                 if let description = sheetDescription {
                     Text(description).font(V3.sans(12.5)).foregroundStyle(V3.sub).lineLimit(["associate","pick","move"].contains(kind) ? 1 : nil).fixedSize(horizontal:false,vertical:true).padding(.top,4)
                 }
-                VStack(alignment:.leading,spacing:0) { sheetContent }.padding(.top,["preview","media"].contains(kind) ? 0 : 22)
-                if let sheetError, !["preview","media"].contains(kind) { Text(sheetError).foregroundStyle(V3.red).font(V3.sans(11.5)).padding(.top,12) }
+                VStack(alignment:.leading,spacing:0) { sheetContent }.padding(.top,22)
+                if let sheetError { Text(sheetError).foregroundStyle(V3.red).font(V3.sans(11.5)).padding(.top,12) }
             }
             .padding(.horizontal,kind == "createFolder" ? 23 : 31).padding(.top,kind == "createFolder" ? 26 : 30).padding(.bottom,kind == "createFolder" ? 20 : 32)
             if kind != "createFolder" { Rectangle().fill(V3.line).frame(height:1) }
@@ -709,14 +727,10 @@ struct DatasetLibraryView: View {
                 if kind == "createFolder" { Text("求职进程的项目会自动生成，无需手动创建").font(V3.sans(11.5)).foregroundStyle(LibraryTone.faint).lineLimit(1) }
                 if kind == "upload" { Text(stagedSummary).font(V3.sans(11.5)).foregroundStyle(LibraryTone.faint).lineLimit(1) }
                 Spacer(minLength:0)
-                if ["preview","media"].contains(kind) {
-                    Button("完成") { action = nil }.buttonStyle(V3ButtonStyle(kind:.dark,height:36,width:72)).keyboardShortcut(.defaultAction)
-                } else {
-                    Button("取消") { if kind == "upload" { discardStaged() }; action = nil }.buttonStyle(V3ButtonStyle(kind:.ghost,height:36,width:79)).disabled(busy)
-                    Button(busy ? "处理中…" : confirmLabel) { if kind == "upload" { confirmUpload() } else { Task { await save() } } }
-                        .buttonStyle(V3ButtonStyle(kind:["deleteFolder","deleteBatch"].contains(kind) ? .danger : .dark,height:36))
-                        .disabled(busy || (loading && kind != "upload") || confirmDisabled)
-                }
+                Button("取消") { if kind == "upload" { discardStaged() }; action = nil }.buttonStyle(V3ButtonStyle(kind:.ghost,height:36,width:79)).disabled(busy)
+                Button(busy ? "处理中…" : confirmLabel) { if kind == "upload" { confirmUpload() } else { Task { await save() } } }
+                    .buttonStyle(V3ButtonStyle(kind:["deleteFolder","deleteBatch"].contains(kind) ? .danger : .dark,height:36))
+                    .disabled(busy || (loading && kind != "upload") || confirmDisabled)
             }.padding(.horizontal,kind == "createFolder" ? 23 : 31).frame(height:kind == "createFolder" ? 64 : 88)
         }
         .frame(width:width).frame(maxHeight:760)
@@ -727,7 +741,6 @@ struct DatasetLibraryView: View {
         switch action {
         case "deleteFolder": return "删除项目「\(target.text("name"))」及其中的资料？"
         case "move": return selected.count == 1 ? "移动资料到项目" : "移动 \(selected.count) 份资料到项目"
-        case "preview", "media": return target.text("file_name")
         case "deleteBatch": return selected.count == 1 ? "永久删除「\(datasets.first { selected.contains($0.id) }?.name ?? "资料")」？" : "永久删除所选资料（\(selected.count) 份）？"
         default: return ["createFolder":"新建项目","renameFolder":"重命名项目","rename":"重命名资料","associate":"管理关联","pick":"从资料库选择","uploadRename":"保留两份","upload":"上传资料"][action ?? ""] ?? "资料库"
         }
@@ -844,27 +857,6 @@ struct DatasetLibraryView: View {
                         if item.text("id") == current { Text("当前").font(V3.sans(10.5,weight:.medium)).foregroundStyle(V3.sub).padding(.horizontal,8).frame(height:22).background(.white,in:Capsule()).overlay(Capsule().stroke(V3.cl)) }
                     }
                 }
-            }
-        }
-        else if action == "preview" || action == "media" {
-            previewMeta
-            if action == "media" { mediaPreview }
-            else {
-                ZStack {
-                    if loading {
-                        // 15 页「加载中 · 资料预览 · 读取解析结果」：纸面上的标题与段落占位
-                        VStack(alignment:.leading,spacing:12) {
-                            V3Skeleton(width:180,height:12); V3Skeleton(width:120,height:7).padding(.bottom,14)
-                            ForEach(0..<7,id:\.self) { index in V3Skeleton(width:[90,420,380,300,90,400,340][index],height:index == 0 || index == 4 ? 9 : 7).padding(.top,index == 4 ? 14 : 0) }
-                            Spacer(minLength:0)
-                        }.padding(.horizontal,24).padding(.vertical,30).frame(maxWidth:.infinity,alignment:.leading)
-                            .accessibilityElement().accessibilityLabel("正在读取解析结果…")
-                    }
-                    else if preview.isEmpty { VStack(spacing:12) { if let sheetError { Text(sheetError) }; Button { Task { await loadPreview() } } label:{ Image(systemName:"arrow.clockwise").font(.system(size:11)); Text("重新加载") }.buttonStyle(V3ButtonStyle(kind:.ghost)) }.font(V3.sans(12.5)).foregroundStyle(V3.fnt) }
-                    else { ScrollView { NativeMarkdownView(source:preview).frame(maxWidth:.infinity,alignment:.leading).padding(.horizontal,24).padding(.vertical,30) } }
-                }
-                .frame(maxWidth:.infinity,maxHeight:.infinity).background(.white,in:RoundedRectangle(cornerRadius:4)).overlay(RoundedRectangle(cornerRadius:4).stroke(V3.cl))
-                .padding(18).frame(height:466).background(LibraryTone.stage,in:RoundedRectangle(cornerRadius:11)).padding(.top,22)
             }
         }
     }
@@ -995,7 +987,7 @@ struct DatasetLibraryView: View {
             case "deleteFolder": _ = try await request("/api/datasets/folders/" + target.text("id"),"DELETE",query:["confirm_contents":"true"])
             case "deleteBatch":
                 var failures:[String] = []; var removed = 0
-                for item in datasets.filter({selected.contains($0.id)}) { do { _ = try await request("/api/datasets/" + item.id,"DELETE"); selected.remove(item.id); removed += 1 } catch { if error is CancellationError { throw error }; failures.append(item.name + "：" + explain(error)) } }
+                for item in datasets.filter({selected.contains($0.id)}) { do { _ = try await request("/api/datasets/" + item.id,"DELETE"); selected.remove(item.id); removed += 1; if view == "ds:" + item.id { view = DatasetRequest.id(item.folder) ? item.folder : "files" } } catch { if error is CancellationError { throw error }; failures.append(item.name + "：" + explain(error)) } }
                 notice = failures.isEmpty ? .done("已删除 \(removed) 份资料") : .attention("已删除 \(removed) 份资料", "\(failures.count) 份没有删除，原因见弹窗"); if !failures.isEmpty { throw APIError.server(status:409,code:failures.joined(separator:"；")) }
             case "associate":
                 let old = target.text("interview_session_id"), id = target.text("id")
@@ -1015,21 +1007,10 @@ struct DatasetLibraryView: View {
     private func loadSessions() async {
         loading = true; do { var values:[JSONValue] = [], cursor = ""; var seen = Set<String>(); repeat { var query = ["limit":"500"]; if !cursor.isEmpty { query["cursor"] = cursor }; let data = try await request("/api/interview-sessions",query:query); values += data["items"]?.items ?? []; cursor = data.text("next_cursor"); if !cursor.isEmpty && !seen.insert(cursor).inserted { throw APIError.invalidResponse } } while !cursor.isEmpty; sessions = values } catch { if !(error is CancellationError) { sheetError = explain(error) } }; loading = false
     }
-    private func open(_ item:DatasetRecord) { guard !busy else { return }; if !item.ready { notice = .attention("「\(item.displayName)」\(item.status)", "处理完成后才能打开预览"); return }; if item.media { show("media",item.raw); Task { await loadMedia(item) } } else { show("preview",item.raw); Task { await loadPreview() } } }
-    private func loadPreview() async { let id = target.text("id"); loading = true; sheetError = nil; do { let data = try await request("/api/datasets/" + id + "/content"); if action == "preview" && target.text("id") == id { preview = data.text("markdown") } } catch { if !(error is CancellationError) { sheetError = explain(error) } }; loading = false }
-    private func loadMedia(_ item:DatasetRecord) async {
-        let owner = account; loading = true
-        do { let file = try await session.api.downloadDataset(id:item.id,limit:maximum); var retained = false; defer { if !retained { file.discard() } }; guard active, owner == account, action == "media", target.text("id") == item.id else { file.discard(); throw CancellationError() }; let playable = file.url.deletingLastPathComponent().appendingPathComponent("preview." + item.format.lowercased()); try FileManager.default.moveItem(at:file.url,to:playable); mediaFile = file; retained = true; player = AVPlayer(url:playable) }
-        catch { if active && owner == account && !(error is CancellationError) { sheetError = explain(error) } }
-        if active && owner == account { loading = false }
-    }
-    private func download(_ item:DatasetRecord) async {
-        guard !busy else { return }; let panel = NSSavePanel(); panel.nameFieldStringValue = item.name; guard panel.runModal() == .OK, let destination = panel.url else { return }
-        let owner = account; busy = true; error = nil
-        do { let file = try await session.api.downloadDataset(id:item.id,limit:maximum); defer { file.discard() }; guard owner == account && !owner.isEmpty else { throw CancellationError() }; let allowed = destination.startAccessingSecurityScopedResource(); defer { if allowed { destination.stopAccessingSecurityScopedResource() } }; if FileManager.default.fileExists(atPath:destination.path) { _ = try FileManager.default.replaceItemAt(destination,withItemAt:file.url) } else { try FileManager.default.copyItem(at:file.url,to:destination) }; notice = .done("已保存「\(item.name)」") } catch { if active && owner == account && !(error is CancellationError) { self.error = explain(error) } }; if active && owner == account { busy = false }
-    }
+    /// 所有类型都进资料预览页（08）；没处理完的先提示。
+    private func open(_ item:DatasetRecord) { guard !busy else { return }; if !item.ready { notice = .attention("「\(item.displayName)」\(item.status)", "处理完成后才能打开预览"); return }; go("ds:" + item.id) }
     /// 上传弹窗里点舞台：系统文件面板，选中的文件先放进 `staged`，点「上传」才开始。
-    private func pickStaged() { guard !busy, !account.isEmpty, DatasetRequest.id(folder) else { if account.isEmpty { pending = "createFolder"; requireAccount() }; return }; let panel = NSOpenPanel(); panel.allowsMultipleSelection = true; panel.canChooseDirectories = false; let configured = (limits["allowed_extensions"]?.items ?? []) + (limits["media_allowed_extensions"]?.items ?? []); let extensions = configured.compactMap(\.stringValue); panel.allowedContentTypes = (extensions.isEmpty ? ["pdf","docx","md","txt","webm","m4a","mp3","wav","ogg","mp4","mov"] : extensions).compactMap{UTType(filenameExtension:$0.trimmingCharacters(in:CharacterSet(charactersIn:".")))}; guard panel.runModal() == .OK else { return }; let targetFolder = folder; Task { await enqueue(panel.urls,into:targetFolder,staging:true) } }
+    private func pickStaged() { guard !busy, !account.isEmpty, DatasetRequest.id(folder) else { return }; let panel = NSOpenPanel(); panel.allowsMultipleSelection = true; panel.canChooseDirectories = false; let configured = (limits["allowed_extensions"]?.items ?? []) + (limits["media_allowed_extensions"]?.items ?? []); let extensions = configured.compactMap(\.stringValue); panel.allowedContentTypes = (extensions.isEmpty ? ["pdf","docx","md","txt","webm","m4a","mp3","wav","ogg","mp4","mov"] : extensions).compactMap{UTType(filenameExtension:$0.trimmingCharacters(in:CharacterSet(charactersIn:".")))}; guard panel.runModal() == .OK else { return }; let targetFolder = folder; Task { await enqueue(panel.urls,into:targetFolder,staging:true) } }
     private func enqueue(_ urls:[URL],into targetFolder:String,staging:Bool = false) async {
         let owner = account; guard !owner.isEmpty else { return }
         let batch = max(1,limits["max_files_per_batch"]?.integer ?? 10)
@@ -1168,38 +1149,6 @@ struct DatasetLibraryView: View {
         } ?? ""
         let tail = item.text("status") == "completed" ? "已完成" : item.text("status") == "cancelled" ? "已取消" : item.text("location").nonEmptyValue ?? ["video":"视频面试","onsite":"现场","phone":"电话","other":"其他"][item.text("mode")] ?? ""
         return [item.text("stage_label"),when,tail].filter { !$0.isEmpty }.joined(separator:" · ")
-    }
-    /// `.ds-preview-meta`：格式 · 大小 · 上传于 · 已关联 · 管理关联。
-    private var previewMeta: some View {
-        HStack(spacing:10) {
-            Text("\(target.text("file_format").uppercased()) · \(JobProjects.size(target["file_size"]?.numberValue ?? 0)) · 上传于 \(date(target.text("created_at")))").font(V3.number(12,weight:.regular))
-            if !target.text("interview_label").isEmpty || target.text("upload_status") == "succeeded" { Text("·").foregroundStyle(V3.fnt2) }
-            if !target.text("interview_label").isEmpty { HStack(spacing:5) { CareerIcon(name:"calendar",size:13,template:true); Text("已关联：面试 · " + target.text("interview_label")) }.foregroundStyle(V3.sub) }
-            if target.text("upload_status") == "succeeded" { Button("管理关联") { let item = target; show("associate",item); Task { await loadSessions() } }.buttonStyle(.plain).fontWeight(.medium).foregroundStyle(V3.txt).padding(.leading,4) }
-        }.font(V3.sans(12)).foregroundStyle(LibraryTone.faint).frame(height:14).padding(.top,6)
-    }
-    /// 音频：播放器 + 还没有文字稿时的转写状态（桌面端暂不开放发起转写，转写在 Web 或求职进度里完成）；视频：播放器。
-    @ViewBuilder private var mediaPreview: some View {
-        VStack(alignment:.leading,spacing:12) {
-            if let player { VideoPlayer(player:player).frame(height:target.text("asset_kind") == "audio" ? 80 : 380) }
-            else if loading { Text("正在读取音频…").font(V3.sans(14)).foregroundStyle(V3.sub) }
-            else { Text(sheetError ?? "媒体不可用，请下载原文件重试。").font(V3.sans(14)).foregroundStyle(V3.sub) }
-            Button("下载文件") { Task { await download(DatasetRecord(target)) } }.buttonStyle(V3ButtonStyle(kind:.ghost)).disabled(busy)
-        }.padding(20).frame(maxWidth:.infinity,alignment:.leading).overlay(RoundedRectangle(cornerRadius:8).stroke(V3.line)).padding(.top,4)
-        if target.text("asset_kind") == "audio" && target["has_transcript"]?.bool != true {
-            VStack(alignment:.leading,spacing:12) {
-                Text("音频转文字").font(V3.sans(16,weight:.semibold)).foregroundStyle(V3.txt)
-                Text(transcriptionText).font(V3.sans(14)).foregroundStyle(V3.sub)
-            }.padding(20).frame(maxWidth:.infinity,alignment:.leading).overlay(RoundedRectangle(cornerRadius:8).stroke(V3.line))
-        }
-    }
-    private var transcriptionText: String {
-        switch target.text("parse_status") {
-        case "queued": return "等待转写"
-        case "processing": return "正在转写…"
-        case "failed": return ["service_unavailable":"语音识别服务未配置或暂不可用，请检查模型设置后重试。","content_invalid":"未识别到有效语音，请检查音频后重试。","size_exceeded":"音频超过语音服务大小限制；AIHubMix 单次转写最多支持 25 MB。"][target.text("failure_reason")] ?? "转写失败，请稍后重试。"
-        default: return "这份音频还没有文字稿，可以在网页版资料库开始转写。"
-        }
     }
     private func date(_ value:String,format pattern:String = "yyyy-MM-dd") -> String { guard let date = CareerApplication.date(value) else { return "—" }; let format = Beijing.formatter(); format.dateFormat = pattern; return format.string(from:date) }
     private func explain(_ error:Error) -> String {

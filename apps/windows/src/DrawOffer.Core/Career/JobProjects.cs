@@ -16,8 +16,6 @@ public static class JobProjects
     public sealed record Project(string Id, JsonNode Application, string Name, string Monogram, string StatusLabel, bool Archived,
         IReadOnlyList<Node> Nodes, int DatasetCount, int RecordCount, double LastActivity)
     {
-        public bool Offer => Application.Text("offer_status") is "received" or "accepted";
-
         /// <summary>下一场：没归档时第一个 current 节点。</summary>
         public Node? Next => Archived ? null : Nodes.FirstOrDefault(x => x.State == State.Current);
 
@@ -36,12 +34,6 @@ public static class JobProjects
             }
         }
     }
-
-    /// <summary>`State.rawValue`。</summary>
-    public static string RawValue(this State state) => state switch
-    {
-        State.Done => "done", State.Current => "current", State.Upcoming => "upcoming", _ => "offer",
-    };
 
     /// <summary>秒级 Unix 时间；解析失败为 0。</summary>
     public static double Time(string? value) =>

@@ -35,7 +35,6 @@ public static class V3
     public static readonly Color Red = Hex(0xD64545);
     public static readonly Color RedSoft = Hex(0xFBF2F2);
     public static readonly Color Purple = Hex(0x8A5CC7);
-    public static readonly Color PurpleSoft = Hex(0xF3EEFA);
     public static readonly Color White = Colors.White;
     public static readonly Color Clear = Colors.Transparent;
 
@@ -335,5 +334,4 @@ public static class Icons
     };
 
     public static string Glyph(string symbol) => Map.TryGetValue(symbol, out var glyph) ? glyph : throw new KeyNotFoundException($"未收录的图标：{symbol}");
-    public static IReadOnlyCollection<string> Known => Map.Keys;
 }

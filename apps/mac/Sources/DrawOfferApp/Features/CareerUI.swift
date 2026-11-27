@@ -14,7 +14,6 @@ enum CareerPalette {
     static let field = Color(hex: 0xF4F4F2)
     static let soft = Color(hex: 0xFAFAF9)
     static let pipelineLine = Color(hex: 0xEDEDE9)
-    static let dashed = Color(hex: 0xB3B3AD)
     static let rail = Color(hex: 0xE3E3DE)
     static let chipGray = Color(hex: 0xF0F0EC)
     static let blue = Color(hex: 0x3F6FD8)

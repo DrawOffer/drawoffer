@@ -24,8 +24,6 @@ public abstract class CareerSheetControl : UserControl
         Content = sheet;
     }
 
-    protected static TextBlock Error(string? error) => error is null ? null! : ErrorText(error);
-
     /// <summary>`Button(…).buttonStyle(CareerActionStyle(large: true))`。</summary>
     protected static CareerAction Large(string title, Action action, bool enabled = true, CareerAction.Kind kind = CareerAction.Kind.Outline)
         => new(title, action, kind, large: true) { Enabled = enabled };

@@ -68,7 +68,6 @@ for (const directory of [
   resolve(appsRoot, 'windows/src/DrawOffer.App/Assets/Branding'),
 ]) {
   mkdirSync(directory, { recursive: true });
-  copyFileSync(resolve(appsRoot, 'web/src/assets/drawoffer-wordmark.png'), resolve(directory, 'wordmark.png'));
   copyFileSync(resolve(appsRoot, 'web/src/assets/drawoffer-mark.png'), resolve(directory, 'mark.png'));
 }
 

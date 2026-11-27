@@ -32,6 +32,8 @@ struct AccountApiKeySection: View {
                     }
                     .buttonStyle(.plain).font(V3.sans(13, weight: .medium)).foregroundStyle(full ? V3.fnt2 : V3.blue)
                     .disabled(full).help(full ? "最多 \(AccountApiKeyItem.limit) 把，请先删除不用的 Key" : "创建 Key")
+                } else if !failed {
+                    V3Skeleton(width: 58, height: 10)
                 }
             }.frame(height: 18).padding(.bottom, 6)
             AccountHairline()
@@ -73,8 +75,10 @@ struct AccountApiKeySection: View {
             }
             ForEach(keys) { key in AccountApiKeyRow(key: key) { deleting = key } }
         } else {
-            V3Loading("正在读取 API Key…").font(V3.sans(13)).frame(maxWidth: .infinity, minHeight: 49, alignment: .leading)
-                .padding(.bottom, 1).overlay(alignment: .bottom) { AccountHairline() }
+            // 读取中：一行骨架（左名称、右前缀与权限），与 Web `.acc-api-key-loading` 一致
+            HStack { V3Skeleton(width: 140, height: 10); Spacer(); V3Skeleton(width: 76, height: 10) }
+                .frame(height: 49).padding(.bottom, 1).overlay(alignment: .bottom) { AccountHairline() }
+                .accessibilityElement().accessibilityLabel("正在读取 API Key…")
         }
     }
 

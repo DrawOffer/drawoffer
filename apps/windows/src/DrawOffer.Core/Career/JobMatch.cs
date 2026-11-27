@@ -54,30 +54,6 @@ public sealed record JobMatch
     public override int GetHashCode() => HashCode.Combine(Status, Stale, Score, Headline, ErrorCode);
 }
 
-/// <summary>首页推荐岗位（`/api/job-matches/recommendations`）。</summary>
-public sealed record JobMatchRecommendations
-{
-    public sealed record Item(string Id, string Title, string Company, int Score, string? ApplicationStatus);
-
-    public string State { get; }
-    public string? ResumeTitle { get; }
-    public IReadOnlyList<Item> Items { get; }
-    public int PendingCount { get; }
-    public bool CanCompute { get; }
-
-    public JobMatchRecommendations(JsonNode value)
-    {
-        State = value.Text("state");
-        ResumeTitle = CareerJson.OptionalString(value.Get("resume"), "title");
-        Items = value.Items("items").Select(x => new Item(x.Text("job_id"), x.Text("job_title"), x.Text("company_name"), x.Integer("score"), CareerJson.OptionalString(x, "application_status"))).ToList();
-        PendingCount = value.Integer("pending_count");
-        CanCompute = value.Bool("can_compute");
-    }
-
-    public bool Equals(JobMatchRecommendations? other) => other is not null && State == other.State && ResumeTitle == other.ResumeTitle && Items.SequenceEqual(other.Items) && PendingCount == other.PendingCount && CanCompute == other.CanCompute;
-    public override int GetHashCode() => HashCode.Combine(State, ResumeTitle, Items.Count, PendingCount, CanCompute);
-}
-
 /// <summary>岗位详情的完整可编辑字段（Web `JobDescriptionFields`）。PUT 需要提交完整字段集合与 base_lock_version。</summary>
 public static class JobDescriptionFields
 {

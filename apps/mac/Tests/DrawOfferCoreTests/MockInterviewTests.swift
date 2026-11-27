@@ -14,6 +14,8 @@ import Testing
     #expect(CareerRequest.allowed(path: "/api/datasets", method: "GET"))
     // Voice interview surface.
     #expect(MockInterviewRequest.allowed(path: "/api/mock-interviews/speech-capability", method: "GET"))
+    #expect(MockInterviewRequest.allowed(path: "/api/mock-interviews/import-targets", method: "GET"))
+    #expect(!MockInterviewRequest.allowed(path: "/api/mock-interviews/import-targets", method: "POST"))
     #expect(MockInterviewRequest.audio(path: base + "/speech/playback", method: "POST"))
     #expect(MockInterviewRequest.audio(path: base + "/questions/12/recording", method: "GET"))
     #expect(MockInterviewRequest.allowed(path: base + "/questions/12/transcript", method: "PUT"))
@@ -40,12 +42,6 @@ import Testing
     #expect(throws: (any Error).self) { try MockInterviewRequest.decodeEvents(Data(": heartbeat\n\n".utf8)) }
     #expect(throws: (any Error).self) { try MockInterviewRequest.decodeEvents(Data(repeating: 32, count: MockInterviewRequest.maximumTurnBytes + 1)) }
     #expect(throws: (any Error).self) { try MockInterviewRequest.decodeEvents(Data([0xff])) }
-}
-@Test func currentQuestionRequiresPendingAndStatusIsDurable() {
-    let item = MockInterview(.object(["current_question_id":.string("2"),"status":.string("evaluation_failed"),"questions":.array([.object(["id":.string("2"),"answer_status":.string("answered")])])]))
-    #expect(item.current == nil)
-    #expect(!item.active)
-    #expect(item.label == "评估失败")
 }
 
 @Test func speechSocketQueryAllowsDeviceCheckWithoutQuestion() {

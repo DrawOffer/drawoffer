@@ -72,15 +72,8 @@ public static class ScheduleCalendar
         return days;
     }
 
-    /// <summary>本地某天某时刻（UI 用），按 <paramref name="zone"/> 解析墙钟时间。</summary>
-    public static DateTimeOffset LocalDate(DateOnly date, TimeSpan time = default, TimeZoneInfo? zone = null) =>
-        SwiftCalendar.Resolve(date.ToDateTime(TimeOnly.MinValue).Add(time), zone ?? Beijing.Zone);
-
     public static List<ScheduledInterview> Conflicts(IEnumerable<ScheduledInterview> items, string? excluding, DateTimeOffset start, DateTimeOffset end) =>
         items.Where(x => x.Id != excluding && x.Editable && !x.OpenWindow && x.Overlaps(start, end)).ToList();
-
-    public static List<ScheduledInterview> Upcoming(IEnumerable<ScheduledInterview> items, DateTimeOffset now) =>
-        CareerJson.StableSort(items.Where(x => x.Editable && x.End > now), (a, b) => (a.OpenWindow ? a.End : a.Start).CompareTo(b.OpenWindow ? b.End : b.Start)).Take(3).ToList();
 
     /// <summary>每组相互重叠的安排各自分道；首尾相接的安排共用一道。</summary>
     public static Dictionary<string, (int Index, int Count)> Lanes(IEnumerable<ScheduledInterview> items)

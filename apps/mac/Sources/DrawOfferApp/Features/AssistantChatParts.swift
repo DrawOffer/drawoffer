@@ -263,8 +263,8 @@ struct AssistantThinking: View {
 
 // MARK: - 02B·08 / 09 对话卡片
 
-/// 回复下面的卡片（Web `ActionCard`，02B·09 定稿）：白底细边、横排，按内容收宽、多张自动换行；点开的那张描黑边。
-/// 回执卡与对象卡在右侧预览或跳到对应页面；跳转卡去功能页；确认卡在卡片内确认。
+/// 回复下面的卡片（Web `ActionCard`，02B·09 定稿）：白底细边、等宽两列自适应（窄栏单列），确认卡和「开始找岗位」独占一行；点开的那张描黑边。
+/// 回执卡与对象卡在右侧预览或跳到对应页面；跳转卡去功能页；确认卡在卡片内确认；同一条回复里重复查到的对象只留一张。
 struct AssistantActionCards: View {
     @Environment(SessionStore.self) private var session
     @Environment(WorkspaceRouter.self) private var router
@@ -276,24 +276,55 @@ struct AssistantActionCards: View {
     let activeKey: String?
     let openPreview: (ChatPreviewTab) -> Void
     let changed: (JSONValue) -> Void
+    /// 「开始找岗位」：找岗位还差的项（nil 表示还没读到画像）；替用户发一句话（回答进行中为 nil）。
+    var jobMissing: [(key: String, label: String)]? = nil
+    var send: ((String) -> Void)? = nil
 
-    static let actionTypes: Set<String> = ["confirm", "receipt", "handoff", "objects", "jobs"]
+    static let actionTypes: Set<String> = ["confirm", "receipt", "handoff", "objects", "jobs", "profile_gate"]
+    static let startJobSearch = "按我的求职画像找匹配的岗位"
+    @State private var started = false
 
     var body: some View {
-        FlowLayout(spacing: 8) {
-            ForEach(Array(cards.enumerated()), id: \.offset) { _, card in
-                switch card.text("type") {
-                case "confirm": AssistantConfirmCard(card: card, sessionID: sessionID, sequenceNo: sequenceNo, changed: changed)
-                case "receipt": receipt(card)
-                case "handoff": handoff(card)
-                case "objects", "jobs": ForEach(Array(objects(card).enumerated()), id: \.offset) { _, item in object(item) }
-                default: EmptyView()
+        let cards = AgentCards.dedupe(cards)
+        let wide = cards.filter { ["confirm", "profile_gate"].contains($0.text("type")) }
+        let tiles = cards.filter { !["confirm", "profile_gate"].contains($0.text("type")) }
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(wide.enumerated()), id: \.offset) { _, card in
+                if card.text("type") == "confirm" { AssistantConfirmCard(card: card, sessionID: sessionID, sequenceNo: sequenceNo, changed: changed) }
+                else { profileGate }
+            }
+            if !tiles.isEmpty || document != nil {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 8)], alignment: .leading, spacing: 8) {
+                    ForEach(Array(tiles.enumerated()), id: \.offset) { _, card in
+                        switch card.text("type") {
+                        case "receipt": receipt(card)
+                        case "handoff": handoff(card)
+                        default: ForEach(Array(objects(card).enumerated()), id: \.offset) { _, item in object(item) }
+                        }
+                    }
+                    if let document {
+                        cardButton(symbol: "doc.richtext", title: document.label, subtitle: "AI 文档 · \(document.content.count) 字", active: activeKey == document.key) { openPreview(document) }
+                    }
                 }
             }
-            if let document {
-                cardButton(symbol: "doc.richtext", title: document.label, subtitle: "AI 文档 · \(document.content.count) 字", active: activeKey == document.key) { openPreview(document) }
-            }
         }
+    }
+
+    /// 02B-16：画像没填好时「开始找岗位」浅灰不可点、右边「补完右侧画像后可点」（点了打开右侧画像）；填好后黑色胶囊，点一下替用户发出找岗位。
+    private var profileGate: some View {
+        let ready = jobMissing?.isEmpty ?? false
+        return HStack(spacing: 10) {
+            Button { started = true; send?(Self.startJobSearch) } label: {
+                Text("开始找岗位").font(V3.sans(13)).foregroundStyle(ready && !started && send != nil ? .white : Color(hex: 0xB5B5B0))
+                    .padding(.horizontal, 17).frame(height: 32)
+                    .background(ready && !started && send != nil ? V3.txt : Color(hex: 0xF1F1EF), in: Capsule()).contentShape(Capsule())
+            }.buttonStyle(.plain).disabled(!ready || started || send == nil)
+            if ready { Text("画像已完善").font(V3.sans(13)).foregroundStyle(V3.fnt) }
+            else {
+                Button { openPreview(.careerProfile) } label: { Text("补完右侧画像后可点").contentShape(Rectangle()) }
+                    .buttonStyle(.plain).font(V3.sans(13)).foregroundStyle(V3.fnt)
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func receipt(_ card: JSONValue) -> some View {
@@ -333,7 +364,7 @@ struct AssistantActionCards: View {
     private func objects(_ card: JSONValue) -> [JSONValue] {
         if card.text("type") == "objects" { return card["items"]?.items ?? [] }
         return (card["items"]?.items ?? []).map { item in
-            .object(["kind": .string("pool_job"), "id": .string(item.text("id")), "title": .string(item.text("title")), "company": .string(item.text("company")),
+            .object(["kind": .string("pool_job"), "id": .string(item.text("id")), "title": .string(item.text("title")), "company": .string(item.text("company")), "logo_url": item["logo_url"] ?? .null,
                      "subtitle": .string([item.text("company"), item.text("city")].filter { !$0.isEmpty }.joined(separator: " · "))])
         }
     }
@@ -365,7 +396,7 @@ struct AssistantActionCards: View {
                     Text(kind == "match" ? item.text("subtitle").nilIfEmpty ?? item.text("title") : item.text("title")).font(V3.sans(13.5, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1)
                     if !item.text("subtitle").isEmpty, kind != "match" { Text(item.text("subtitle")).font(V3.sans(12)).foregroundStyle(Color(hex: 0x8A8A84)).lineLimit(1) }
                 }
-            }.padding(.leading, 11).padding(.trailing, 14).frame(height: 53)
+            }.padding(.leading, 11).padding(.trailing, 14).frame(maxWidth: .infinity, minHeight: 53, alignment: .leading)
                 .background(.white, in: RoundedRectangle(cornerRadius: 9.5)).overlay(RoundedRectangle(cornerRadius: 9.5).stroke(active ? Color(hex: 0x9E9E99) : V3.cl))
                 .contentShape(Rectangle())
         }.buttonStyle(AssistantCardHover())
@@ -397,8 +428,9 @@ struct AssistantActionCards: View {
                     Text(title).font(V3.sans(14, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1).frame(height: 20)
                     if !subtitle.isEmpty { Text(subtitle).font(V3.sans(12)).foregroundStyle(failed ? V3.orange : V3.fnt).lineLimit(1).frame(height: 18) }
                 }
+                Spacer(minLength: 0)
                 if go { Image(systemName: "arrow.right").font(.system(size: 11)).foregroundStyle(V3.fnt).padding(.leading, 4) }
-            }.padding(.leading, 12).padding(.trailing, 16).padding(.vertical, 10)
+            }.padding(.leading, 12).padding(.trailing, 16).padding(.vertical, 10).frame(maxWidth: .infinity, alignment: .leading)
                 .background(.white, in: RoundedRectangle(cornerRadius: 10))
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(active ? V3.txt : V3.cl))
                 .contentShape(Rectangle())

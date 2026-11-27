@@ -1,11 +1,12 @@
 import Foundation
 
-/// 投递详情（Figma 07 页 04–09 分区）的文案与状态，对应 Web `features/interviews/progress/journey.tsx`：
-/// 上半讲“这一步”——眉题（公司 · 岗位 + 蓝色阶段）、衬线结论标题、一句说明、一个随状态变的黑按钮 + 白色「有新进展」；
-/// 右侧随状态换内容；底部是全程时间线。这里只算文案，画法在 App 的 `CareerJourneyViews`。
+/// 投递详情（Figma 07N · 03–06，Web `features/interviews/progress/journey.tsx`）的文案与状态：
+/// 左边只说现在该做什么——岗位、两行衬线大标题（第二行蓝＝轮到你，灰＝在等或已过去）、一句说明、一排按钮（一黑一白）；
+/// 右边只放这一步的那件东西（状态图形）；底部是全程时间线。这里只算文案、选图形和排时间线，画法在 App。
 public enum CareerJourneyAction: String, Sendable {
-    case recordApplied, openSource, advance, schedule, reschedule, enter, mock
-    case generateReview, openReview, openRecord, openWritten, recordOffer, decide, editOffer, reopen, backToNow
+    case recordApplied, openSource, advance, schedule, reschedule, enter, openPlace, copyPlace, mock, practiceWeak
+    case upload, paste, pickLibrary, retryTranscription, generateReview, openReview, openRecord
+    case addWritten, openWritten, pickResume, openResume, recordOffer, decide, editOffer, reopen, backToNow
 }
 
 public struct CareerJourneyButton: Sendable, Equatable {
@@ -14,29 +15,40 @@ public struct CareerJourneyButton: Sendable, Equatable {
     public init(_ action: CareerJourneyAction, _ label: String) { self.action = action; self.label = label }
 }
 
-/// 右侧随状态放的那一样东西（04 分区「说明 · 右侧随状态」）。
-public enum CareerJourneySide: String, Sendable { case resume, prep, recordEntry, questions, review, written, offer, oc, left, none }
-
-public struct CareerJourneyPlace: Sendable, Equatable {
-    public let text: String
-    public let copy: String
-    public let url: URL?
-    /// 末尾带「· 修改安排」。
-    public let editable: Bool
+/// 右边那件东西（Figma 07N · 03「左右布局与状态图形」，24 个状态一件）。
+public enum CareerJourneyFigure: String, Sendable {
+    case resume, resumeBlank, sent, askDay, writtenDue, writtenList, day, dayPast, clock
+    case recordEmpty, recordRunning, recordFailed, questions, reviewing, reviewFailed, review, wait
+    case oral, offerBlank, offer, offerAccepted, offerDeclined, archive, archiveOpen
 }
 
 public struct CareerJourneyStep: Sendable {
+    /// 补充投递信息弹窗标题旁的阶段胶囊。
     public let stage: String
-    public let title: String
+    /// 大标题的两行。
+    public let title: [String]
+    /// 第二行的颜色：轮到你做、在等或已经过去、好消息（和第一行同色）。
+    public enum Tone: Sendable { case turn, rest, plain }
+    public let tone: Tone
     public let desc: String?
-    public let place: CareerJourneyPlace?
     public let primary: CareerJourneyButton?
     public let secondary: CareerJourneyButton?
-    public let side: CareerJourneySide
+    /// 不常用的几项放进右上角 ⋯。
+    public let more: [CareerJourneyButton]
+    public let figure: CareerJourneyFigure
+}
+
+/// 这一场去哪儿：现场是地点，其他是会议或作答链接。
+public struct CareerJourneyPlace: Sendable, Equatable {
+    public let label: String
+    public let url: URL?
+    public let onsite: Bool
 }
 
 public enum CareerJourney {
     // MARK: 小工具
+
+    static let day: TimeInterval = 86_400
 
     public static func relativeDay(_ value: Date, now: Date, calendar: Calendar = Beijing.calendar) -> String? {
         switch CareerFormat.days(from: now, to: value, calendar: calendar) {
@@ -73,7 +85,8 @@ public enum CareerJourney {
     public static func offerDate(_ raw: String) -> Date? { CareerFormat.offerDate(raw) ?? CareerApplication.date(raw) }
 
     static func cnCount(_ value: Int) -> String {
-        value >= 1 && value <= 9 ? String(Array("一二三四五六七八九")[value - 1]) : String(value)
+        if value == 2 { return "两" }
+        return value >= 1 && value <= 9 ? String(Array("一二三四五六七八九")[value - 1]) : String(value)
     }
 
     static func interviewCount(_ deck: CareerDeck) -> Int {
@@ -86,12 +99,55 @@ public enum CareerJourney {
         return URL(string: value)
     }
 
+    /// 「还有 2 天」：只写一个单位，不足一小时写分钟；已过为 nil。
+    public static func leftText(_ target: Date, now: Date) -> String? {
+        let diff = target.timeIntervalSince(now)
+        guard diff > 0 else { return nil }
+        if diff >= day { return "还有 \(Int(diff / day)) 天" }
+        let hours = Int(diff / 3600)
+        return hours > 0 ? "还有 \(hours) 小时" : "还有 \(max(1, Int(diff / 60))) 分钟"
+    }
+
+    /// 这一场去哪儿；没填为 nil。
+    public static func placeOf(_ session: JSONValue) -> CareerJourneyPlace? {
+        let location = session.text("location"), meeting = session.text("meeting_url")
+        if session.text("mode") == "onsite" {
+            guard !location.isEmpty else { return nil }
+            let query = location.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+            return CareerJourneyPlace(label: location, url: URL(string: "https://uri.amap.com/search?keyword=\(query)"), onsite: true)
+        }
+        return meeting.isEmpty ? nil : CareerJourneyPlace(label: meeting, url: URL(string: meeting), onsite: false)
+    }
+
+    /// 英文收尾的词后面接中文时留一个空格。
+    static func spaced(_ words: String) -> String {
+        guard let last = words.unicodeScalars.last, last.value >= 0x21 && last.value <= 0x7E else { return words }
+        return words + " "
+    }
+
     // MARK: 复盘结论（和报告页同一套判定，含用户改过的层）
 
-    struct GraphQuestion { let key: String; let kind: String; let title: String; let topic: String; let outcome: String; let answer: String }
+    struct GraphQuestion {
+        let index: Int
+        let key: String
+        let kind: String
+        let parent: Int?
+        let title: String
+        let outcome: String
+        let layered: Bool
+        let depth: Int?
+        let expected: Int
+        let overridden: Bool
+        let source: JSONValue
+    }
 
-    static func categoryLabel(_ value: String) -> String {
-        ["technical": "技术题", "project": "项目题", "behavioral": "行为题", "hr": "HR 题"][value] ?? ""
+    static func layered(_ question: JSONValue) -> Bool {
+        if case .bool(let value) = question["depth_scored"] ?? .null { return value }
+        return !["hr", "behavioral"].contains(question.text("category"))
+    }
+
+    static func target(_ question: JSONValue) -> Int {
+        question["target_depth"]?.numberValue.map { Int($0) } ?? question["expected_depth"]?.numberValue.map { Int($0) } ?? 3
     }
 
     /// Web `review/model.ts` 的 `outcomeOf`。
@@ -101,16 +157,14 @@ public enum CareerJourney {
         if userDepth == nil, let value = question.text("outcome").nonEmptyValue { return value }
         if question.text("answer_status") == "missing" { return "unrecorded" }
         if question.text("answer_status") == "declined" && userDepth == nil { return "missed" }
-        let layered: Bool = { if case .bool(let value) = question["depth_scored"] ?? .null { return value }; return !["hr", "behavioral"].contains(question.text("category")) }()
-        if !layered && userDepth == nil {
+        if !layered(question) && userDepth == nil {
             let verdicts = (question["signals"]?.items ?? []).map { $0.text("verdict") }.filter { $0 != "not_probed" }
             guard !verdicts.isEmpty else { return "unrecorded" }
             let share = verdicts.reduce(0.0) { $0 + ($1 == "hit" ? 1 : $1 == "partial" ? 0.5 : 0) } / Double(verdicts.count)
             return share >= 0.67 ? "reached" : share >= 0.34 ? "one_short" : "missed"
         }
         guard let depth = userDepth ?? question["achieved_depth"]?.numberValue.map({ Int($0) }) else { return "unrecorded" }
-        let target = question["target_depth"]?.numberValue.map { Int($0) } ?? question["expected_depth"]?.numberValue.map { Int($0) } ?? 3
-        let gap = target - depth
+        let gap = target(question) - depth
         return gap <= 0 ? "reached" : gap == 1 ? "one_short" : "missed"
     }
 
@@ -121,54 +175,99 @@ public enum CareerJourney {
         for note in session["review_question_notes"]?.items ?? [] {
             if let depth = note["user_depth"]?.numberValue { notes[note.text("question_key")] = Int(depth) }
         }
-        return (report["questions"]?.items ?? []).map { source in
+        return (report["questions"]?.items ?? []).enumerated().map { position, source in
             let kind = source.text("kind").nonEmptyValue ?? "main"
             let raw = source.text("question").trimmingCharacters(in: .whitespacesAndNewlines)
             let clean = raw.replacingOccurrences(of: "[？?。.！!]+$", with: "", options: .regularExpression)
             let short = clean.count > 10 ? String(clean.prefix(10)) + "…" : clean
-            return GraphQuestion(key: source.text("key"), kind: kind,
+            let userDepth = notes[source.text("key")]
+            return GraphQuestion(index: source["index"]?.numberValue.map { Int($0) } ?? position + 1, key: source.text("key"), kind: kind,
+                                 parent: kind == "follow_up" ? source["parent"]?.numberValue.map { Int($0) } : nil,
                                  title: kind == "reverse" ? "反问" : source.text("title").trimmingCharacters(in: .whitespaces).nonEmptyValue ?? short,
-                                 topic: kind == "reverse" ? "反问" : source.text("topic").trimmingCharacters(in: .whitespaces).nonEmptyValue ?? categoryLabel(source.text("category")),
-                                 outcome: outcome(source, userDepth: notes[source.text("key")]),
-                                 answer: source.text("answer"))
+                                 outcome: outcome(source, userDepth: userDepth), layered: layered(source),
+                                 depth: userDepth ?? source["achieved_depth"]?.numberValue.map { Int($0) },
+                                 expected: target(source), overridden: userDepth != nil, source: source)
         }
     }
 
-    public struct WeakPoint: Sendable, Identifiable {
+    /// Web `chartLevel`：图上这一题到了第几层。
+    static func chartLevel(_ question: GraphQuestion) -> Int? {
+        if question.outcome == "unrecorded" || question.outcome == "not_judged" { return nil }
+        if question.layered { return max(0, min(5, question.depth ?? 0)) }
+        let drop = question.outcome == "reached" ? 0 : question.outcome == "one_short" ? 1 : 2
+        return max(0, min(5, question.expected - drop))
+    }
+
+    /// 复盘里的一道主问题（连同它的追问算一题，和报告页同一个数法）。
+    public struct ReviewedQuestion: Sendable, Equatable, Identifiable {
         public let id: String
+        public let no: Int
         public let title: String
-        public let detail: String
-        public let quote: String?
+        public let outcome: String
+        /// 没答好时是该补的那句，答到位时是亮点。
+        public let line: String?
+        public let level: Int?
+        public let expected: Int
+        /// 最后一问的原话，带去模拟面试。
+        public let ask: String
+        /// 没说到或只说了一半的点。
+        public let gaps: [String]
+        public var weak: Bool { outcome == "missed" || outcome == "one_short" }
     }
 
-    /// 复盘里没答到位的几处：只算没答上和差一层。
-    public static func weakPoints(_ session: JSONValue?, stageShort: String? = nil) -> [WeakPoint] {
+    /// Web `reviewedQuestions`：复盘里的主问题（含用户改过的判定），没记下的不算；没有逐题判断的旧复盘为空。
+    public static func reviewedQuestions(_ session: JSONValue?) -> [ReviewedQuestion] {
         guard let session, let questions = graph(session) else { return [] }
-        return questions.filter { $0.kind != "reverse" && ($0.outcome == "missed" || $0.outcome == "one_short") }.map { item in
-            let missed = item.outcome == "missed"
-            let answer = item.answer.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
-            let what = missed ? "没答上" : "差一层"
-            let topic: String? = item.topic.isEmpty ? nil : item.topic.unicodeScalars.first.map { $0.isASCII } == true ? "属于 \(item.topic)" : "属于\(item.topic)"
-            let clip = answer.count > 24 ? String(answer.prefix(24)) + "…" : answer
-            return WeakPoint(id: item.key, title: item.title.count > 16 ? String(item.title.prefix(16)) + "…" : item.title,
-                             detail: [topic, stageShort.map { $0 + what } ?? what].compactMap { $0 }.joined(separator: " · "),
-                             quote: answer.isEmpty ? nil : missed ? "你停在“\(clip)”" : "你只说了“\(clip)”")
-        }
+        let charted = questions.filter { $0.kind != "reverse" }
+        let mains = charted.filter { ($0.kind == "main" || $0.parent == nil) && $0.source["intro"]?.bool != true }
+        return mains.enumerated().map { position, main in
+            let unit = [main] + charted.filter { $0.parent == main.index }
+            let unitOutcome = main.source.text("unit_outcome").nonEmptyValue ?? main.outcome
+            let outcome = main.overridden ? main.outcome : unitOutcome == "not_judged" ? "unrecorded" : unitOutcome
+            let weak = outcome == "missed" || outcome == "one_short"
+            let improvement = unit.lazy.compactMap { $0.source.text("improvement").nonEmptyValue }.first
+            let strength = unit.lazy.compactMap { $0.source.text("strength").nonEmptyValue }.first
+            let levels = unit.compactMap(chartLevel)
+            var seen = Set<String>(), gaps: [String] = []
+            for item in unit {
+                for signal in item.source["signals"]?.items ?? [] {
+                    let label = (signal.text("label").nonEmptyValue ?? signal.text("signal")).trimmingCharacters(in: .whitespaces)
+                    guard signal.text("verdict") != "not_probed", !label.isEmpty, seen.insert(label).inserted else { continue }
+                    if signal.text("verdict") != "hit" { gaps.append(label) }
+                }
+            }
+            return ReviewedQuestion(id: String(main.index), no: position + 1, title: main.title, outcome: outcome,
+                                    line: weak ? improvement ?? strength : strength ?? improvement,
+                                    level: main.overridden ? chartLevel(main) : levels.max(), expected: main.expected,
+                                    ask: unit.last?.source.text("question") ?? main.title, gaps: gaps)
+        }.filter { $0.outcome != "unrecorded" }
     }
 
-    public static func missedCount(_ session: JSONValue?) -> Int { weakPoints(session).count }
+    public static func weakQuestions(_ session: JSONValue?) -> [ReviewedQuestion] { reviewedQuestions(session).filter(\.weak) }
+    public static func missedCount(_ session: JSONValue?) -> Int { weakQuestions(session).count }
 
-    /// Web `ReviewBand.reviewHeadline(...).detail`：差一层 / 答到位 / 没记下各几题。
-    public static func reviewDetail(_ session: JSONValue) -> String {
-        guard let questions = graph(session) else { return "点开看每道题的分析" }
+    /// 一次最多带三题去练。
+    public static let practiceLimit = 3
+
+    /// Web `ReviewBand.reviewHeadline`：结论一句与「差一层 / 答到位 / 没记下各几题」。
+    public static func reviewHeadline(_ session: JSONValue) -> (title: String, detail: String) {
+        let report = session["review_report"] ?? .null
+        guard let questions = graph(session) else {
+            let text = report.text("summary").trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyValue
+                ?? session.text("review_summary").trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyValue ?? "复盘已生成"
+            return (text.count > 22 ? String(text.prefix(22)) + "…" : text, "点开看每道题的分析")
+        }
         let marks = questions.map { $0.outcome == "reached" ? "good" : $0.outcome == "one_short" ? "shallow" : $0.outcome == "missed" ? "missed" : "unrecorded" }
         let count = { (kind: String) in marks.filter { $0 == kind }.count }
-        let parts = [
-            count("shallow") > 0 && marks.contains("missed") ? "差一层 \(count("shallow"))" : nil,
+        let missedIndex = marks.firstIndex(of: "missed"), shallowIndex = marks.firstIndex(of: "shallow")
+        let title = missedIndex.map { "\(count("missed")) 题没答上：\(questions[$0].title)" }
+            ?? shallowIndex.map { "\(count("shallow")) 题差一层：\(questions[$0].title)" } ?? "每道题都答到了位"
+        let detail = [
+            count("shallow") > 0 && missedIndex != nil ? "差一层 \(count("shallow"))" : nil,
             count("good") > 0 ? "答到位 \(count("good"))" : nil,
             count("unrecorded") > 0 ? "没记下 \(count("unrecorded"))" : nil,
         ].compactMap { $0 }.joined(separator: " · ")
-        return parts.isEmpty ? (session["review_report"]?.text("headline") ?? "") : parts
+        return (title, detail.isEmpty ? report.text("headline") : detail)
     }
 
     // MARK: 面试记录状态（Web `StationCard.recordState`）
@@ -217,20 +316,18 @@ public enum CareerJourney {
         return Int(text[range].prefix(2))
     }
 
-    /// 「22K × 15」。
+    /// Web `offerSalaryUnit`：数字后面写明「元 / 月」「K / 年」。
+    public static func offerSalaryUnit(_ amount: String, currency: String, period: String) -> String {
+        let code = (currency.isEmpty ? "CNY" : currency).uppercased()
+        let money = code == "CNY" ? (amount.hasSuffix("K") ? "" : "元") : code
+        let per = period == "year" ? "/ 年" : period == "month" ? "/ 月" : ""
+        return [money, per].filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    /// 「22K × 15」（做决定弹窗）。
     public static func offerSalary(_ app: JSONValue) -> String? {
         guard let salary = money(app.display("offer_salary")) else { return nil }
         return salary + (offerMonths(app).map { " × \($0)" } ?? "")
-    }
-
-    /// 「年包约 33 万」/「年薪」。
-    public static func offerYearly(_ app: JSONValue) -> String? {
-        let raw = app.display("offer_salary")
-        if !raw.isEmpty, app.text("offer_salary_period") != "year", let months = offerMonths(app), let amount = Double(raw) {
-            let value = (amount * Double(months) / 1000).rounded() / 10
-            return "年包约 \(value == value.rounded() ? String(Int(value)) : String(value)) 万"
-        }
-        return app.text("offer_salary_period") == "year" ? "年薪" : nil
     }
 
     public static func dotDate(_ raw: String) -> String? {
@@ -239,203 +336,368 @@ public enum CareerJourney {
         return "\(parts.year ?? 0).\(CareerDeckFormat.two(parts.month ?? 0)).\(CareerDeckFormat.two(parts.day ?? 0))"
     }
 
+    public struct OfferText: Sendable, Equatable {
+        public let job: String
+        public let salary: String?
+        public let detail: String?
+        public let due: String?
+        public let done: String?
+    }
+
+    /// Web `offerText`：Offer 图形上的几行。
+    public static func offerText(_ app: JSONValue) -> OfferText {
+        let amount = money(app.display("offer_salary"))
+        let months = offerMonths(app)
+        let unit = amount.map { offerSalaryUnit($0, currency: app.text("offer_salary_currency"), period: app.text("offer_salary_period")) } ?? ""
+        let salary = amount.map { amount in
+            months != nil && app.text("offer_salary_period") != "year" ? "\(amount) × \(months!)" : [amount, unit].filter { !$0.isEmpty }.joined(separator: " ")
+        }
+        let detail = [dotDate(app.text("offer_start_on")).map { "\($0) 入职" }, app.text("offer_base_location").nonEmptyValue].compactMap { $0 }.joined(separator: " · ")
+        return OfferText(job: "\(app.text("company_name_snapshot")) · \(app.text("job_title_snapshot"))", salary: salary, detail: detail.nonEmptyValue,
+                         due: CareerFormat.offerDate(app.text("offer_reply_due_on")).map { "\(md($0)) 前答复" },
+                         done: CareerApplication.date(app.text("terminated_at")).map { "\(md($0)) 接受" })
+    }
+
+    /// 收进盒子里的标签：「2 轮记录」/「投递记录」。
+    public static func roundLabel(_ deck: CareerDeck) -> String {
+        let rounds = deck.stations.filter { ($0.kind == .interview || $0.kind == .written) && $0.session != nil }.count
+        return rounds > 0 ? "\(rounds) 轮记录" : "投递记录"
+    }
+
     // MARK: 这一步
 
-    public static func step(application app: JSONValue, deck: CareerDeck, station: CareerStation, viewing: Bool, now: Date,
-                            detail: JSONValue?, previous: CareerStation?, reviewCost: String?) -> CareerJourneyStep {
-        let advance = CareerJourneyButton(.advance, "有新进展")
-        let current = deck.current ?? deck.stations[deck.stations.count - 1]
-        let backToNow = CareerJourneyButton(.backToNow, "回到" + (deck.pending ? "待投递" : current.short))
-        let session = live(station.session)
-        func placeOf(_ editable: Bool) -> CareerJourneyPlace? {
-            guard let session else { return nil }
-            let location = session.text("location"), meeting = session.text("meeting_url")
-            if session.text("mode") == "onsite", !location.isEmpty {
-                let query = location.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-                return CareerJourneyPlace(text: location, copy: location, url: URL(string: "https://uri.amap.com/search?keyword=\(query)"), editable: editable)
-            }
-            if !meeting.isEmpty {
-                return CareerJourneyPlace(text: meeting.replacingOccurrences(of: "^https?://", with: "", options: .regularExpression), copy: meeting, url: URL(string: meeting), editable: editable)
-            }
-            return nil
-        }
-        func make(_ stage: String, _ title: String, _ desc: String?, place: CareerJourneyPlace? = nil, primary: CareerJourneyButton? = nil, secondary: CareerJourneyButton? = nil, side: CareerJourneySide) -> CareerJourneyStep {
-            CareerJourneyStep(stage: stage, title: title, desc: desc, place: place, primary: primary, secondary: secondary, side: side)
-        }
-        let anyReview = deck.stations.reversed().first { CareerDeck.hasReview($0.session) }?.session
+    static func matchDesc(_ match: JobMatch?) -> String? {
+        guard let match, let score = match.score else { return nil }
+        let covered = match.covered.prefix(3), missing = match.missing.prefix(2)
+        return "这份和岗位匹配 \(score) 分" + (covered.isEmpty ? "" : "，\(spaced(covered.joined(separator: "、")))都对得上")
+            + (missing.isEmpty ? "" : "，还缺 \(missing.joined(separator: "、"))") + "。"
+    }
 
-        // 09 分区：已结束，结论直接说结果
+    static func coverageDesc(_ match: JobMatch?) -> String? {
+        guard let match, match.score != nil, !(match.covered.isEmpty && match.missing.isEmpty) else { return nil }
+        return "岗位提到 \(match.covered.count + match.missing.count) 项技能，简历写到了 \(match.covered.count) 项。"
+            + (match.missing.isEmpty ? "" : "还没写到的是 \(match.missing.prefix(3).joined(separator: "、"))。")
+    }
+
+    public static func step(application app: JSONValue, deck: CareerDeck, station: CareerStation, viewing: Bool, now: Date,
+                            detail: JSONValue?, previous: CareerStation?, reviewCost: String?, match: JobMatch? = nil, memoryTopics: Int = 0) -> CareerJourneyStep {
+        typealias B = CareerJourneyButton
+        func make(_ stage: String, _ title: [String], _ tone: CareerJourneyStep.Tone, _ desc: String?, primary: B? = nil, secondary: B? = nil,
+                  more: [B] = [], _ figure: CareerJourneyFigure) -> CareerJourneyStep {
+            CareerJourneyStep(stage: stage, title: title, tone: tone, desc: desc, primary: primary, secondary: secondary, more: more, figure: figure)
+        }
+        let advance = B(.advance, "更新进度")
+        let current = deck.current ?? deck.stations[deck.stations.count - 1]
+        let backToNow = B(.backToNow, "回到" + (deck.pending ? "待投递" : current.short))
+        let session = live(station.session)
+        let place = session.flatMap(placeOf)
+        let copyPlace = place.map { [B(.copyPlace, $0.onsite ? "复制地点" : "复制链接")] } ?? []
+        let resumeID = app.text("resume_id").nonEmptyValue ?? app.display("resume_id").nonEmptyValue
+        let seeResume = resumeID != nil ? B(.openResume, "查看简历") : nil
+        let seeRecord = B(.openRecord, "查看面试记录")
+        let anyReview = deck.stations.reversed().first { CareerDeck.hasReview($0.session) }?.session
+        let resumeTitle = app.text("resume_title_snapshot")
+
+        // 已结束
         if let ended = deck.ended, !viewing {
             let last = deck.stations[deck.stations.count - 1]
             let interviews = interviewCount(deck)
             let walked = interviews > 0 ? "走了 \(deck.days) 天、\(cnCount(interviews))场面试" : "走了 \(deck.days) 天"
-            let review = anyReview != nil ? CareerJourneyButton(.openReview, "查看复盘") : nil
+            let review = anyReview != nil ? B(.openReview, "查看复盘") : nil
             switch ended.kind {
             case .withdrew:
-                return make("已结束", "\(last.short)之后，不继续了。", "\(md(ended.at)) 你结束了这条投递。想回来随时可以恢复，之前的记录和复盘都在。",
-                            primary: CareerJourneyButton(.reopen, "恢复投递"), secondary: review, side: .left)
+                return make("已结束", ["这个岗位", "先不继续了"], .rest, "\(md(ended.at)) 停在\(last.short)。想回来随时可以恢复，之前的记录都在。",
+                            primary: B(.reopen, "恢复投递"), secondary: review, .archiveOpen)
             case .accepted:
-                let start = offerDate(app.text("offer_start_on"))
-                let parts = start.map { Beijing.calendar.dateComponents([.year, .month], from: $0) }
-                return make("已接受", parts.map { "Offer 接受了，\($0.year ?? 0) 年 \($0.month ?? 0) 月入职。" } ?? "Offer 接受了。",
-                            "\(md(ended.at)) 接受的。\(walked)，记录和复盘都留着。", primary: review, side: .offer)
+                let start = CareerFormat.offerDate(app.text("offer_start_on")).map { Beijing.calendar.dateComponents([.year, .month], from: $0) }
+                return make("已接受", ["Offer 接受了", "恭喜"], .plain,
+                            start.map { "\($0.year ?? 0) 年 \($0.month ?? 0) 月入职。\(walked)，记录都留着。" } ?? "\(walked)，记录都留着。", primary: review, .offerAccepted)
             case .declined:
-                return make("已结束", "婉拒了这个 Offer。", "\(md(ended.at)) 婉拒的。\(walked)，记录和复盘都留着。", primary: review, side: .offer)
+                return make("已婉拒", ["这份 Offer", "婉拒了"], .rest, "\(md(ended.at)) 婉拒的。\(walked)，记录都留着。", primary: review, .offerDeclined)
             case .rejected:
-                return make("已结束", "\(last.short)没通过。", anyReview != nil ? "\(walked)。没答上的地方都留下来了，下次会先提醒你。" : "\(walked)。记录都留着，之后的投递还能参考。",
-                            primary: review, side: .left)
+                return make("没通过", ["走到\(last.short)", "记录都留着"], .rest,
+                            anyReview != nil ? "\(walked)。没答好的地方，下次面试前会先提醒你。" : "\(walked)，之后的投递还能参考。", primary: review, .archive)
             case .other:
-                return make("已结束", "这条投递结束了。", "\(walked)。记录都留着。", primary: review, side: .left)
+                return make("已结束", ["这条投递", "结束了"], .rest, "\(walked)，记录都留着。", primary: review, .archive)
             }
         }
 
-        // 04 分区：投递前与筛选
         if station.kind == .apply && deck.pending {
-            let created = CareerApplication.date(app.text("created_at")) ?? now
-            let days = CareerDeckFormat.dayCount(created, now)
-            return make("待投递", "还没投，选一份简历投出去。", (days > 0 ? "\(md(created)) 导入，已经放了 \(days) 天。" : "今天导入的。") + "投完回来记一笔。",
-                        primary: CareerJourneyButton(.recordApplied, "记录投递"), secondary: sourceURL(app) != nil ? CareerJourneyButton(.openSource, "去官网投递 ↗") : nil, side: .resume)
+            let change = resumeTitle.isEmpty ? nil : B(.pickResume, "换一份简历")
+            let source = sourceURL(app) != nil ? B(.openSource, "去官网投递") : nil
+            return make("待投递", ["选一份简历", "投出去"], .turn,
+                        resumeTitle.isEmpty ? "记录投递时选一份，之后的准备和复盘都会参考它。" : matchDesc(match) ?? "投完回来记一笔，之后的进展都从这里往下走。",
+                        primary: B(.recordApplied, "记录投递"), secondary: source ?? change, more: source != nil ? [change].compactMap { $0 } : [], .resume)
         }
+
         if station.kind == .apply {
             let channel = CareerDeck.source(app)
-            let resume = app.text("resume_title_snapshot")
-            return make("投递 · \(md(station.start))", channel.map { "\(md(station.start)) 在\($0)投出去。" } ?? "\(md(station.start)) 投出去。",
-                        resume.isEmpty ? nil : "投的是「\(resume)」。", secondary: backToNow, side: .resume)
+            return make("投递 · \(md(station.start))", [md(station.start), channel.map { "在\($0)投出去" } ?? "投出去"], .rest,
+                        resumeTitle.isEmpty ? nil : "投的是「\(resumeTitle)」。", primary: seeResume, secondary: backToNow, resumeID != nil ? .resume : .resumeBlank)
         }
+
         if station.kind == .screening {
             if station.current && !viewing {
                 let days = CareerDeckFormat.dayCount(station.start, now)
-                let channel = CareerDeck.source(app)
-                return make("筛选中", days > 0 ? "投出去 \(days) 天了，等简历筛选。" : "今天投出去，等简历筛选。",
-                            (channel.map { "\(md(station.start)) 在\($0)投的。" } ?? "") + "没消息不用急，收到笔试或面试通知时，点「有新进展」记一笔。",
-                            primary: advance, side: .resume)
+                let noResume = resumeTitle.isEmpty
+                return make("筛选中", days > 0 ? ["投出去 \(days) 天了", "还在等结果"] : ["今天投出去了", "等结果"], .rest,
+                            noResume ? "还没记投的是哪份简历，补上之后复盘会更准。" : coverageDesc(match) ?? "收到笔试或面试通知，回来记一笔。",
+                            primary: advance, secondary: noResume ? B(.pickResume, "选一份简历") : seeResume, noResume ? .resumeBlank : .sent)
             }
             let failed = station.result == "rejected"
-            return make("筛选 · " + (failed ? "没通过" : "已通过"), failed ? "简历筛选没通过。" : "简历筛选通过。",
-                        station.end.map { "投出去 \(CareerDeckFormat.dayCount(station.start, $0)) 天后出结果。" }, secondary: backToNow, side: .resume)
+            return make("筛选 · " + (failed ? "没通过" : "已通过"), ["简历筛选", failed ? "没通过" : "通过了"], .rest,
+                        station.end.map { "投出去 \(CareerDeckFormat.dayCount(station.start, $0)) 天后出结果。" }, primary: seeResume, secondary: backToNow, .sent)
         }
 
-        // 09 分区：OC 与 Offer
         if station.kind == .oc {
             let at = CareerApplication.date(app.text("oc_communicated_at")) ?? station.start
             if station.current && !viewing {
-                let contact = app.text("oc_contact").nonEmptyValue ?? "HR"
-                return make("OC · 口头 Offer", "拿到口头 Offer，等正式的。", "\(contact) \(md(at))沟通的，正式 Offer 一般一到两周内发。收到后在这里记下。",
-                            primary: CareerJourneyButton(.recordOffer, "记录正式 Offer"), side: .oc)
+                return make("口头 Offer", ["口头 Offer 有了", "等正式的"], .rest, "收到正式 Offer 后在这里记下，薪资和答复截止都放在一起。",
+                            primary: B(.recordOffer, "记录正式 Offer"), .oral)
             }
-            return make("OC · \(md(at))", "拿到口头 Offer。", "\(md(at)) 沟通，之后转成了正式 Offer。", secondary: backToNow, side: .oc)
-        }
-        if station.kind == .offer {
-            guard app.text("offer_status") != "none" else {
-                return make("Offer · 信息待补充", "收到 Offer，先把信息补上。", "薪资、入职和答复截止填进来，做决定时一眼看全。",
-                            primary: CareerJourneyButton(.editOffer, "编辑 Offer 信息"), side: .offer)
-            }
-            let due = offerDate(app.text("offer_reply_due_on"))
-            let left = due.map { CareerFormat.days(from: now, to: $0) }
-            let title = left.map { $0 > 0 ? "Offer 还有 \($0) 天要答复。" : $0 == 0 ? "Offer 今天要答复。" : "Offer 已过答复截止。" } ?? "收到 Offer，还没填答复截止。"
-            return make("Offer · 待答复", title, due.map { "\(md($0)) 前答复。接受之后，其他还在进行的投递不会自动结束。" } ?? "答复截止可以在 ⋯ 里的「编辑 Offer 信息」补上。",
-                        primary: CareerJourneyButton(.decide, "做决定"), side: .offer)
+            return make("口头 Offer · \(md(at))", ["拿到了", "口头 Offer"], .rest, "\(md(at)) 沟通，之后转成了正式 Offer。", secondary: backToNow, .oral)
         }
 
-        // 05–08 分区：笔试 / 测评 / 面试
+        if station.kind == .offer {
+            guard app.text("offer_status") != "none" else {
+                return make("正式 Offer", ["Offer 到了", "把条件记下来"], .turn, "薪资、入职和答复截止填进来，做决定时一眼看全。",
+                            primary: B(.editOffer, "填写 Offer"), .offerBlank)
+            }
+            let due = CareerFormat.offerDate(app.text("offer_reply_due_on"))
+            let left = due.map { CareerFormat.days(from: now, to: $0) }
+            let title: [String] = left.map { $0 > 0 ? ["还有 \($0) 天", "决定去不去"] : $0 == 0 ? ["今天要答复", "决定去不去"] : ["过了答复日期", "记下你的决定"] }
+                ?? ["Offer 到了", "决定去不去"]
+            return make("正式 Offer · 待答复", title, .turn, "接受之后，其他还在进行的投递不会自动结束。",
+                        primary: B(.decide, "做决定"), secondary: B(.editOffer, "编辑 Offer"), .offer)
+        }
+
+        // 笔试 / 测评 / 面试
         let written = station.kind == .written
         let isNow = station.current && !viewing
 
         if isNow && session == nil && deck.stageState == "awaiting_schedule" {
             let waited = CareerDeckFormat.dayCount(station.start, now)
             let passed = previous?.kind == .interview ? previous : nil
-            let desc = written ? "笔试通知一般会给一个作答时段。把时段和链接填进来，截止前会出现在面试日程里。"
-                : (passed.map { "\($0.short) \(md(stationDay($0))) 通过" } ?? "\(md(station.start)) 收到通知") + (waited > 0 ? "，已经等了 \(waited) 天。" : "。") + "收到时间后填进来，时间线和面试日程会一起更新。"
-            return make("\(station.short) · 待安排", written ? "收到\(station.short)，还没定时间。" : "\(station.short)，等对方约时间。", desc,
-                        primary: CareerJourneyButton(.schedule, "安排时间"), secondary: advance, side: .prep)
+            let desc = written ? "把作答时段和链接填进来，截止前会出现在面试日程里。"
+                : (passed.map { "\($0.short) \(md(stationDay($0))) 通过" } ?? "\(md(station.start)) 收到通知") + (waited > 0 ? "，已经等了 \(waited) 天。" : "。") + "定下来就填上。"
+            return make("\(station.short) · 时间待安排", ["\(spaced(station.short))来了", "先定时间"], .turn, desc, primary: B(.schedule, "安排时间"), .askDay)
         }
 
         if isNow, let session, session.text("status") == "scheduled", let end = CareerApplication.date(session.text("end_at")), end > now {
             let start = CareerApplication.date(session.text("start_at")) ?? end
             let meeting = !session.text("meeting_url").isEmpty
+            let openPlace = place?.onsite == true ? B(.openPlace, "查看地点") : nil
+            let dated = { (value: Date) in (relativeDay(value, now: now) ?? "\(md(value)) ") + station.short }
             if written || session.text("schedule_kind") == "open_window" {
-                let left = CareerDeckFormat.remaining(end, now: now, prefix: "还剩")
-                let minutes: Int? = session.text("schedule_kind") == "open_window" ? nil : max(1, Int((end.timeIntervalSince(start) / 60).rounded()))
-                let desc = [left.map { "作答窗口\($0)" }, minutes.map { "约 \($0) 分钟" }].compactMap { $0 }.joined(separator: "，") + "。做之前把右边几处过一遍。"
-                return make("\(station.short) · 线上", "\(md(end)) \(endClock(end)) 前做完\(station.short)。", desc, place: placeOf(true),
-                            primary: meeting ? CareerJourneyButton(.enter, "进入\(station.short)") : advance, secondary: meeting ? advance : nil, side: .prep)
+                let open = session.text("schedule_kind") == "open_window"
+                let left = leftText(open ? end : start, now: now)
+                let today = relativeDay(open ? end : start, now: now) == "今天"
+                let fill = place == nil && session.text("mode") != "onsite" ? B(.reschedule, "填上\(station.short)链接") : nil
+                let title: [String] = left == nil ? [station.short, "进行中"]
+                    : open ? [today ? "今天 \(endClock(end)) 前" : left!, "把\(station.short)做完"] : [dated(start), left!]
+                let desc: String? = place?.onsite == true ? "地点在\(place!.label)。"
+                    : left == nil || open ? "找一段不被打断的时间，做完回来把题目记下。"
+                    : fill != nil ? "先把链接填上，到点从这里直接进。" : place != nil ? "提前几分钟进去，把环境试一下。" : nil
+                return make("\(station.short) · " + (session.text("mode") == "onsite" ? "现场" : "线上"), title, .turn, desc,
+                            primary: openPlace ?? (meeting ? B(.enter, "进入\(station.short)") : left != nil || open ? fill : advance),
+                            more: copyPlace, .writtenDue)
             }
-            let day = relativeDay(start, now: now)
-            let today = day == "今天"
-            let left = CareerDeckFormat.remaining(start, now: now)
-            let prepLeft = (session["prep_items"]?.items ?? []).filter { $0["done"]?.bool != true }.count
-            let prevWeak = previous.flatMap { $0.kind == .interview && missedCount($0.session) > 0 ? $0 : nil }
-            let desc = today
-                ? (left.map { "\($0)，" } ?? "") + (meeting ? "会议链接在下面。" : !session.text("location").isEmpty ? "地点在下面。" : "") + (prepLeft > 0 ? "准备清单还剩 \(prepLeft) 项没勾。" : "")
-                : (left.map { "\($0)，" } ?? "") + (meeting ? "会议链接已经存好。" : "") + (prevWeak.map { "面试前练一场，重点放在\($0.short)没接住的地方。" } ?? "面试前可以先练一场。")
-            return make("\(station.short) · \(modeLabel(session))", "\(day ?? "\(md(start)) \(CareerDeckFormat.weekday(start))") \(CareerDeckFormat.clock(start))，\(station.short)。", desc,
-                        place: placeOf(true), primary: today && meeting ? CareerJourneyButton(.enter, "进入会议") : CareerJourneyButton(.mock, "模拟这场面试"),
-                        secondary: advance, side: .prep)
+            let today = relativeDay(start, now: now) == "今天"
+            let prevWeak = previous?.kind == .interview ? missedCount(previous?.session) : 0
+            let stage = "\(station.short) · \(modeLabel(session))"
+            let mock = B(.mock, "模拟这场面试")
+            if today || start <= now {
+                let left = leftText(start, now: now)
+                let enter = openPlace ?? (meeting ? B(.enter, "进入会议") : nil)
+                return make(stage, left.map { [dated(start), $0] } ?? [station.short, "进行中"], .turn,
+                            left == nil ? "面完回来，趁热把问了什么记下来。" : prevWeak > 0 ? "\(previous!.short)没答好的 \(prevWeak) 题，进去前再看一眼。" : "提前几分钟进去，把设备试一下。",
+                            primary: enter ?? (left != nil ? mock : advance), secondary: enter != nil && left != nil ? mock : nil, more: copyPlace, .clock)
+            }
+            let desc = memoryTopics > 1 ? "台历上几处之前没答稳，点一处就能单独练。"
+                : memoryTopics == 1 ? "台历上这处之前没答稳，点一下就能单独练。"
+                : prevWeak > 0 ? "\(previous!.short)没答好的几处先练。" : "按这个岗位和你的简历练一遍。"
+            return make(stage, [dated(start), "先练一场"], .turn, desc,
+                        primary: mock, secondary: openPlace ?? (meeting ? B(.enter, "打开会议链接") : nil), more: copyPlace, .day)
         }
 
         if let session {
             let record = recordState(session, detail)
-            let result = station.result == "rejected" ? "没通过" : "已通过"
+            let rejected = station.result == "rejected"
+            let pastTitle = [station.short, rejected ? "没通过" : "通过了"]
+            let pastStage = "\(station.short) · \(md(stationDay(station))) · " + (rejected ? "没通过" : "已通过")
             if written {
                 let questions = detail?["session"]?["written_questions"]?.items ?? session["written_questions"]?.items ?? []
+                let wrong = questions.filter { $0.text("correctness") == "wrong" }.count
+                let desc = questions.isEmpty ? "趁还记得，把题目记下来，之后能逐题标对错。"
+                    : wrong > 0 ? "记了 \(questions.count) 道题，\(wrong) 道没做对。" : "记了 \(questions.count) 道题。"
+                let see = questions.isEmpty ? nil : B(.openWritten, "查看\(station.short)题")
+                let add = B(.addWritten, "添加\(station.short)题")
                 if isNow {
-                    return make("\(station.short) · 已做完", "\(station.short)做完了，等结果。",
-                                questions.isEmpty ? "趁还记得，把题目记下来，之后能逐题标对错。" : "记了 \(questions.count) 道题，可以逐题标对错。", primary: advance, side: .written)
+                    return make("\(station.short) · 等结果", ["\(spaced(station.short))做完了", "等结果"], .rest, desc,
+                                primary: advance, secondary: see ?? add, more: see != nil ? [add] : [], .writtenList)
                 }
-                return make("\(station.short) · \(md(stationDay(station))) · \(result)", station.result == "rejected" ? "\(station.short)没通过。" : "\(station.short)通过了。",
-                            questions.isEmpty ? nil : "记了 \(questions.count) 道题。", primary: questions.isEmpty ? nil : CareerJourneyButton(.openWritten, "查看\(station.short)题"),
-                            secondary: backToNow, side: .written)
+                return make(pastStage, pastTitle, .rest, questions.isEmpty ? nil : desc, primary: see, secondary: backToNow, more: [add], .writtenList)
             }
-            let reviewed = session.text("review_status") != "failed" && CareerDeck.hasReview(session)
-            let missed = missedCount(session)
+            let reviewed = session.text("review_status") != "failed" && session.text("review_status") != "generating" && CareerDeck.hasReview(session)
+            let judged = reviewed ? reviewedQuestions(session) : []
+            let missed = judged.filter(\.weak).count
+            let paste = B(.paste, "粘贴文字")
+            let library = B(.pickLibrary, "从资料库选录音")
+            let replace = B(.upload, "换一份录音")
+            let ready: Int? = { if case .ready(let count, _) = record { return count }; return nil }()
+            let recordMore = ready != nil ? [seeRecord] : []
+            let practice = B(.practiceWeak, missed > practiceLimit ? "先练 \(practiceLimit) 题" : "练这 \(missed) 题")
             if isNow {
-                let stage = reviewed ? "\(station.short) · 已复盘" : "\(station.short) · 已面完"
+                let done = "\(station.short) · 已面完", waiting = "\(station.short) · 等结果"
+                let seeReview = B(.openReview, "查看复盘")
+                if reviewed && missed > 0 {
+                    return make(waiting, ["\(missed) 题没答到位", "先补上"], .turn, "趁还记得，把它们再答一遍，下一轮可能还会问到。",
+                                primary: practice, secondary: seeReview, more: recordMore, .review)
+                }
                 if reviewed {
-                    return make(stage, missed > 0 ? "\(station.short)有 \(missed) 处没答到位。" : "\(station.short)每道题都答到了位。", reviewDetail(session),
-                                place: placeOf(false), primary: CareerJourneyButton(.openReview, "查看复盘"), secondary: advance, side: .review)
+                    return make(waiting, [judged.isEmpty ? "复盘好了" : "都答到位了", "等结果"], .rest, "收到通知后，回来记一笔。",
+                                primary: advance, secondary: seeReview, more: recordMore, .review)
                 }
                 if session.text("review_status") == "generating" {
-                    return make(stage, "正在复盘\(station.short)。", "一般 1 分钟左右，好了这里会更新，可以先去做别的。", place: placeOf(false), secondary: advance, side: .questions)
+                    return make(done, ["正在复盘", "稍等一会儿"], .rest, "一般 1 分钟左右，好了这里会更新，可以先去做别的。",
+                                secondary: ready != nil ? seeRecord : nil, .reviewing)
                 }
-                if case .ready(let count, _) = record {
+                if let ready {
                     let failed = session.text("review_status") == "failed"
-                    return make(stage, "记下 \(count) 道题，可以复盘了。", failed ? "上次没生成出来，可以再试一次。" : "复盘会逐题对照你的回答，标出哪里没答到位、该怎么补。",
-                                place: placeOf(false), primary: CareerJourneyButton(.generateReview, [failed ? "再试一次" : "生成复盘", reviewCost].compactMap { $0 }.joined(separator: " · ")),
-                                secondary: advance, side: .questions)
+                    return make(done, failed ? ["复盘没生成", "再试一次"] : ["记下 \(ready) 道题", "可以复盘了"], .turn,
+                                failed ? "记录都还在，直接再试一次就行。" : "逐题对照你的回答，标出哪里没答到位、该怎么补。",
+                                primary: B(.generateReview, failed ? "再试一次" : ["生成复盘", reviewCost].compactMap { $0 }.joined(separator: " · ")),
+                                secondary: seeRecord, failed ? .reviewFailed : .questions)
                 }
-                let transcribing: Bool = { if case .transcribing = record { return true }; return false }()
-                return make(stage, "\(station.short)面完了，等结果。",
-                            transcribing ? "录音正在转成文字，好了会按问题拆好。" : "趁还记得，把问了什么记下来。记下来才能复盘，下一轮前也知道该补哪里。",
-                            place: placeOf(false), secondary: advance, side: .recordEntry)
+                switch record {
+                case .transcribing(_, let minutes):
+                    return make(done, ["录音正在", "整理成题目"], .rest, minutes.map { "大约要 \($0) 分钟，可以先去做别的。" } ?? "好了会按题拆开，可以先去做别的。",
+                                secondary: replace, .recordRunning)
+                case .failed:
+                    return make(done, ["录音没转成功", "再试一次"], .turn, "还不行的话，换一份录音，或者直接粘贴文字。",
+                                primary: B(.retryTranscription, "重新转写"), secondary: replace, more: [paste, library], .recordFailed)
+                default:
+                    return make(done, ["\(spaced(station.short))面完了", "趁热记下来"], .turn, "录音会自动转成文字、按题拆开，再用来复盘。",
+                                primary: B(.upload, "上传录音"), secondary: paste, more: [library], .recordEmpty)
+                }
             }
-            // 07.08：回看过去的一轮
-            let ready: Int? = { if case .ready(let count, _) = record { return count }; return nil }()
-            let verb = station.result == "rejected" ? "没通过" : "通过"
-            let title = reviewed
-                ? (missed > 0 ? "\(station.short)\(verb)，\(missed) 处没答到位。" : "\(station.short)\(verb)，每道题都答到了位。")
-                : (station.result == "rejected" ? "\(station.short)没通过。" : "\(station.short)通过了。")
-            return make("\(station.short) · \(md(stationDay(station))) · \(result)", title,
-                        reviewed ? reviewDetail(session) : ready.map { "记了 \($0) 道题，还没复盘。" } ?? "这一轮还没有面试记录。",
-                        primary: reviewed ? CareerJourneyButton(.openReview, "查看复盘") : ready != nil ? CareerJourneyButton(.openRecord, "查看面试记录") : nil,
-                        secondary: backToNow, side: reviewed ? .review : ready != nil ? .questions : .recordEntry)
+            // 回看过去的一轮
+            if session.text("review_status") == "generating" {
+                return make(pastStage, pastTitle, .rest, "正在逐题复盘，好了这里会更新。", secondary: backToNow, more: recordMore, .reviewing)
+            }
+            if reviewed {
+                return make(pastStage, judged.isEmpty ? pastTitle : [spaced(station.short) + pastTitle[1], missed > 0 ? "\(missed) 题没答到位" : "都答到位了"], .rest,
+                            reviewHeadline(session).detail, primary: B(.openReview, "查看复盘"), secondary: backToNow, more: recordMore, .review)
+            }
+            switch record {
+            case .ready(let count, _):
+                return make(pastStage, pastTitle, .rest, "记了 \(count) 道题，还没复盘。", primary: seeRecord, secondary: backToNow, .questions)
+            case .transcribing:
+                return make(pastStage, pastTitle, .rest, "录音正在转成文字，好了会按题拆开。", secondary: backToNow, more: [replace], .recordRunning)
+            case .failed:
+                return make(pastStage, pastTitle, .rest, "这一轮的录音没转成功。", primary: B(.retryTranscription, "重新转写"), secondary: backToNow,
+                            more: [replace, paste, library], .recordFailed)
+            case .none:
+                return make(pastStage, pastTitle, .rest, "这一轮还没有面试记录，现在补也来得及。", primary: B(.upload, "上传录音"), secondary: backToNow,
+                            more: [paste, library], .recordEmpty)
+            }
         }
 
         if isNow {
-            return make(station.short, "等\(station.short)的结果。", "这一轮没有记下时间。收到消息后，点「有新进展」记一笔。", primary: advance, side: .prep)
+            return make("\(station.short) · 等结果", [station.short, "在等结果"], .rest, "收到通知后，回来记一笔。", primary: advance, .wait)
         }
         let failed = station.result == "rejected"
-        return make("\(station.short) · " + (failed ? "没通过" : "已通过"), failed ? "\(station.short)没通过。" : "\(station.short)通过了。", "这一轮没有记下时间。",
-                    secondary: backToNow, side: .none)
+        return make("\(station.short) · " + (failed ? "没通过" : "已通过"), [station.short, failed ? "没通过" : "通过了"], .rest, "这一轮没有记下时间。",
+                    secondary: backToNow, .dayPast)
     }
 
-    // MARK: 全程时间线（各分区底部）
+    /// 还能往下走的阶段：筛选、笔试、面试。待投递、口头和正式 Offer 有各自的按钮。
+    public static func canAdvance(_ deck: CareerDeck, viewing: Bool) -> Bool {
+        guard deck.ended == nil, !deck.pending, !viewing else { return false }
+        let current = deck.current ?? deck.stations[deck.stations.count - 1]
+        return [.screening, .written, .interview].contains(current.kind)
+    }
+
+    // MARK: 右侧图形要的数据
+
+    public struct PaperRow: Sendable, Equatable, Identifiable {
+        public let id: String
+        public let title: String
+        /// 这题在完整记录里的位置，用来打开记录。
+        public let position: Int
+    }
+
+    /// 有记录的一轮按考点列题；考点还没整理好时先按题列。反问不算考点。
+    public static func paperRows(_ questions: [RecordQuestion], groups: [JSONValue]?) -> [PaperRow] {
+        let mains = questions.enumerated().filter { $0.element.reply == nil && $0.element.question.trimmingCharacters(in: .whitespaces).range(of: "^反问[：:]", options: .regularExpression) == nil }
+        func title(_ position: Int, _ question: String) -> String { question.trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyValue ?? "第 \(position + 1) 题" }
+        guard let groups else { return mains.map { PaperRow(id: String($0.offset), title: title($0.offset, $0.element.question), position: $0.offset) } }
+        return groups.compactMap { group in
+            let first = (group["questions"]?.items ?? []).compactMap { $0.numberValue.map { Int($0) } }
+                .lazy.compactMap { $0 >= 1 && $0 <= mains.count ? mains[$0 - 1] : nil }.first
+            guard let first else { return nil }
+            let topic = group.text("topic").trimmingCharacters(in: .whitespacesAndNewlines)
+            return PaperRow(id: "\(group.text("topic"))-\(first.offset)", title: topic.nonEmptyValue ?? title(first.offset, first.element.question), position: first.offset)
+        }
+    }
+
+    /// 送去整理考点的题目（反问除外，最多 60 题）。
+    public static func topicQuestions(_ questions: [RecordQuestion]) -> [String] {
+        questions.filter { $0.reply == nil && $0.question.trimmingCharacters(in: .whitespaces).range(of: "^反问[：:]", options: .regularExpression) == nil }
+            .prefix(60).map { String($0.question.trimmingCharacters(in: .whitespacesAndNewlines).prefix(2000)).nonEmptyValue ?? "（没记下问题）" }
+    }
+
+    public enum PaperMark: Sendable { case open, good, weak, waiting }
+
+    /// 复盘进行中：已经列出来的主问题和各题的判断；还没列出来时为空。
+    public static func progressQuestions(_ session: JSONValue?) -> [(id: String, title: String, mark: PaperMark)] {
+        (session?["review_progress"]?["questions"]?.items ?? []).filter { $0.text("kind") == "main" }.map { item in
+            let outcome = item.text("outcome")
+            return ("progress-\(item.display("index"))", item.text("title"),
+                    outcome == "reached" ? .good : outcome == "missed" || outcome == "one_short" ? .weak : .waiting)
+        }
+    }
+
+    /// 准备投的那份简历：版式是示意，姓名、板块和经历取自这份简历（`GET /api/resumes/{id}` 的 `resume.data`）。
+    public struct ResumeSketch: Sendable, Equatable {
+        public struct Entry: Sendable, Equatable { public let title: String; public let period: String }
+        public struct Section: Sendable, Equatable { public let title: String; public let entries: [Entry] }
+        public let name: String?
+        public let headline: String?
+        public let sections: [Section]
+        public let skillsTitle: String?
+    }
+
+    public static func resumeSketch(_ doc: JSONValue?) -> ResumeSketch? {
+        guard let doc, case .object = doc else { return nil }
+        func value(_ item: JSONValue?) -> String? { item?.text("value").trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyValue }
+        let all = doc["sections"]?.items ?? []
+        let sections: [ResumeSketch.Section] = all.filter { !["profile", "skills"].contains($0.text("semantic_kind")) && !($0["entries"]?.items ?? []).isEmpty }
+            .compactMap { section in
+                let entries = (section["entries"]?.items ?? []).prefix(2).compactMap { entry -> ResumeSketch.Entry? in
+                    let fields = entry["fields"]
+                    let title = [value(fields?["organization"]) ?? value(fields?["college"]), value(fields?["role"]) ?? value(fields?["name"]) ?? value(fields?["major"])]
+                        .compactMap { $0 }.joined(separator: " · ")
+                    let period = [value(fields?["start_date"]), value(fields?["end_date"])].compactMap { $0 }.joined(separator: " – ")
+                    return title.isEmpty ? nil : ResumeSketch.Entry(title: title, period: period)
+                }
+                guard let title = value(section["title"]), !entries.isEmpty else { return nil }
+                return ResumeSketch.Section(title: title, entries: Array(entries))
+            }
+        let name = value(doc["identity"]?["name"])
+        guard name != nil || !sections.isEmpty else { return nil }
+        return ResumeSketch(name: name, headline: value(doc["identity"]?["headline"]), sections: Array(sections.prefix(3)),
+                            skillsTitle: value(all.first { $0.text("semantic_kind") == "skills" }?["title"]))
+    }
+
+    // MARK: 全程时间线
 
     public struct Node: Identifiable, Sendable {
         public enum Kind: Sendable { case past, current, future, failed }
         public let id: String
         public let label: String
         public let line: String?
-        /// 「3 处没答到位」，带橙点。
+        /// 「3 题没答到位」，带橙点。
         public let note: String?
         public let kind: Kind
         /// 可以点开回看的站点。
@@ -449,12 +711,20 @@ public enum CareerJourney {
         public let days: Int?
     }
 
+    /// 「今天」：蓝线走到的地方，落在第几段的哪个位置；天数是蓝线上写的。
+    public struct Today: Sendable, Equatable {
+        public let segment: Int
+        public let ratio: Double
+        public let days: Int?
+    }
+
     public struct Timeline: Sendable {
         public let head: String
         public let nodes: [Node]
         public let segments: [Segment]
-        /// 「今天」竖线落在第几段的哪个位置。
-        public let today: (segment: Int, ratio: Double)?
+        public let today: Today?
+        /// 这一轮就在今天：节点自己是今天的点，不另画。
+        public let todayNode: String?
     }
 
     static func nodeLine(_ station: CareerStation, deck: CareerDeck, now: Date, isLast: Bool) -> String? {
@@ -499,6 +769,7 @@ public enum CareerJourney {
 
     public static func timeline(application app: JSONValue, deck: CareerDeck, now: Date) -> Timeline {
         let lastIndex = deck.stations.count - 1
+        let stationOf = { (node: Node) in deck.stations.first { $0.id == node.stationID } }
         var nodes: [Node] = deck.stations.enumerated().map { index, station in
             let failed = station.result == "rejected" || (index == lastIndex && deck.ended?.kind == .rejected)
             let missed = missedCount(station.session)
@@ -508,98 +779,46 @@ public enum CareerJourney {
                 line = channel.map { $0.count <= 4 ? "\(md(station.start)) · \($0)" : md(station.start) } ?? md(station.start)
             }
             return Node(id: station.id, label: station.kind == .apply && deck.pending ? "投递" : station.short, line: line,
-                        note: missed > 0 ? "\(missed) 处没答到位" : nil,
+                        note: missed > 0 ? "\(missed) 题没答到位" : nil,
                         kind: failed ? .failed : station.current && deck.ended == nil ? .current : .past,
                         stationID: station.id, day: station.kind == .apply && deck.pending ? nil : stationDay(station))
         }
         for label in futureLabels(deck, now: now) {
             nodes.append(Node(id: "future-" + label, label: label, line: nil, note: nil, kind: .future, stationID: nil, day: nil))
         }
-        let head = deck.ended != nil ? "共 \(deck.days) 天" : deck.pending ? "导入 \(deck.days) 天，还没投递" : "从投递到现在 · \(deck.days) 天"
+        let head = deck.ended != nil ? "共 \(deck.days) 天" : deck.pending ? "导入 \(deck.days) 天，还没投递"
+            : deck.days > 0 ? "从投递到现在 · \(deck.days) 天" : "今天投递"
+
+        // 「今天」是蓝线走到的地方：约好还没到，按天数落在通往这一轮的那段上；已经面完 / 做完在等结果，
+        // 落在这一轮之后那段的正中；就是今天时节点自己变成今天的点。筛选这类没有场次的阶段不画
+        var today: Today?
+        var todayNode: String?
+        let currentIndex = nodes.firstIndex { $0.kind == .current }
+        if let currentIndex, currentIndex > 0, deck.ended == nil {
+            let node = nodes[currentIndex], before = nodes[currentIndex - 1]
+            let hasSession = stationOf(node)?.session != nil
+            let isToday = relativeDay(node.day ?? now, now: now) == "今天"
+            if hasSession && node.day != nil && isToday {
+                todayNode = node.id
+            } else if let day = node.day, let start = before.day, day > now {
+                let total = day.timeIntervalSince(start)
+                let ratio = total > 0 ? min(0.8, max(0.2, now.timeIntervalSince(start) / total)) : 0.5
+                // 实线太短时写不下天数
+                today = Today(segment: currentIndex - 1, ratio: ratio, days: ratio >= 0.45 ? CareerDeckFormat.dayCount(start, now) : nil)
+            } else if hasSession && currentIndex < nodes.count - 1 && !isToday {
+                today = Today(segment: currentIndex, ratio: 0.5, days: node.day.map { CareerDeckFormat.dayCount($0, now) })
+            }
+        }
+        let waiting = today != nil && today?.segment == currentIndex
 
         var segments: [Segment] = []
         for index in nodes.indices.dropLast() {
             let node = nodes[index], next = nodes[index + 1]
-            let screeningNow = next.kind == .current && deck.stations.first { $0.id == next.stationID }?.kind == .screening
+            let screeningNow = next.kind == .current && stationOf(next)?.kind == .screening
             let days: Int? = next.kind == .future ? nil : node.day.flatMap { from in (screeningNow ? now : next.day).map { CareerDeckFormat.dayCount(from, $0) } }
-            segments.append(Segment(style: next.kind == .future ? .future : next.kind == .current ? .current : .past, days: days.flatMap { $0 > 0 ? $0 : nil }))
+            let style: Segment.Style = next.kind == .future ? .future : next.kind == .current && !waiting ? .current : .past
+            segments.append(Segment(style: style, days: days.flatMap { $0 > 0 ? $0 : nil }))
         }
-
-        // 「今天」：当前节点在未来时画在它前面那段，已面完在等结果时贴在它后面那段
-        var today: (Int, Double)?
-        if let currentIndex = nodes.firstIndex(where: { $0.kind == .current }), currentIndex > 0, deck.ended == nil {
-            let node = nodes[currentIndex], before = nodes[currentIndex - 1]
-            if let day = node.day, let start = before.day, day > now {
-                let total = day.timeIntervalSince(start)
-                today = (currentIndex - 1, total > 0 ? min(0.88, max(0.12, now.timeIntervalSince(start) / total)) : 0.5)
-            } else if let station = deck.stations.first(where: { $0.id == node.stationID }), station.session != nil, currentIndex < nodes.count - 1,
-                      relativeDay(node.day ?? now, now: now) != "今天" {
-                today = (currentIndex, 0.16)
-            }
-        }
-        return Timeline(head: head, nodes: nodes, segments: segments, today: today.map { (segment: $0.0, ratio: $0.1) })
-    }
-
-    // MARK: 右侧：面试中问到（07.06）
-
-    public struct TopicCard: Identifiable, Sendable {
-        public let id: String
-        public let title: String
-        public let meta: String
-        public let quote: String
-        /// 这题在完整记录里的位置，用来打开记录。
-        public let position: Int
-        public let many: Bool
-    }
-
-    static func positionsText(_ positions: [Int]) -> String {
-        var parts: [String] = []
-        var start = 0
-        while start < positions.count {
-            var end = start
-            while end + 1 < positions.count && positions[end + 1] == positions[end] + 1 { end += 1 }
-            if end - start >= 2 { parts.append("\(positions[start])–\(positions[end])") }
-            else { for index in start...end { parts.append(String(positions[index])) } }
-            start = end + 1
-        }
-        return parts.joined(separator: "、")
-    }
-
-    /// 反问不算考点；按考点归组列原话，不下判断；考点还没整理好时先按题列。最多三张。
-    public static func topicCards(_ questions: [RecordQuestion], groups: [JSONValue]?) -> [TopicCard] {
-        let mains = questions.enumerated().filter { $0.element.reply == nil && $0.element.question.trimmingCharacters(in: .whitespaces).range(of: "^反问[：:]", options: .regularExpression) == nil }
-        let generic = "自我介绍|介绍一下(你)?自己|求职动机|为什么(选择|想来|投递|离职)|离职原因|职业规划"
-        let quote = { (text: String) in "“\(text.trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyValue ?? "（没记下问题）")”" }
-        var cards: [(card: TopicCard, generic: Bool)] = []
-        if let groups {
-            for group in groups {
-                let members = (group["questions"]?.items ?? []).compactMap { $0.numberValue.map { Int($0) } }.compactMap { $0 >= 1 && $0 <= mains.count ? mains[$0 - 1] : nil }
-                guard let first = members.first else { continue }
-                let numbers = members.map { $0.offset + 1 }
-                let topic = group.text("topic").nonEmptyValue
-                let text = first.element.question.trimmingCharacters(in: .whitespacesAndNewlines)
-                let many = members.count > 1
-                cards.append((TopicCard(id: (topic ?? "") + "-\(numbers[0])",
-                                        title: topic ?? (text.count > 16 ? String(text.prefix(16)) + "…" : text.nonEmptyValue ?? "第 \(numbers[0]) 题"),
-                                        meta: many ? "问了 \(members.count) 题 · 第 \(positionsText(numbers)) 题" : "第 \(numbers[0]) 题",
-                                        quote: quote(first.element.question), position: first.offset, many: many),
-                              "\(topic ?? "") \(first.element.question)".range(of: generic, options: .regularExpression) != nil))
-            }
-        } else {
-            for (position, item) in mains {
-                cards.append((TopicCard(id: String(position), title: "第 \(position + 1) 题",
-                                        meta: item.followUps.isEmpty ? "没有追问" : "被追问了 \(item.followUps.count) 次",
-                                        quote: quote(item.question), position: position, many: false),
-                              item.question.range(of: generic, options: .regularExpression) != nil))
-            }
-        }
-        let ordered = cards.filter { $0.card.many } + cards.filter { !$0.card.many && !$0.generic } + cards.filter { !$0.card.many && $0.generic }
-        return ordered.prefix(3).map(\.card).sorted { $0.position < $1.position }
-    }
-
-    /// 送去整理考点的题目（反问除外，最多 60 题）。
-    public static func topicQuestions(_ questions: [RecordQuestion]) -> [String] {
-        questions.filter { $0.reply == nil && $0.question.trimmingCharacters(in: .whitespaces).range(of: "^反问[：:]", options: .regularExpression) == nil }
-            .prefix(60).map { String($0.question.trimmingCharacters(in: .whitespacesAndNewlines).prefix(2000)).nonEmptyValue ?? "（没记下问题）" }
+        return Timeline(head: head, nodes: nodes, segments: segments, today: today, todayNode: todayNode)
     }
 }

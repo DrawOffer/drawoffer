@@ -29,7 +29,7 @@ public sealed class ApiException(HttpStatusCode status, string code) : Exception
 }
 
 /// <summary>
-/// 离线 mock：模板来自 apps/native/shared/fixtures（后端布局编译器生成，内容虚构）。
+/// 离线 mock：客户端不携带模板，登录后模板列表为空，真实目录只来自 `GET /api/resume-templates`。
 /// 需后端：登录目前不校验密码。
 /// </summary>
 public sealed class MockApiClient(bool signedIn = false) : IApiClient
@@ -53,17 +53,11 @@ public sealed class MockApiClient(bool signedIn = false) : IApiClient
         return Task.CompletedTask;
     }
 
-    public async Task<IReadOnlyList<ResumeTemplate>> ListResumeTemplatesAsync(CancellationToken ct = default)
+    public Task<IReadOnlyList<ResumeTemplate>> ListResumeTemplatesAsync(CancellationToken ct = default)
     {
         if (_user is null) throw new ApiException(HttpStatusCode.Unauthorized, "UNAUTHORIZED");
-        await using var stream = typeof(MockApiClient).Assembly.GetManifestResourceStream("DrawOffer.Core.resume-templates.json")
-            ?? throw new InvalidOperationException("mock fixture missing");
-        var envelope = await JsonSerializer.DeserializeAsync<TemplateEnvelope>(stream, cancellationToken: ct);
-        return envelope?.Templates ?? [];
+        return Task.FromResult<IReadOnlyList<ResumeTemplate>>([]);
     }
-
-    private sealed record TemplateEnvelope(
-        [property: System.Text.Json.Serialization.JsonPropertyName("templates")] List<ResumeTemplate> Templates);
 }
 
 public interface IDesktopTransport

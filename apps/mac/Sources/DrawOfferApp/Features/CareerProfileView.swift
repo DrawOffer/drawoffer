@@ -3,10 +3,14 @@ import SwiftUI
 
 /// 求职画像（macOS 稿 01 页「03 · 求职画像」03.02 / 03.03 / 03.04，对齐 Web `account/CareerProfilePage.tsx`）：
 /// 账号唯一的一份，网申插件和 AI 都只用它。打开就是两列输入框，离开输入框自动保存；
-/// 教育、实习、工作、项目各是一个分区，标题右边蓝字「＋ 添加」原地展开一段表单（不弹框）；不做「从简历导入」。
+/// 教育、实习、工作、项目各是一个分区，标题右边蓝字「＋ 添加」原地展开一段表单（不弹框）；「从简历导入」只补画像里没有的。
+/// `panel`：AI 对话右侧栏里的窄栏（macOS 稿 02B-16）：找岗位要用的求职意向、教育、技能单列排在前，标题下说找岗位还差几项，打开时滚到第一个缺的分区。
 struct CareerProfileView: View {
     @Environment(SessionStore.self) private var session
     let back: () -> Void
+    var panel = false
+    /// 读到或保存后的画像与求职意向（对话里的「开始找岗位」跟着亮起）。
+    var changed: (JSONValue, JSONValue) -> Void = { _, _ in }
     @State private var profile: JSONValue?
     @State private var intent: JSONValue?
     @State private var failed = false
@@ -15,10 +19,15 @@ struct CareerProfileView: View {
     /// 刚点「添加」还没填的段只在页面上，第一次填写才保存，免得留下空段被插件填进表单。
     @State private var drafts: [AccountProfileDraft] = []
     @State private var queue: Task<Void, Never>?
+    @State private var scrolled = false
 
     private var experience: JSONValue { profile?["experience"].flatMap { $0 == .null ? nil : $0 } ?? AccountProfileModel.emptyExperience }
 
     var body: some View {
+        if panel { panelBody } else { pageBody }
+    }
+
+    private var pageBody: some View {
         GeometryReader { geometry in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
@@ -43,6 +52,82 @@ struct CareerProfileView: View {
         .background(Color.white)
         .overlay(alignment: .top) { if let toast { AccountToastView(toast: toast) { self.toast = nil } } }
         .task { await load() }
+        .onChange(of: [profile, intent]) { if let profile, let intent { changed(profile, intent) } }
+    }
+
+    // MARK: 对话右侧栏（02B-16）
+
+    private var jobMissing: [(key: String, label: String)] { JobReadiness.missing(profile: profile, intent: intent) }
+
+    private var panelBody: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    if failed && profile == nil {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("暂时无法读取求职画像").font(V3.serif(18)).foregroundStyle(V3.txt)
+                            Button("重新加载") { Task { await load() } }.buttonStyle(V3ButtonStyle(kind: .ghost))
+                        }.padding(.top, 24)
+                    } else if let profile, let intent {
+                        panelHead
+                        panelSections(profile, intent)
+                    } else {
+                        V3Loading("正在加载求职画像…").font(V3.sans(13)).frame(maxWidth: .infinity, minHeight: 240)
+                    }
+                }.padding(.horizontal, 32).padding(.top, 36).padding(.bottom, 48)
+            }
+            .scrollIndicators(.never)
+            .onChange(of: profile != nil && intent != nil) {
+                // 打开时滚到第一个缺的分区（只滚一次）
+                guard !scrolled, profile != nil, intent != nil else { return }
+                scrolled = true
+                guard let first = jobMissing.first?.key, first != "target_role" else { return }
+                Task { try? await Task.sleep(for: .milliseconds(150)); withAnimation { proxy.scrollTo(first, anchor: .top) } }
+            }
+        }
+        .environment(\.accountProfileNarrow, true)
+        .background(Color.white)
+        .overlay(alignment: .top) { if let toast { AccountToastView(toast: toast) { self.toast = nil } } }
+        .task { await load() }
+        .onChange(of: [profile, intent]) { if let profile, let intent { changed(profile, intent) } }
+    }
+
+    /// 宋体 22 标题、右上「从简历导入」；下一行「找岗位还差 N 项 · 已保存」（N 项橙色），下边线。
+    private var panelHead: some View {
+        let missing = jobMissing
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("求职画像").font(V3.serif(22)).foregroundStyle(V3.txt).frame(height: 30)
+                Spacer(minLength: 12)
+                CareerProfileImport(busy: saving > 0) { importResume($0) }
+            }
+            HStack(spacing: 0) {
+                if missing.isEmpty { Text("找岗位需要的都填好了").foregroundStyle(V3.fnt) }
+                else {
+                    Text("找岗位还差 ").foregroundStyle(V3.fnt)
+                    Text("\(missing.count) 项").foregroundStyle(Color(hex: 0xC9711C)).fontWeight(.medium)
+                }
+                Text(saving > 0 ? " · 保存中…" : " · 已保存").foregroundStyle(Color(hex: 0x96968F))
+            }.font(V3.sans(13)).frame(height: 17)
+        }
+        .padding(.bottom, 12)
+        .overlay(alignment: .bottom) { AccountHairline() }
+    }
+
+    @ViewBuilder private func panelSections(_ profile: JSONValue, _ intent: JSONValue) -> some View {
+        let lacks = Set(jobMissing.map(\.key))
+        let skills = CareerProfileRules.skills(experience)
+        AccountProfileSection(title: "求职意向", desc: "AI 找岗位、出题和网申都会用。") { intentFields(intent, narrow: true, askTarget: lacks.contains("target_role")) }
+            .id("target_role")
+        AccountProfileExperience(experience: experience, drafts: $drafts, asked: lacks.contains("education") ? ["education"] : [],
+                                 change: { id, update, create in save { current in ["experience": AccountProfileModel.applyEntry(AccountProfileModel.experience(of: current), id, update, create)] } },
+                                 remove: { id in save { current in ["experience": AccountProfileModel.removeEntry(AccountProfileModel.experience(of: current), id)] } },
+                                 invalid: { toast = .init(kind: .error, title: "没有保存", message: $0) })
+        AccountProfileSection(title: "技能", desc: lacks.contains("skills") && skills.isEmpty ? "还没有技能。至少加一项，找岗位时按技能算匹配度。" : "写简历、模拟面试都按熟练度来，点一下切换熟练度。",
+                              asked: lacks.contains("skills")) {
+            AccountProfileSkills(skills: skills) { saveSkills($0) }
+        }.id("skills")
+        personalSections(profile, last: true)
     }
 
     /// 从账号设置进来时左上角返回（13 号 fnt 小字）。
@@ -61,6 +146,8 @@ struct CareerProfileView: View {
                 Text("网申插件和 AI 都用这一份。直接填写，离开输入框就自动保存。").font(V3.sans(14)).foregroundStyle(V3.sub).frame(height: 17)
             }
             Spacer(minLength: 0)
+            VStack(alignment: .trailing, spacing: 8) {
+            CareerProfileImport(busy: saving > 0) { importResume($0) }
             HStack(spacing: 0) {
                 if missing.isEmpty { Text("网申常问的信息都填好了").foregroundStyle(V3.fnt) }
                 else {
@@ -69,16 +156,40 @@ struct CareerProfileView: View {
                 }
                 Text(saving > 0 ? " · 保存中…" : " · 已保存").foregroundStyle(Color(hex: 0x96968F))
             }.font(V3.sans(13)).fixedSize().frame(height: 17)
+            }
         }
         .padding(.top, 21).padding(.bottom, 30)
         .overlay(alignment: .bottom) { AccountHairline() }
     }
 
     @ViewBuilder private func sections(_ profile: JSONValue, _ intent: JSONValue) -> some View {
+        personalSections(profile)
+        AccountProfileSection(title: "求职意向", desc: "AI 出题和网申都会用。") { intentFields(intent) }
+        AccountProfileExperience(experience: experience, drafts: $drafts,
+                                 change: { id, update, create in save { current in ["experience": AccountProfileModel.applyEntry(AccountProfileModel.experience(of: current), id, update, create)] } },
+                                 remove: { id in save { current in ["experience": AccountProfileModel.removeEntry(AccountProfileModel.experience(of: current), id)] } },
+                                 invalid: { toast = .init(kind: .error, title: "没有保存", message: $0) })
+        AccountProfileSection(title: "技能", desc: "写简历、模拟面试都按熟练度来，点一下切换熟练度。", last: true) {
+            AccountProfileSkills(skills: CareerProfileRules.skills(experience)) { saveSkills($0) }
+        }
+    }
+
+    private func saveSkills(_ skills: [(name: String, level: String?)]) {
+        save { current in
+            var next = AccountProfileModel.experience(of: current)
+            if case .object(var fields) = next {
+                fields["skills"] = .array(skills.map { .object(["name": .string($0.name), "level": $0.level.map(JSONValue.string) ?? .null]) })
+                next = .object(fields)
+            }
+            return ["experience": next]
+        }
+    }
+
+    @ViewBuilder private func personalSections(_ profile: JSONValue, last: Bool = false) -> some View {
         AccountProfileSection(title: "基本信息") {
             AccountProfileGrid(cells: AccountProfileModel.basic.map { row in AccountProfileGrid.Cell(id: row.key) { personalField(row, profile) } })
         }
-        AccountProfileSection(title: "身份与证件", desc: "网申常问，填一次所有公司通用。证件号加密保存，页面只显示首尾几位。") {
+        AccountProfileSection(title: "身份与证件", desc: "网申常问，填一次所有公司通用。证件号加密保存，页面只显示首尾几位。", last: last) {
             AccountProfileGrid(cells: [
                 AccountProfileGrid.Cell(id: "id_type") {
                     AccountProfileField(label: "证件类型") {
@@ -89,23 +200,6 @@ struct CareerProfileView: View {
                 },
                 AccountProfileGrid.Cell(id: "id_number") { idNumber(profile) },
             ] + AccountProfileModel.identity.map { row in AccountProfileGrid.Cell(id: row.key) { personalField(row, profile) } })
-        }
-        AccountProfileSection(title: "求职意向", desc: "AI 出题和网申都会用。") { intentFields(intent) }
-        AccountProfileExperience(experience: experience, drafts: $drafts,
-                                 change: { id, update, create in save { current in ["experience": AccountProfileModel.applyEntry(AccountProfileModel.experience(of: current), id, update, create)] } },
-                                 remove: { id in save { current in ["experience": AccountProfileModel.removeEntry(AccountProfileModel.experience(of: current), id)] } },
-                                 invalid: { toast = .init(kind: .error, title: "没有保存", message: $0) })
-        AccountProfileSection(title: "技能", desc: "写简历、模拟面试都按熟练度来，点一下切换熟练度。", last: true) {
-            AccountProfileSkills(skills: CareerProfileRules.skills(experience)) { skills in
-                save { current in
-                    var next = AccountProfileModel.experience(of: current)
-                    if case .object(var fields) = next {
-                        fields["skills"] = .array(skills.map { .object(["name": .string($0.name), "level": $0.level.map(JSONValue.string) ?? .null]) })
-                        next = .object(fields)
-                    }
-                    return ["experience": next]
-                }
-            }
         }
     }
 
@@ -133,14 +227,21 @@ struct CareerProfileView: View {
         }
     }
 
-    /// 求职意向：期望城市（顿号分开）、期望薪资（K / 月，最低–最高）、工作性质。
-    private func intentFields(_ intent: JSONValue) -> some View {
+    /// 求职意向：目标岗位、期望城市（顿号分开）、期望薪资（K / 月，最低–最高）、工作性质；窄栏单列时工作性质排在薪资前面。
+    private func intentFields(_ intent: JSONValue, narrow: Bool = false, askTarget: Bool = false) -> some View {
         let toK = { (key: String) -> String in intent[key]?.numberValue.map { String(Int(($0 / 1000).rounded())) } ?? "" }
         let types = (intent["employment_types"]?.items ?? []).compactMap(\.stringValue)
         let kind = types.count >= 2 ? "both" : types.first ?? ""
         let kinds = [("internship", "实习"), ("full_time", "全职"), ("both", "实习和全职都可以")]
         let cities = (intent["candidate_cities"]?.items ?? []).compactMap(\.stringValue).joined(separator: "、")
-        return AccountProfileGrid(cells: [
+        let target = AccountProfileGrid.Cell(id: "target") {
+            AccountProfileField(label: "目标岗位", asked: askTarget) {
+                AccountProfileInput(label: "目标岗位", value: intent.text("target_role"), placeholder: "例如 后端开发工程师") { text in
+                    saveIntent(["target_role": .string(String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(64)))])
+                }
+            }
+        }
+        let cells: [AccountProfileGrid.Cell] = [
             AccountProfileGrid.Cell(id: "cities") {
                 AccountProfileField(label: "期望城市") {
                     AccountProfileInput(label: "期望城市", value: cities, placeholder: "用顿号分开，例如 杭州、上海") { text in
@@ -166,7 +267,8 @@ struct CareerProfileView: View {
                     }
                 }
             },
-        ])
+        ]
+        return AccountProfileGrid(cells: [target] + (narrow ? [cells[0], cells[2], cells[1]] : cells))
     }
 
     // MARK: 动作
@@ -226,6 +328,18 @@ struct CareerProfileView: View {
         let top: Double? = if let max, let min, max < min { min } else { max }
         saveIntent(["salary_min": min.map(JSONValue.number) ?? .null, "salary_max": top.map(JSONValue.number) ?? .null,
                     "salary_currency": has ? .string("CNY") : .null, "salary_period": has ? .string("month") : .null])
+    }
+
+    /// 「从简历导入」：只补画像里没有的经历、技能和基本信息，已填的不覆盖。
+    private func importResume(_ resumeID: String) {
+        enqueue {
+            guard let current = profile else { return }
+            do {
+                profile = try await session.api.careerRequest(path: "/api/account/career-profile/read-resume", method: "POST", query: [:],
+                                                              body: .object(["base_lock_version": current["lock_version"] ?? .number(1), "resume_id": .string(resumeID)]))
+                toast = .init(kind: .success, title: "已从简历导入", message: "只补了画像里没有的经历和技能，已填的没有改动。")
+            } catch { await fail(error) }
+        }
     }
 
     /// 求职意向走 `/api/account/user-profile`：先读最新版本，合并改动后整体写回。
@@ -405,12 +519,15 @@ struct AccountProfileSection<Content: View>: View {
     var last = false
     /// 没填的分区只占标题（和说明）一行，不留内容间距（03.03）。
     var empty = false
+    /// 找岗位还缺的分区：标题标橙（02B-16）。
+    var asked = false
     @ViewBuilder var content: () -> Content
+    @Environment(\.accountProfileNarrow) private var narrow
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: 16) {
                 VStack(alignment: .leading, spacing: 9) {
-                    Text(title).font(V3.sans(16, weight: .medium)).foregroundStyle(V3.txt).frame(height: 19)
+                    Text(title).font(V3.sans(16, weight: .medium)).foregroundStyle(asked ? Color(hex: 0xC9711C) : V3.txt).frame(height: 19)
                     if let desc { Text(desc).font(V3.sans(13)).foregroundStyle(V3.fnt).fixedSize(horizontal: false, vertical: true) }
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 if let action {
@@ -421,7 +538,7 @@ struct AccountProfileSection<Content: View>: View {
             }
             if !empty { content().padding(.top, desc == nil ? 25 : 24) }
         }
-        .padding(.top, 35).padding(.bottom, 32)
+        .padding(.top, narrow ? 28 : 35).padding(.bottom, narrow ? 28 : 32)
         .overlay(alignment: .bottom) { if !last { AccountHairline() } }
     }
 }
@@ -435,11 +552,13 @@ struct AccountProfileGrid: View {
         init<V: View>(id: String, wide: Bool = false, @ViewBuilder _ view: () -> V) { self.id = id; self.wide = wide; self.view = AnyView(view()) }
     }
     let cells: [Cell]
+    /// 对话右侧栏里单列排。
+    @Environment(\.accountProfileNarrow) private var narrow
 
     private var rows: [[Cell]] {
         var rows: [[Cell]] = [], pending: [Cell] = []
         for cell in cells {
-            if cell.wide { if !pending.isEmpty { rows.append(pending); pending = [] }; rows.append([cell]) }
+            if cell.wide || narrow { if !pending.isEmpty { rows.append(pending); pending = [] }; rows.append([cell]) }
             else { pending.append(cell); if pending.count == 2 { rows.append(pending); pending = [] } }
         }
         if !pending.isEmpty { rows.append(pending) }
@@ -447,11 +566,11 @@ struct AccountProfileGrid: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: narrow ? 16 : 18) {
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                 HStack(alignment: .top, spacing: 40) {
                     ForEach(row) { cell in cell.view.frame(maxWidth: .infinity, alignment: .leading) }
-                    if row.count == 1 && !row[0].wide { Color.clear.frame(maxWidth: .infinity, maxHeight: 1) }
+                    if row.count == 1 && !row[0].wide && !narrow { Color.clear.frame(maxWidth: .infinity, maxHeight: 1) }
                 }
             }
         }
@@ -570,6 +689,8 @@ struct AccountProfileSelect: View {
 private struct AccountProfileExperience: View {
     let experience: JSONValue
     @Binding var drafts: [AccountProfileDraft]
+    /// 找岗位还缺的分区，标题标橙。
+    var asked: Set<String> = []
     let change: (String, @escaping (JSONValue, [String: JSONValue]) -> AccountProfileEntryChange?, (group: String, label: String)?) -> Void
     let remove: (String) -> Void
     let invalid: (String) -> Void
@@ -579,7 +700,7 @@ private struct AccountProfileExperience: View {
         ForEach(AccountProfileModel.groups(experience, drafts: drafts), id: \.key) { group in
             AccountProfileSection(title: group.label, desc: AccountProfileModel.groupDescriptions[group.key],
                           action: group.addable ? ("添加\(group.label)", { drafts.append(AccountProfileDraft(id: AccountProfileModel.newID(), group: group.key)) }) : nil,
-                          empty: group.items.isEmpty) {
+                          empty: group.items.isEmpty, asked: asked.contains(group.key)) {
                 if !group.items.isEmpty {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(zip(group.items.indices, group.items)), id: \.1.id) { index, item in
@@ -596,7 +717,7 @@ private struct AccountProfileExperience: View {
                         }
                     }
                 }
-            }
+            }.id(group.key)
         }
         .onChange(of: AccountProfileModel.savedIDs(experience)) { _, saved in drafts.removeAll { saved.contains($0.id) } }
     }
@@ -792,5 +913,82 @@ private struct AccountProfileFlow: Layout {
             view.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
             x += size.width + spacing; line = max(line, size.height)
         }
+    }
+}
+
+private struct AccountProfileNarrowKey: EnvironmentKey { static let defaultValue = false }
+
+extension EnvironmentValues {
+    /// 求职画像在对话右侧栏里（窄栏单列、分区间距收小）。
+    var accountProfileNarrow: Bool {
+        get { self[AccountProfileNarrowKey.self] }
+        set { self[AccountProfileNarrowKey.self] = newValue }
+    }
+}
+
+/// 「从简历导入」文字链与简历选择浮层（macOS 稿 02B-16 · 16.3）：默认简历排第一，右边灰字日期；不提供上传文件。
+struct CareerProfileImport: View {
+    @Environment(SessionStore.self) private var session
+    var busy = false
+    let pick: (String) -> Void
+    @State private var open = false
+    @State private var resumes: (items: [JSONValue], defaultID: String?)?
+    @State private var failed = false
+
+    var body: some View {
+        Button { failed = false; open.toggle() } label: { Text("从简历导入").contentShape(Rectangle()) }
+            .buttonStyle(.plain).font(V3.sans(13)).foregroundStyle(V3.blue).disabled(busy).fixedSize()
+            .popover(isPresented: $open, arrowEdge: .bottom) { menu.task { await load() } }
+    }
+
+    private var ordered: [JSONValue] {
+        guard let resumes else { return [] }
+        return resumes.items.filter { $0.text("id") == resumes.defaultID } + resumes.items.filter { $0.text("id") != resumes.defaultID }
+    }
+
+    private var menu: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("从哪份简历导入").font(V3.sans(13)).foregroundStyle(V3.sub).padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 6)
+            if failed { note("暂时读不到简历列表，请稍后再试。") }
+            else if resumes == nil { note("正在读取…") }
+            else if ordered.isEmpty { note("还没有简历，可以在「我的简历」新建或导入。") }
+            else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(ordered, id: \.self) { resume in
+                            Button { open = false; pick(resume.text("id")) } label: {
+                                HStack(spacing: 10) {
+                                    Text(resume.text("title").nonEmptyValue ?? "未命名简历").font(V3.sans(14)).foregroundStyle(V3.txt).lineLimit(1)
+                                    Text(label(resume)).font(V3.sans(12)).foregroundStyle(V3.fnt2).fixedSize()
+                                    Spacer(minLength: 0)
+                                }.padding(.horizontal, 10).frame(height: 36).contentShape(Rectangle())
+                            }.buttonStyle(MenuRowStyle())
+                        }
+                    }
+                }.frame(maxHeight: 240).fixedSize(horizontal: false, vertical: true)
+                note("只补画像里没有的经历和技能，已填的不会被覆盖。")
+            }
+        }.padding(6).frame(width: 380, alignment: .leading)
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text).font(V3.sans(12)).foregroundStyle(V3.fnt).fixedSize(horizontal: false, vertical: true).padding(.horizontal, 10).padding(.top, 4).padding(.bottom, 8)
+    }
+
+    /// Web `day`：月-日（不补零）；默认简历前面加「默认 ·」。
+    private func label(_ resume: JSONValue) -> String {
+        let date = ResumeSummary.parseTimestamp(resume.text("updated_at")).map { date -> String in
+            let parts = Beijing.calendar.dateComponents([.month, .day], from: date)
+            return "\(parts.month ?? 0)-\(parts.day ?? 0)"
+        } ?? ""
+        return resume.text("id") == resumes?.defaultID ? ["默认", date].filter { !$0.isEmpty }.joined(separator: " · ") : date
+    }
+
+    private func load() async {
+        guard resumes == nil else { return }
+        do {
+            let result = try await session.api.careerRequest(path: "/api/resumes", method: "GET", query: [:], body: nil)
+            resumes = (result["resumes"]?.items ?? result["items"]?.items ?? [], result["default_resume_id"]?.stringValue)
+        } catch { failed = true }
     }
 }

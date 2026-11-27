@@ -76,15 +76,4 @@ public enum SectionFocus {
         return found ? next : nil
     }
 
-    public static func errorMessage(_ error: Error) -> String {
-        guard case APIError.server(let status, let code) = error else { return "分析没有完成，请检查网络后重试。" }
-        switch code {
-        case "CREDIT_INSUFFICIENT": return "积分已用完，本次 AI 请求没有发出。"
-        case "PAID_CREDIT_REQUIRED": return "当前额度只能使用基础模型，暂不能使用这项功能。"
-        case "LLM_MODEL_NOT_CONFIGURED": return "AI 模型暂未配置，请稍后再试。"
-        case "RESUME_NOT_FOUND": return "这份简历已不存在。"
-        case "SECTION_REVIEW_ITEM_APPLIED": return "这条建议已经采用过了。"
-        default: return status >= 500 ? "AI 服务暂时不可用，请稍后重试。" : "分析没有完成，请稍后重试。"
-        }
-    }
 }

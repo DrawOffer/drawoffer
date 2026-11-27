@@ -38,14 +38,12 @@ struct MockSessionV2: View {
     @ViewBuilder private func stage(_ detail: JSONValue) -> some View {
         let status = detail.text("status")
         let changed = { tick += 1 }
-        if status == "completed" {
+        if status == "completed" && MockPrep.hasAnswers(detail) {
             Color.white.onAppear { report(detail.display("id")) }
         } else if detail.text("answer_mode") == "voice", ["preparing", "preparation_failed", "in_progress"].contains(status) {
             MockVoiceSession(detail: detail, changed: changed, home: home, pause: { paused = $0 }).id(detail.display("id"))
-        } else if status == "preparing" || status == "preparation_failed" {
-            MockPrepStage(detail: detail, changed: changed, home: home)
-        } else if status == "in_progress" {
-            MockTextSession(interview: detail, changed: changed, pause: { paused = $0 }).id(detail.display("id"))
+        } else if ["preparing", "preparation_failed", "in_progress"].contains(status) {
+            MockTextFlow(detail: detail, changed: changed, home: home, pause: { paused = $0 }).id(detail.display("id"))
         } else {
             MockClosingStage(detail: detail, changed: changed, home: home, open: open)
         }
@@ -74,6 +72,26 @@ struct MockSessionV2: View {
                 await load()
                 if !["preparing", "evaluating"].contains(detail?.text("status") ?? "") { await session.api.purgeCache() }
             }
+        }
+    }
+}
+
+/// 文字面试：准备完成后等选题动画放完再进入作答；打开时已经准备好的直接作答。
+private struct MockTextFlow: View {
+    let detail: JSONValue
+    let changed: () -> Void
+    let home: () -> Void
+    let pause: (Bool) -> Void
+    @State private var prepDone: Bool
+    init(detail: JSONValue, changed: @escaping () -> Void, home: @escaping () -> Void, pause: @escaping (Bool) -> Void) {
+        self.detail = detail; self.changed = changed; self.home = home; self.pause = pause
+        _prepDone = State(initialValue: detail.text("status") == "in_progress")
+    }
+    var body: some View {
+        if detail.text("status") != "in_progress" || !prepDone {
+            MockPrepStage(detail: detail, changed: changed, home: home, onDone: { prepDone = true })
+        } else {
+            MockTextSession(interview: detail, changed: changed, pause: pause)
         }
     }
 }
@@ -129,123 +147,6 @@ private extension JSONValue {
     }
 }
 
-// MARK: 准备题目（Figma 09 · 03 开始前 03.01–03.02、04 选题动效；Web `PrepStage`）
-
-struct MockPrepStage: View {
-    @Environment(SessionStore.self) private var session
-    let detail: JSONValue
-    let changed: () -> Void
-    let home: () -> Void
-    var onCheckDevice: (() -> Void)? = nil
-    @State private var busy = false
-    @State private var dialog: String?
-    @State private var notice: MockNotice?
-    @State private var lineStart = Date()
-
-    private static let titles = ["面试官在读你的简历", "从题库里为你挑题", "第一道问题快好了"]
-    private static let pace = ["quiet": "只挑最影响通过的点，不再试探新点", "near": "先补短板，顺带确认几处拿不准的",
-                               "far": "先摸清你还拿不准的点，再集中补短板", "none": "还没有约面试，按两周的节奏：先摸清你还拿不准的点"]
-
-    private var prep: JSONValue? { detail["prep"].flatMap { $0 == .null ? nil : $0 } }
-    private var failed: Bool { detail.text("status") == "preparation_failed" }
-    private var step: Int {
-        if failed, let stage = ["analysis": 0, "plan": 1, "opening": 2][detail.text("failed_stage")] { return stage }
-        guard let prep else { return 0 }
-        return prep.text("stage") == "select" ? 1 : 2
-    }
-    private var hasJob: Bool { !detail.text("job_title").isEmpty || !detail.text("company_name").isEmpty }
-
-    var body: some View {
-        let failedText = MockInterviewText.messages[detail.text("error_code")] ?? "模型服务暂时没有响应"
-        MockSessionFrame {
-            MockSessionHead(detail: detail, back: ("面试设置", busy, { if failed { backToSettings() } else { dialog = "back" } }))
-            MockCenterLine(text: "准备题目 · \(step + 1) / 3", top: 114)
-            MockCenterLine(text: failed ? "面试官没能准备好题目" : Self.titles[step], top: 138, size: 46, line: 64, color: MockPalette.ink, serif: true)
-            if failed {
-                MockCenterLine(text: "\(failedText)，这一次没有扣积分。", top: 210, size: 15, line: 26, color: MockPalette.sub)
-            } else {
-                rotating
-            }
-            MockPrepCards(prep: prep, frozen: failed, hasJob: hasJob)
-            MockSessionFoot(goal: detail.text("practice_goal")) {
-                if failed {
-                    Button(busy ? "正在重新准备…" : "重新准备") { run { _ = try await command("retry") } }.buttonStyle(MockPillStyle()).disabled(busy)
-                } else if detail.text("answer_mode") == "voice", let onCheckDevice {
-                    Button("先试一下麦克风", action: onCheckDevice).buttonStyle(MockBorderedPillStyle())
-                }
-            }
-        }
-        .overlay { MockNoticeToast(notice: $notice) }
-        .mockDialog($dialog, "back") {
-            MockSessionConfirm(title: "返回修改设置？", desc: "题目还在准备，返回后这场记为已放弃，不扣积分。", confirm: "返回改设置", cancel: "继续准备",
-                            busy: busy, busyLabel: "正在返回…", onConfirm: backToSettings, onCancel: { dialog = nil })
-        }
-        .onChange(of: step) { lineStart = Date() }
-    }
-
-    /// 标题下的小字每 4.5 秒换一句，讲这一步实际在按什么挑；换步骤时从第一句重新开始。
-    private var rotating: some View {
-        let lines = step == 0 ? readingLines : step == 1 && prep != nil ? selectingLines(prep!) : openingLines
-        return TimelineView(.periodic(from: lineStart, by: 0.3)) { timeline in
-            let elapsed = max(0, timeline.date.timeIntervalSince(lineStart))
-            let index = lines.count < 2 ? 0 : Int(elapsed / 4.5) % lines.count
-            let out = lines.count >= 2 && elapsed.truncatingRemainder(dividingBy: 4.5) > 4.2
-            MockCenterLine(text: lines.isEmpty ? "" : lines[index], top: 210, size: 15, line: 26, color: MockPalette.sub)
-                .opacity(out ? 0 : 1).animation(.easeInOut(duration: 0.3), value: out)
-        }
-        .accessibilityHidden(true)
-    }
-
-    private var readingLines: [String] {
-        let focus = detail["practice_focus"]?.text("label").nonEmptyValue
-        return [
-            "通常 20–40 秒。可以先离开页面，准备好了会提醒你。",
-            hasJob ? "先看这场属于什么方向，再找出岗位要求里写到的考点" : "先看你的经历属于什么方向，再找这个方向常考的点",
-            "简历里写到的项目和经历，会挑出来准备追问",
-            focus.map { "你选的「\($0)」会放在最前面问" } ?? (detail["has_past_practice"]?.bool == true ? "也会翻一遍以前的练习：上次没答好的点，这次会再确认一次" : nil),
-        ].compactMap { $0 }
-    }
-
-    private func selectingLines(_ prep: JSONValue) -> [String] {
-        let picks = prep["picks"]?.items ?? []
-        let tags = Set(picks.map { $0.text("tag") })
-        let gap = picks.contains { $0.text("tag") == "job" && $0.text("note") == "简历里还没有写到" }
-        let who = [detail.text("company_name"), detail.text("stage_label")].joined().nonEmptyValue ?? "面试"
-        let days = prep["days_left"].flatMap { $0 == .null ? nil : $0.integer }
-        let when = days.map { $0 <= 0 ? "今天就是\(who)" : "离\(who)还有 \($0) 天" }
-        let pace = Self.pace[prep.text("strategy")] ?? "按\(hasJob ? "岗位要求和你的经历" : "你的经历和这个方向常考的点")为你挑题"
-        var lines = [when.map { "\($0)，\(pace)" } ?? pace]
-        if tags.contains("retest") { lines.append("上次没答好的点会再问一次，看看这次有没有补上") }
-        if tags.contains("probe") { lines.append("还拿不准你掌握没有的点，会补问一题确认") }
-        if tags.contains("focus") { lines.append("你点名要练的，优先放进这一场") }
-        if gap { lines.append("岗位要求里有、简历里还没写到的点，也会问到") } else if tags.contains("job") { lines.append("岗位要求里写到的点优先挑") }
-        if tags.contains("resume") { lines.append("从你的经历里挑一两段深挖，问做法和结果") }
-        if tags.contains("basics") { lines.append("再配几道这个方向常考的基础") }
-        if tags.contains("competency") { lines.append("留一道综合题，看沟通、协作和推进") }
-        return lines
-    }
-
-    private var openingLines: [String] {
-        var lines = ["考点已经挑好，面试官正在组织第一问。"]
-        if let first = prep?.text("first").nonEmptyValue { lines.append("第一题从「\(first)」问起") }
-        if detail["follow_up_enabled"]?.bool == true { lines.append("答完之后，面试官会顺着你的回答追问") }
-        if detail.text("answer_mode") == "voice" { lines.append("趁这会儿可以先试一下麦克风") }
-        return lines
-    }
-
-    private func command(_ name: String) async throws -> JSONValue {
-        try await session.api.careerRequest(path: "/api/mock-interviews/\(detail.display("id"))/\(name)", method: "POST", query: [:], body: nil)
-    }
-    private func run(_ action: @escaping () async throws -> Void, after: (() -> Void)? = nil) {
-        busy = true
-        Task {
-            do { try await action(); after?(); changed() } catch { notice = MockNotice(title: "操作没有完成", message: MockInterviewText.error(error)) }
-            busy = false
-        }
-    }
-    private func backToSettings() { run({ _ = try await command("abandon") }, after: { dialog = nil; home() }) }
-}
-
 // MARK: 结束（Figma 09 · 07 结束 07.01 整理报告、07.02 放弃 / 没能生成；Web `ClosingStage`）
 
 struct MockClosingStage: View {
@@ -278,6 +179,12 @@ struct MockClosingStage: View {
                         Button(busy ? "正在重新评估…" : "重新评估") { retry() }.buttonStyle(MockPillStyle()).disabled(busy)
                     }
                 }
+            } else if !MockPrep.hasAnswers(detail) {
+                // 一题都没答：不等报告，也没有复盘可看
+                MockSessionHead(detail: detail, back: ("模拟面试", false, home))
+                MockCenterLine(text: "这场没有作答", top: 314, size: 46, line: 64, color: MockPalette.ink, serif: true)
+                MockCenterLine(text: "至少答完一道题，才会有分数和复盘。", top: 388, size: 15, line: 26, color: MockPalette.sub)
+                MockSessionFoot(goal: nil) { Button("回到模拟面试", action: home).buttonStyle(MockPillStyle()) }
             } else {
                 let questions = detail["questions"]?.items ?? []
                 let mains = questions.filter { $0.text("kind") == "main" && !MockMap.isIntro(detail, $0) }.count
@@ -379,7 +286,7 @@ struct MockTextSession: View {
             MockSessionFrame {
                 MockSessionHead(detail: detail, timer: MockSessionText.elapsed(detail, now: timeline.date)) {
                     Button("跳过此题") { dialog = "skip" }.buttonStyle(MockLinkStyle()).disabled(locked)
-                    Button("放弃") { dialog = "abandon" }.buttonStyle(MockLinkStyle()).disabled(busy != nil || phase == .closing)
+                    Button("取消本场") { dialog = "abandon" }.buttonStyle(MockLinkStyle()).disabled(busy != nil || phase == .closing)
                     Button("结束并评估") { dialog = "finish" }.buttonStyle(MockBorderedPillStyle()).disabled(busy != nil || phase == .closing || phase == .sent)
                 }
                 if phase == .sent {
@@ -564,7 +471,7 @@ struct MockTextSession: View {
     }
 }
 
-/// 面试中的三个确认（跳过此题、结束并评估、放弃）：文字和语音面试共用。
+/// 面试中的三个确认（跳过此题、结束并评估、取消本场）：文字和语音面试共用。
 struct MockSessionDialogs: ViewModifier {
     let detail: JSONValue
     @Binding var dialog: String?
@@ -590,8 +497,8 @@ struct MockSessionDialogs: ViewModifier {
                 }
             }
             .mockDialog($dialog, "abandon") {
-                MockSessionConfirm(title: "放弃这场面试？", desc: voice ? "已作答的内容不会生成评估报告，录音会删除。放弃后可以重新开始一场。" : "已作答的内容不会生成评估报告。放弃后可以重新开始一场。",
-                                confirm: "放弃面试", cancel: "继续面试", busy: busy == "abandon", busyLabel: "正在放弃…", onConfirm: { end("abandon") }, onCancel: { dialog = nil })
+                MockSessionConfirm(title: "取消这一场？", desc: "取消后这场不再继续，已作答的内容不会生成评估报告\(voice ? "，录音会删除" : "")。本场积分不退。",
+                                confirm: "取消本场", cancel: "继续面试", busy: busy == "abandon", busyLabel: "正在取消…", onConfirm: { end("abandon") }, onCancel: { dialog = nil })
             }
     }
 }

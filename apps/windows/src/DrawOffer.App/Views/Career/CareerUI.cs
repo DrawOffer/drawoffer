@@ -21,7 +21,6 @@ public static class CareerPalette
     public static readonly Color Field = Hex(0xF4F4F2);
     public static readonly Color Soft = Hex(0xFAFAF9);
     public static readonly Color PipelineLine = Hex(0xEDEDE9);
-    public static readonly Color Dashed = Hex(0xB3B3AD);
     public static readonly Color Rail = Hex(0xE3E3DE);
     public static readonly Color ChipGray = Hex(0xF0F0EC);
     public static readonly Color Blue = Hex(0x3F6FD8);

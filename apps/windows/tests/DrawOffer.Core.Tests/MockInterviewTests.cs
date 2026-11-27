@@ -16,10 +16,6 @@ public class MockInterviewTests {
         var error=Assert.Throws<ApiException>(()=>MockInterviewRequest.DecodeEvents("event: interviewer.failed\ndata: {\"error\":\"TURN_FAILED\"}\n\n"));Assert.Equal("TURN_FAILED",error.Code);
         Assert.Throws<InvalidDataException>(()=>MockInterviewRequest.DecodeEvents(": heartbeat\n\n"));Assert.Throws<InvalidDataException>(()=>MockInterviewRequest.DecodeEvents(new string(' ',4*1024*1024+1)));
     }
-    [Fact] public void CurrentQuestionMustBePending() {
-        var item=new MockInterview(JsonNode.Parse("""{"current_question_id":"2","status":"evaluation_failed","questions":[{"id":"2","answer_status":"answered"}]}""")!);Assert.Null(item.Current);Assert.False(item.Active);Assert.Equal("评估失败",item.Label);
-    }
-
     [Fact] public async Task RealHttpAnswerUsesHeaderAndNeverForwardsMetadataOrRedirect() {
         using var listener=new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback,0);listener.Start();
         var origin=new Uri($"http://127.0.0.1:{((System.Net.IPEndPoint)listener.LocalEndpoint).Port}/");

@@ -68,8 +68,6 @@ internal static class CareerKit
 
     public static string Two(int value) => value.ToString("00", CultureInfo.InvariantCulture);
 
-    public static string Trimmed(string value) => value.Trim();
-
     /// <summary>把持久保留的控件从旧父容器摘下，便于整体重绘时复用（保留输入焦点与内容）。</summary>
     public static T Detach<T>(T element) where T : FrameworkElement
     {

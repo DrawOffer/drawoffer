@@ -48,14 +48,6 @@ public sealed class CareerStageScheduleFields : UserControl
         Render();
     }
 
-    /// <summary>`.onChange(of: stage)`：测评固定为窗口，AI 面试与面试固定为时段。调用方切换阶段时调用。</summary>
-    public void SetStage(string stage)
-    {
-        _stage = stage;
-        StageChanged(stage);
-        Render();
-    }
-
     void StageChanged(string value)
     {
         if (value == "assessment" && !_window) Window = true;
@@ -64,8 +56,6 @@ public sealed class CareerStageScheduleFields : UserControl
 
     bool InterviewForm => _stage == "interview";
     bool IsWindow => _stage == "assessment" || (_stage == "written_test" && _window);
-    /// <summary>Mac `stageName`（Swift 里声明但未在界面使用，保留以便对照）。</summary>
-    string StageName => _isHR ? "HR 面" : CareerStage.Label(_stage);
 
     bool Window { set { _window = value; _setWindow(value); } }
     bool StartSet { set { _startSet = value; _setStartSet(value); } }

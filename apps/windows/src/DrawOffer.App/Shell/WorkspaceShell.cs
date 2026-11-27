@@ -210,15 +210,6 @@ public sealed class WorkspaceShell : Grid
         ShowChat();
     }
 
-    /// <summary>发起新对话：带上第一条消息与选好的模型。</summary>
-    public void StartChat(string text, string? model)
-    {
-        _chat = (null, text, model, null, Guid.NewGuid());
-       
-        ActiveChatId = null;
-        ShowChat();
-    }
-
     /// <summary>侧栏「新对话」（稿 02B·01 方案 A）：打开空白的新建对话页。</summary>
     public void NewChat()
     {
@@ -238,13 +229,6 @@ public sealed class WorkspaceShell : Grid
     public void ChatDeleted(string id)
     {
         if (ActiveChatId == id || _chat?.sessionId == id) { ActiveChatId = null; _chat = null; Select(WorkspaceSection.Home); }
-    }
-
-    /// <summary>新对话发出第一条后拿到会话 ID：侧栏高亮这一条。</summary>
-    public void ChatCreated(string id)
-    {
-        ActiveChatId = id;
-        ReloadSessions();
     }
 
     /// <summary>打开简历编辑器（铺满窗口、不显示侧栏）。</summary>
@@ -284,13 +268,6 @@ public sealed class WorkspaceShell : Grid
     {
         PendingApplication = id;
         Select(WorkspaceSection.Jobs);
-    }
-
-    /// <summary>首页“选择文件”导入简历。</summary>
-    public void RequestImport()
-    {
-        ImportRequest = Guid.NewGuid();
-        Select(WorkspaceSection.Resumes);
     }
 
     public void OpenCareerProfile()

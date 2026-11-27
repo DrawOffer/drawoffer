@@ -121,7 +121,6 @@ namespace DrawOffer.Core.Home
     public abstract record HomeAction
     {
         public sealed record Mock(PracticeFocus? Focus) : HomeAction;
-        public sealed record Chat(string Prompt) : HomeAction;
         public sealed record Suggest(string Text) : HomeAction;
         public sealed record Guide(IReadOnlyList<string> Ids) : HomeAction;
     }

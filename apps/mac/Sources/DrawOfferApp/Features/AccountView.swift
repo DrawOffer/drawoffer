@@ -14,10 +14,11 @@ struct AccountSection: View {
 
 /// 账号设置（macOS 稿 01 页「04 · 账号设置」04.01 定稿）：居中 760 宽的一列——
 /// 头像 + 昵称（点笔就地改，04.07）→ 额度（当前方案 / 可用积分，打开会员与积分弹窗，04.05/04.06）
-/// → 账号（联系邮箱就地展开 04.09、界面语言行内下拉 04.04）→ API Key → 退出登录（确认 04.10）→ 隐私政策 · 用户协议。
+/// → 账号（联系邮箱就地展开 04.09、界面语言行内下拉 04.04）→ API Key → 反馈得积分（10.01，进整窗反馈页）→ 退出登录（确认 04.10）→ 隐私政策 · 用户协议。
 /// 桌面端不提供修改密码、微信绑定和注销账号（后端只接受 Web Cookie）；API Key 在客户端内列出、创建（明文只显示一次）和删除（AccountApiKeys.swift）。
 struct AccountView: View {
     @Environment(SessionStore.self) private var session
+    @Environment(WorkspaceRouter.self) private var router: WorkspaceRouter?
     @State private var profile: JSONValue?
     @State private var preferences: JSONValue?
     @State private var billing: BillingSummary?
@@ -101,15 +102,19 @@ struct AccountView: View {
             }.font(V3.sans(12)).foregroundStyle(V3.fnt).frame(height: 14).padding(.top, 7)
         }.padding(.top, 41)
         AccountApiKeySection(notify: { toast = $0 }).padding(.top, 47)
-        // 退出登录：上下细线，红字浅红底胶囊
-        HStack(spacing: 16) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("退出登录").font(V3.sans(14)).foregroundStyle(V3.txt)
-                Text("只退出当前设备，其他设备不受影响").font(V3.sans(12)).foregroundStyle(V3.fnt)
-            }.frame(maxWidth: .infinity, alignment: .leading)
-            Button("退出登录") { logoutOpen = true }.buttonStyle(AccountDangerPillStyle())
+        // 10.01：退出登录上面一行「反馈得积分」，整行点开反馈页；两行 64 高，上下与行间细线
+        VStack(spacing: 0) {
+            AccountFeedbackRow { router?.jump(.feedback) }
+            // 退出登录：红字浅红底胶囊
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("退出登录").font(V3.sans(14)).foregroundStyle(V3.txt)
+                    Text("只退出当前设备，其他设备不受影响").font(V3.sans(12)).foregroundStyle(V3.fnt)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                Button("退出登录") { logoutOpen = true }.buttonStyle(AccountDangerPillStyle())
+            }
+            .frame(height: 64)
         }
-        .frame(height: 64)
         .overlay(alignment: .top) { AccountHairline() }.overlay(alignment: .bottom) { AccountHairline() }
         .padding(.top, 47)
         HStack(spacing: 12) {
@@ -224,6 +229,25 @@ struct AccountPlansTab: Identifiable { let id: String? }
 
 struct AccountHairline: View {
     var body: some View { Rectangle().fill(V3.line).frame(height: 1) }
+}
+
+/// 「反馈得积分」行（10.01）：左侧标题 + 12 灰说明，右侧「去反馈 ›」；下边一道细线把它和退出登录分开。
+private struct AccountFeedbackRow: View {
+    let action: () -> Void
+    @State private var hover = false
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("反馈得积分").font(V3.sans(14)).foregroundStyle(V3.txt)
+                    Text("遇到问题或有想法都可以说，确认有效即送积分").font(V3.sans(12)).foregroundStyle(V3.fnt)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                Text("去反馈").font(V3.sans(14)).foregroundStyle(V3.sub)
+                Image(systemName: "chevron.right").font(.system(size: 10, weight: .medium)).foregroundStyle(hover ? V3.sub : V3.fnt2)
+            }
+            .frame(height: 63).padding(.bottom, 1).overlay(alignment: .bottom) { AccountHairline() }.contentShape(Rectangle())
+        }.buttonStyle(.plain).onHover { hover = $0 }.accessibilityLabel("反馈得积分：去反馈")
+    }
 }
 
 /// 一行设置：50 高，左 14 标签，右 14 sub 值 + 细箭头；整行可点，悬停只把箭头加深（不加灰底）。

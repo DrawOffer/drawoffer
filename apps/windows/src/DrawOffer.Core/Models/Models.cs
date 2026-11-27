@@ -27,7 +27,7 @@ public sealed record ResumeTemplate(
     [property: JsonPropertyName("style")] JsonNode Style,
     [property: JsonPropertyName("layout_plan")] JsonNode? LayoutPlan)
 {
-    /// <summary>`use_count`：登录后接口返回的使用次数；随包示例没有，为 null（Mac `useCount`）。</summary>
+    /// <summary>`use_count`：模板列表与详情接口返回的使用次数；嵌入简历响应时为 null（Mac `useCount`）。</summary>
     [JsonPropertyName("use_count")] public int? UseCount { get; init; }
 
     /// <summary>组装纸面渲染请求，规则与 Web 端 client.ts 的 presentationForTemplate 一致。</summary>

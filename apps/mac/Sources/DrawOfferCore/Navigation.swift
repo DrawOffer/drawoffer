@@ -21,20 +21,4 @@ public enum WorkspaceSection: String, CaseIterable, Identifiable, Sendable {
         case .assistant: "AI 对话"
         }
     }
-
-    /// SF Symbols 名称；Windows 端用 Segoe Fluent Icons 的对应图标。
-    public var symbol: String {
-        switch self {
-        case .home: "sun.max"
-        case .resumes: "doc.text"
-        case .templates: "rectangle.3.group"
-        case .jobs: "square.grid.3x1.below.line.grid.1x2"
-        case .schedule: "calendar"
-        case .mock: "mic"
-        case .opportunities: "briefcase.fill"
-        case .datasets: "folder"
-        case .account: "person.crop.circle"
-        case .assistant: "bubble.left.and.text.bubble.right"
-        }
-    }
 }

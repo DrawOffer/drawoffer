@@ -117,12 +117,6 @@ public sealed partial class CareerApplicationDetailView
     }
 }
 
-/// <summary>Mac `CareerSessionRef`：给弹窗用的场次包装，按 id 识别。</summary>
-public sealed record CareerSessionRef(JsonNode Value)
-{
-    public string Id => Value.Text("id");
-}
-
 /// <summary>Mac `String.nonEmptyOr(_:)`：空串时取替代值。</summary>
 public static class CareerStringExtensions
 {

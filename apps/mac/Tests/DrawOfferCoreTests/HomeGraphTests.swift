@@ -23,7 +23,6 @@ private let memory = """
     let graph = HomeGraph(json: try json(memory))
     #expect(graph.resumeID == "r1")
     #expect(graph.topics == ["示例订单系统"])
-    #expect(graph.nodes.filter(\.onHome).map(\.id) == ["e1", "t1", "p1"])
     #expect(graph.nodes[2].tone == .hot)
     #expect(graph.nodes[2].label == "持久化")
     #expect(graph.entries?.mockLastScore == 82.4)
@@ -38,40 +37,33 @@ private let memory = """
     let fresh = HomeMockProgress(json: try json(#"{"items":[{"id":"a","status":"completed","finished_at":"2026-11-15T10:00:00Z"}]}"#))
     let old = HomeMockProgress(json: try json(#"{"items":[{"id":"a","status":"completed","finished_at":"2026-11-01T10:00:00Z"}]}"#))
 
-    #expect(HomeStage.pick(graph: HomeGraph(json: try json(#"{"resume":null}"#)), mocks: nil, reportSeen: false) == .newUser)
+    #expect(HomeStage.pick(graph: HomeGraph(json: try json(#"{"resume":null}"#)), mocks: nil, reportSeen: false, guideOn: true) == .newUser)
     // 有结论但没练过：不再出“练第一场”，直接是有记忆的首页
-    #expect(HomeStage.pick(graph: graph, mocks: none, reportSeen: false) == .feedback)
-    #expect(HomeStage.pick(graph: graph, mocks: many, reportSeen: false) == .feedback)
-    #expect(HomeStage.pick(graph: graph, mocks: ongoing, reportSeen: false) == .firstSteps(.ongoing))
-    #expect(HomeStage.pick(graph: graph, mocks: fresh, reportSeen: false) == .firstSteps(.report))
-    #expect(HomeStage.pick(graph: graph, mocks: fresh, reportSeen: true) == .feedback)
-    #expect(HomeStage.pick(graph: graph, mocks: old, reportSeen: false) == .feedback)
+    #expect(HomeStage.pick(graph: graph, mocks: none, reportSeen: false, guideOn: true) == .feedback)
+    #expect(HomeStage.pick(graph: graph, mocks: many, reportSeen: false, guideOn: true) == .feedback)
+    #expect(HomeStage.pick(graph: graph, mocks: ongoing, reportSeen: false, guideOn: true) == .firstSteps(.ongoing))
+    #expect(HomeStage.pick(graph: graph, mocks: fresh, reportSeen: false, guideOn: true) == .firstSteps(.report))
+    #expect(HomeStage.pick(graph: graph, mocks: fresh, reportSeen: true, guideOn: true) == .feedback)
+    #expect(HomeStage.pick(graph: graph, mocks: old, reportSeen: false, guideOn: true) == .feedback)
 
     let bare = HomeGraph(json: try json(#"{"resume":{"id":"r1","title":"t"},"has_conclusions":false,"graph":{"nodes":[],"edges":[]}}"#))
-    #expect(HomeStage.pick(graph: bare, mocks: none, reportSeen: false) == .firstSteps(.start))
-    #expect(HomeStage.pick(graph: bare, mocks: many, reportSeen: false) == .resumeOnly)
+    #expect(HomeStage.pick(graph: bare, mocks: none, reportSeen: false, guideOn: true) == .firstSteps(.start))
+    // 练过几场还没结论、或新手引导关着：都是日常首页，空的那块各自换空状态
+    #expect(HomeStage.pick(graph: bare, mocks: many, reportSeen: false, guideOn: true) == .feedback)
+    #expect(HomeStage.pick(graph: bare, mocks: none, reportSeen: false, guideOn: false) == .feedback)
+    #expect(HomeStage.pick(graph: graph, mocks: ongoing, reportSeen: false, guideOn: false) == .feedback)
 }
 
 @Test func homeProgressTextAndRelativeDates() throws {
     let graph = HomeGraph(json: try json(memory))
-    let text = HomeProgressText.text(graph.timeline[0], weakPoints: 1)
+    let text = HomeProgressText.text(graph.timeline[0], weakPoints: 1, hasConclusions: true)
     #expect(text.short == "MySQL 索引从熟悉练到了熟练")
     #expect(text.desc == "这一场问到 6 处。还有 1 个不牢。")
+    #expect(HomeProgressText.text(graph.timeline[0], weakPoints: 1, hasConclusions: false).desc == "这一场问到 6 处。多练几场，这里会说得更准。")
     #expect(HomeProgressText.when("2026-11-16", today: "2026-11-16") == "今天")
     #expect(HomeProgressText.when("2026-11-15", today: "2026-11-16") == "昨天")
     #expect(HomeProgressText.when("2026-11-12", today: "2026-11-16") == "4 天前")
     #expect(HomeProgressText.when("2026-11-02", today: "2026-11-16") == "11-02")
-}
-
-@Test func homeGraphLayoutIsDeterministicAndInBounds() throws {
-    let graph = HomeGraph(json: try json(memory))
-    let first = HomeGraphLayout.layout(nodes: graph.nodes, edges: graph.edges)
-    let second = HomeGraphLayout.layout(nodes: graph.nodes, edges: graph.edges)
-    #expect(first.count == 4)
-    for (key, point) in first {
-        #expect((0...1).contains(point.x) && (0...1).contains(point.y))
-        #expect(second[key]!.x == point.x && second[key]!.y == point.y)
-    }
 }
 
 @Test func homeGraphRouteIsAllowedForDesktop() {

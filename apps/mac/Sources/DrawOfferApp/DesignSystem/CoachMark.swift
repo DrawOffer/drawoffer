@@ -201,6 +201,8 @@ final class CoachGuide {
 
     /// 管理端「新手引导」开关（`GET /api/auth/capabilities` 的 `onboarding_enabled`）；读到之前和读取失败时都不出引导。
     private(set) var enabled = false
+    /// 这次已经有结论（读到了，或读失败按关闭算）：首页这类“开关决定显示哪一屏”的地方等它再画，免得先闪日常首页再换新手首页
+    private(set) var ready = false
     /// 只用来让读 `isOpen` 的视图在记下「看过」后刷新。
     private(set) var revision = 0
     /// 「对着这个岗位练一场」带给面试设置页的岗位（一次性，设置页读走就清）。
@@ -232,9 +234,9 @@ final class CoachGuide {
     func refresh(api: any APIClient) async {
         if enabled, let checkedAt, Date().timeIntervalSince(checkedAt) < Self.recheck { return }
         guard !fetching else { return }
-        guard let client = api as? HTTPAPIClient else { enabled = true; checkedAt = Date(); return }
+        guard let client = api as? HTTPAPIClient else { enabled = true; ready = true; checkedAt = Date(); return }
         fetching = true
-        defer { fetching = false }
+        defer { fetching = false; ready = true }
         var request = URLRequest(url: client.origin.appending(path: "/api/auth/capabilities"), cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 8)
         request.httpMethod = "GET"
         do {

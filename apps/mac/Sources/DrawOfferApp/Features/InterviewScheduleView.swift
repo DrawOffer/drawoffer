@@ -19,17 +19,26 @@ private struct ScheduleMonthChip: Identifiable {
     let time: Date
 }
 
-/// 08 · 面试日程（Figma `5:20`）：01 月视图 / 周视图，日历占满整页（与 Web 一致，已去掉日历下方的「接下来」和空状态卡）；
-/// 02.01 没有可推进流程的新建面试，03–06 日程详情弹窗在 ScheduleDialogs.swift。
+/// 双击 / 拖出时间段新建面试时带着的时间。
+private struct ScheduleCreate: Identifiable {
+    let id = UUID()
+    var start: Date
+    var end: Date
+}
+
+/// 08 · 面试日程（Figma `5:20` 分区 214:7895）：07.1 月视图 / 07.2 周视图，日历占满整页（与 Web 一致，没有日历下方的「接下来」）；
+/// 页头「SCHEDULE · 本月 N 个日程 / 面试日程 / 今天几场 + 下一场」，右侧月 | 周胶囊和「‹ 日期 ›」，点日期选月（07.3）或选周（07.4）。
+/// 新建面试只从投递看板已有岗位推进（推进弹窗），场次详情与没有岗位的提示在 ScheduleDialogs.swift。
 struct InterviewScheduleView: View {
     @Environment(SessionStore.self) private var session
-    let requireAccount: () -> Void
+    @Environment(WorkspaceRouter.self) private var router: WorkspaceRouter?
     @State private var anchor = Date()
     @State private var mode = "week"
     @State private var interviews: [ScheduledInterview] = []
     @State private var applications: [CareerApplication] = []
     @State private var action: ScheduleAction?
-    @State private var pending: ScheduleAction?
+    @State private var creating: ScheduleCreate?
+    @State private var notice: NoticeToastItem?
     @State private var detail: ScheduledInterview?
     @State private var selectedID: String?
     @State private var record: CareerApplication?
@@ -47,34 +56,17 @@ struct InterviewScheduleView: View {
     private static let gridInset: CGFloat = 6
     private static let gutter: CGFloat = 52
     private var account: String { if case .signedIn(let user) = session.phase { return user.id }; return "" }
-    private var meInitial: String { if case .signedIn(let user) = session.phase, let first = user.nickname.first { return String(first) }; return "我" }
     private var week: Date { ScheduleCalendar.weekStart(anchor) }
     private var month: Date { calendar.dateInterval(of: .month, for: anchor)!.start }
     private var visible: [ScheduledInterview] { interviews.filter { $0.raw.text("status") != "cancelled" } }
     private func plus(_ date: Date, _ days: Int) -> Date { calendar.date(byAdding: .day, value: days, to: date)! }
     private func format(_ date: Date, _ pattern: String) -> String { ScheduleInk.format(date, pattern) }
     private func at(_ day: Date, minute: Int) -> Date { calendar.date(bySettingHour: minute / 60, minute: minute % 60, second: 0, of: day)! }
-    private var periodStart: Date { mode == "month" ? month : week }
-    private var periodEnd: Date { mode == "month" ? calendar.date(byAdding: .month, value: 1, to: month)! : plus(week, 7) }
-    private var periodCount: Int { visible.filter { $0.overlaps(periodStart, periodEnd) }.count }
-    /// `canAddScheduledStage`：已投递、上一阶段已结束、还没进 Offer 的流程才能直接加一场。
-    private static func canAddStage(_ item: CareerApplication) -> Bool {
-        item.raw.text("status") == "active" && item.raw.text("archived_at").isEmpty && !item.raw.text("applied_at").isEmpty
-            && item.raw.text("stage_state") == "awaiting_result" && item.raw.text("current_stage_type") != "offer"
-    }
-    private var eligible: [CareerApplication] { applications.filter(Self.canAddStage) }
-    private var excluded: [CareerApplication] { applications.filter { $0.raw.text("status") == "active" && $0.raw.text("archived_at").isEmpty && !Self.canAddStage($0) } }
-    /// 2026 年 9 月 / 9 月 21 日 – 27 日.
-    private var heading: String {
-        if mode == "month" { return "\(calendar.component(.year, from: month)) 年 \(calendar.component(.month, from: month)) 月" }
-        let end = plus(week, 6)
-        let (m1, d1, m2, d2) = (calendar.component(.month, from: week), calendar.component(.day, from: week), calendar.component(.month, from: end), calendar.component(.day, from: end))
-        return m1 == m2 ? "\(m1) 月 \(d1) 日 – \(d2) 日" : "\(m1) 月 \(d1) 日 – \(m2) 月 \(d2) 日"
-    }
-    private var subtitle: String {
-        guard !account.isEmpty else { return "游客模式 · 登录后管理面试安排" }
-        let today = visible.filter { !$0.openWindow && calendar.isDateInToday($0.start) }.count
-        return "\(mode == "month" ? "本月" : "本周") \(periodCount) 个日程" + (today > 0 ? " · 今天 \(today) 场面试" : "")
+    private var heading: String { SchedulePage.title(month: mode == "month", anchor: anchor) }
+    private var subtitle: String { account.isEmpty ? "游客模式 · 登录后管理面试安排" : SchedulePage.subtitle(interviews, now: Date()) }
+    /// 场次能否改期 / 改作答计划：仍为 scheduled 且所属岗位没归档。
+    private func canReschedule(_ item: ScheduledInterview) -> Bool {
+        item.editable && (applications.first { $0.id == item.applicationID }?.raw.text("archived_at").isEmpty ?? true)
     }
 
     var body: some View {
@@ -92,33 +84,48 @@ struct InterviewScheduleView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .task(id: account + refresh.uuidString) { await load() }
-        .onChange(of: account) { _, id in
-            interviews = []; applications = []; action = nil; overflow = nil; detail = nil; record = nil; selectedID = nil
-            if id.isEmpty { pending = nil }
-            else if let value = pending { action = value; pending = nil }
+        .onChange(of: account) { _, _ in
+            interviews = []; applications = []; action = nil; creating = nil; overflow = nil; detail = nil; record = nil; selectedID = nil
         }
-        .centeredSheet(item: $action) { value in
-            if value.kind == "create" && eligible.isEmpty {
-                // 02.01 没有可推进的流程：主按钮带着选中的时间去新建求职流程
-                ScheduleNoStageDialog(start: value.start, end: value.end, excluded: excluded, close: { action = nil },
-                                      createProcess: { action = ScheduleAction(kind: "create-process", start: value.start, end: value.end) },
-                                      openRecord: { app in action = nil; record = app })
-            } else if value.kind == "create" || value.kind == "create-process" {
-                CareerForm(action: JobAction(kind: "schedule", application: nil, start: value.start, end: value.end), applications: applications, api: session.api,
-                           completed: { action = nil; refresh = UUID() }, close: { action = nil }).frame(width: 880, height: 780)
+        .overlay(alignment: .top) { if record == nil { NoticeToast(item: $notice).padding(.top, 20) } }
+        .centeredSheet(item: $creating) { value in
+            let options = applications.map(\.raw).filter(SchedulePage.canAddStage)
+            if let first = options.first {
+                // 时间带入与投递看板同一个推进弹窗，面包屑第一段选岗位
+                CareerAdvanceSheet(application: first, api: session.api, applicationOptions: options, initialStart: value.start, initialEnd: value.end,
+                                   close: { creating = nil },
+                                   completed: { message in creating = nil; refresh = UUID(); if let message { notice = .partial(message) } })
             } else {
-                ScheduleSessionForm(action: value, interviews: interviews, api: session.api, completed: { action = nil; refresh = UUID() }, close: { action = nil }).frame(width: 560, height: 560)
+                ScheduleEmptyDialog(kind: SchedulePage.empty(applications.map(\.raw)) ?? .noJobs, close: { creating = nil },
+                                    go: { section in creating = nil; router?.jump(.section(section)) })
             }
         }
+        .centeredSheet(item: $action) { value in
+            ScheduleSessionForm(action: value, interviews: interviews, api: session.api, completed: { action = nil; refresh = UUID() }, close: { action = nil }).frame(width: 560, height: 560)
+        }
         .centeredSheet(item: $detail) { item in
-            ScheduleDetailDialog(interview: item, api: session.api, meInitial: meInitial, close: { detail = nil }, changed: { detail = nil; refresh = UUID() }, openRecord: {
-                detail = nil
-                record = applications.first { $0.id == item.applicationID }
-            })
+            ScheduleDetailDialog(interview: item, canReschedule: canReschedule(item), api: session.api, close: { detail = nil },
+                                 changed: { message in detail = nil; refresh = UUID(); if let message { notice = .done(message) } },
+                                 openRecord: {
+                                     detail = nil
+                                     record = applications.first { $0.id == item.applicationID }
+                                 },
+                                 practice: { detail = nil; router?.jump(.mockFor(application: item.applicationID)) })
         }
         .centeredSheet(item: $recordAction) { item in
-            CareerForm(action: item, applications: applications, api: session.api, completed: { recordAction = nil; refresh = UUID() }, close: { recordAction = nil })
-                .frame(width: item.compact ? 480 : 880, height: item.compact ? nil : 780)
+            // 详情页的动作与投递看板走同一套弹窗：记录投递、推进流程，其余仍是 CareerForm
+            if let app = item.application, item.kind == "apply" {
+                CareerRecordAppliedSheet(application: app.raw, api: session.api, initialStage: item.stage, initialLabel: item.label,
+                                         close: { recordAction = nil },
+                                         completed: { message in recordAction = nil; refresh = UUID(); if let message { notice = .partial(message) } })
+            } else if let app = item.application, ["advance", "advance-offer"].contains(item.kind) {
+                CareerAdvanceSheet(application: app.raw, api: session.api, initialKind: item.kind == "advance-offer" ? .offer : nil,
+                                   close: { recordAction = nil },
+                                   completed: { message in recordAction = nil; refresh = UUID(); if let message { notice = .partial(message) } })
+            } else {
+                CareerForm(action: item, applications: applications, api: session.api, completed: { recordAction = nil; refresh = UUID() }, close: { recordAction = nil })
+                    .frame(width: 880, height: 780)
+            }
         }
     }
 
@@ -143,49 +150,51 @@ struct InterviewScheduleView: View {
         .background { Button("") { create(start: at(calendar.startOfDay(for: anchor), minute: 9 * 60)) }.keyboardShortcut("n", modifiers: .command).opacity(0) }
     }
 
-    // MARK: Head（01：11 号眉题、28 号衬线标题、13 号说明；右侧分段 + 前后翻页 + 今天）
+    // MARK: Head（07.1 / 07.2：眉题、衬线页面名、一句说明；右侧月 | 周胶囊 + 无框翻页「‹ 日期 ›」，点日期打开选择）
 
     private var head: some View {
         HStack(alignment: .top, spacing: 24) {
             VStack(alignment: .leading, spacing: 0) {
-                // 与 Web 05.1/05.2 页头一致：「SCHEDULE · 2026 年 · 月视图」，标题右侧带 ⌄ 打开日期选择
-                Text(verbatim: "SCHEDULE · " + String(calendar.component(.year, from: periodStart)) + " 年 · " + (mode == "month" ? "月视图" : "周视图"))
+                Text(verbatim: "SCHEDULE · " + SchedulePage.rangeCount(interviews, month: mode == "month", anchor: anchor))
                     .font(V3.sans(11)).foregroundStyle(ScheduleInk.faint).frame(height: 13)
-                Button { datePicker.toggle() } label: {
-                    HStack(spacing: 8) {
-                        Text(heading).font(V3.serif(28)).foregroundStyle(V3.txt)
-                        Image(systemName: "chevron.down").font(.system(size: 11, weight: .medium)).foregroundStyle(V3.sub)
-                    }.frame(height: 40).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).padding(.top, 13).help("选择其他日期").accessibilityLabel("\(heading)，选择其他日期")
-                .popover(isPresented: $datePicker, arrowEdge: .bottom) {
-                    DatePicker(mode == "month" ? "选择月份" : "选择周", selection: Binding(get: { anchor }, set: { anchor = $0; datePicker = false }), displayedComponents: .date)
-                        .datePickerStyle(.graphical).labelsHidden().padding(16).frame(width: 300)
-                }
-                Text(subtitle).font(V3.sans(13)).foregroundStyle(V3.sub).frame(height: 16).padding(.top, 2)
+                Text("面试日程").font(V3.serif(28)).foregroundStyle(V3.txt).frame(height: 40).padding(.top, 13)
+                Text(subtitle).font(V3.sans(13)).foregroundStyle(V3.sub).lineLimit(1).frame(height: 16).padding(.top, 2)
             }
             Spacer(minLength: 0)
-            HStack(spacing: 9) {
-                V3Segmented(options: [("month", "月"), ("week", "周")], selection: $mode).accessibilityElement(children: .contain).accessibilityLabel("日程视图")
-                HStack(spacing: 5) {
-                    navButton(systemImage: "chevron.left", label: "上一周期") { shift(-1) }
-                    Button("今天") { anchor = Date(); overflow = nil }.buttonStyle(ScheduleNavStyle())
-                    navButton(systemImage: "chevron.right", label: "下一周期") { shift(1) }
-                }
-            }.frame(height: 30).padding(.top, 32)
+            HStack(spacing: 0) {
+                ScheduleModeSwitch(selection: $mode).accessibilityElement(children: .contain).accessibilityLabel("日程视图")
+                HStack(spacing: 2) {
+                    navButton(systemImage: "chevron.left", label: mode == "month" ? "上个月" : "上一周") { shift(-1) }
+                    Button { datePicker.toggle() } label: {
+                        Text(heading).font(.system(size: 13, weight: .medium).monospacedDigit()).foregroundStyle(V3.txt).lineLimit(1)
+                            .frame(width: 132, height: 28).background(datePicker ? V3.field : .clear, in: RoundedRectangle(cornerRadius: 6)).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).help("选择其他日期").accessibilityLabel("\(heading)，选择其他日期")
+                    .popover(isPresented: $datePicker, arrowEdge: .bottom) {
+                        if mode == "month" {
+                            AccountMonthGrid(selected: (calendar.component(.year, from: month), calendar.component(.month, from: month))) { year, picked in
+                                anchor = calendar.date(from: DateComponents(year: year, month: picked, day: 1)) ?? anchor; overflow = nil; datePicker = false
+                            }
+                        } else {
+                            ScheduleWeekGrid(selected: week) { day in anchor = day; overflow = nil; datePicker = false }
+                        }
+                    }
+                    navButton(systemImage: "chevron.right", label: mode == "month" ? "下个月" : "下一周") { shift(1) }
+                }.padding(.leading, 20)
+            }.frame(height: 30).padding(.top, 25)
         }
     }
     private func navButton(systemImage: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: systemImage).font(.system(size: 9, weight: .semibold)) }
-            .buttonStyle(ScheduleNavStyle(square: true)).accessibilityLabel(label)
+        Button(action: action) { Image(systemName: systemImage).font(.system(size: 11, weight: .medium)).foregroundStyle(V3.sub).frame(width: 28, height: 28).contentShape(Rectangle()) }
+            .buttonStyle(.plain).accessibilityLabel(label)
     }
     private func shift(_ amount: Int) {
         anchor = calendar.date(byAdding: mode == "month" ? .month : .day, value: mode == "month" ? amount : 7 * amount, to: anchor)!
         overflow = nil
     }
     private func create(start: Date, end: Date? = nil) {
-        let value = ScheduleAction(kind: "create", start: start, end: end ?? start.addingTimeInterval(3600))
-        if account.isEmpty { pending = value; requireAccount() } else { action = value }
+        let value = ScheduleCreate(start: start, end: end ?? start.addingTimeInterval(3600))
+        creating = value
     }
     private func open(_ item: ScheduledInterview) {
         selectedID = item.id
@@ -525,15 +534,22 @@ struct InterviewScheduleView: View {
     }
 }
 
-/// 01 右上翻页按钮：29 方形 / 「今天」51 宽，白底 #E4E4E0 描边、圆角 6.5。
-private struct ScheduleNavStyle: ButtonStyle {
-    var square = false
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(V3.sans(12, weight: .medium)).foregroundStyle(V3.txt)
-            .padding(.horizontal, square ? 0 : 13).frame(width: square ? 29 : nil, height: 29)
-            .background(configuration.isPressed ? V3.field : .white, in: RoundedRectangle(cornerRadius: 6.5))
-            .overlay(RoundedRectangle(cornerRadius: 6.5).strokeBorder(V3.cl))
-            .contentShape(Rectangle())
+/// 07.1 月 | 周：浅灰胶囊槽，选中项白底细描边胶囊。
+private struct ScheduleModeSwitch: View {
+    @Binding var selection: String
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach([("month", "月"), ("week", "周")], id: \.0) { value, label in
+                let on = selection == value
+                Button { selection = value } label: {
+                    Text(label).font(V3.sans(12, weight: on ? .medium : .regular)).foregroundStyle(on ? V3.txt : V3.fnt)
+                        .frame(width: 40, height: 22)
+                        .background { if on { Capsule().fill(.white).overlay(Capsule().strokeBorder(V3.line)) } }
+                        .contentShape(Capsule())
+                }.buttonStyle(.plain).accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .padding(2).background(Color(hex: 0xF0F0EE), in: Capsule()).fixedSize()
     }
 }
 

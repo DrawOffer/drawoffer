@@ -22,10 +22,6 @@ public static class ResumeDocument
         ("profile", "个人简介"), ("work", "工作经历"), ("education", "教育经历"), ("project", "项目经历"), ("skills", "专业技能"),
         ("activity", "校园/社会活动"), ("interests", "兴趣爱好"), ("certificates", "证书"), ("awards", "荣誉奖项"), ("languages", "语言能力"), ("custom", "自定义"),
     ];
-    public static readonly IReadOnlyList<(string Key, string Label)> ContactKinds =
-    [
-        ("phone", "电话"), ("email", "邮箱"), ("website", "网站"), ("location", "所在地"), ("github", "GitHub"), ("linkedin", "LinkedIn"), ("other", "其他"),
-    ];
 
     public static string NewNodeID() => "node_" + Guid.NewGuid().ToString("N")[..24];
 
@@ -46,22 +42,7 @@ public static class ResumeDocument
         return marks.Count == 0 && IsNull(href) && styleEmpty;
     }
 
-    /// <summary>textValue 可编辑：没有 runs，或 runs 全是纯文本。</summary>
-    public static bool Editable(JsonNode? textValue)
-    {
-        if (textValue is null) return true;
-        if (textValue.Get("runs") is not { } runs) return true;
-        return S.Arr(runs).All(IsPlainRun);
-    }
-
     public static string Value(JsonNode? textValue) => textValue.Get("value").String() ?? "";
-
-    /// <summary>textValue 的 runs；没有 runs 时由 value 生成一段纯文本。</summary>
-    public static List<JsonNode?> TextRuns(JsonNode? textValue)
-    {
-        if (textValue.Get("runs") is { } runs) return S.Arr(runs);
-        return S.Arr(PlainRuns(Value(textValue)));
-    }
 
     /// <summary>以 runs 写入 textValue（只接受文字 run）；value 与 runs 拼接一致，全是纯文本时去掉 runs。空时返回 null。</summary>
     public static JsonNode? SetTextRuns(JsonNode? textValue, IEnumerable<JsonNode?> runs, int limit = 20_000)
@@ -104,38 +85,6 @@ public static class ResumeDocument
         && S.Same(left.Get("href"), right.Get("href"))
         && S.Same(S.HasKey(left, "style") ? left.Get("style") : PlainStyle(), S.HasKey(right, "style") ? right.Get("style") : PlainStyle());
 
-    /// <summary>构造一个文字 run。</summary>
-    public static JsonObject TextRun(string text, IEnumerable<string>? marks = null, string? href = null, string? color = null, string? highlight = null, double? size = null)
-    {
-        var chosen = (marks ?? []).ToHashSet();
-        string[] order = ["bold", "italic", "underline", "strike", "code"];
-        return new JsonObject
-        {
-            ["inline_type"] = "text", ["text"] = text,
-            ["marks"] = S.StringArray(order.Where(chosen.Contains)),
-            ["href"] = href is null ? null : JsonValue.Create(href),
-            ["style"] = new JsonObject
-            {
-                ["color"] = color is null ? null : JsonValue.Create(color),
-                ["font_size_pt"] = size is { } pt ? S.Num(pt) : null,
-                ["highlight_color"] = highlight is null ? null : JsonValue.Create(highlight),
-            },
-        };
-    }
-
-    public static readonly IReadOnlyList<string> IconNames = ["Mail", "Phone", "MapPin", "Globe", "Github", "Linkedin", "GraduationCap", "Briefcase", "Award", "Star", "Calendar", "Code2"];
-
-    /// <summary>写入 textValue；空串时返回 null（由调用方决定置空或删除字段）。保留 node_id、source_refs、prefix_runs 与 align。</summary>
-    public static JsonNode? SetValue(JsonNode? textValue, string text)
-    {
-        if (text.Length == 0) return null;
-        var fields = textValue is JsonObject existing ? (JsonObject)existing.DeepClone()
-            : new JsonObject { ["node_id"] = NewNodeID(), ["source_refs"] = new JsonArray() };
-        fields["value"] = S.Prefix(text, 20_000);
-        fields.Remove("runs");
-        return fields;
-    }
-
     // MARK: Paragraph & list item runs
 
     public static bool RunsEditable(JsonNode? runs) => S.Arr(runs).All(IsPlainRun);
@@ -153,93 +102,6 @@ public static class ResumeDocument
         {
             ["inline_type"] = "text", ["text"] = S.Prefix(text, 20_000), ["marks"] = new JsonArray(), ["href"] = null, ["style"] = PlainStyle(),
         });
-
-    public static JsonObject NewParagraph(string text = "") =>
-        new() { ["node_id"] = NewNodeID(), ["block_type"] = "paragraph", ["runs"] = PlainRuns(text), ["source_refs"] = new JsonArray() };
-
-    public static JsonObject NewList(bool ordered) =>
-        new() { ["node_id"] = NewNodeID(), ["block_type"] = ordered ? "ordered_list" : "bullet_list", ["start"] = ordered ? S.Num(1) : null, ["items"] = new JsonArray(NewListItem()) };
-
-    public static JsonObject NewListItem(string text = "") =>
-        new() { ["node_id"] = NewNodeID(), ["runs"] = PlainRuns(text), ["source_refs"] = new JsonArray() };
-
-    public static JsonObject NewEntry() =>
-        new() { ["node_id"] = NewNodeID(), ["fields"] = new JsonObject(), ["blocks"] = new JsonArray(), ["source_refs"] = new JsonArray() };
-
-    public static JsonObject NewSection(string kind, string title) => new()
-    {
-        ["node_id"] = NewNodeID(), ["semantic_kind"] = kind, ["title"] = SetValue(null, title),
-        ["entries"] = new JsonArray(), ["blocks"] = new JsonArray(), ["source_refs"] = new JsonArray(),
-    };
-
-    public static JsonObject NewContact(string kind, string value) =>
-        new() { ["node_id"] = NewNodeID(), ["contact_kind"] = kind, ["value"] = value, ["source_refs"] = new JsonArray() };
-
-    /// <summary>段落或列表项写入 runs（文字、图标与行内图片）。</summary>
-    public static JsonNode? SetBlockRuns(JsonNode? node, IEnumerable<JsonNode?> runs)
-    {
-        if (node is not JsonObject obj) return S.Clone(node);
-        var fields = (JsonObject)obj.DeepClone();
-        fields["runs"] = S.Array(NormalizeRuns(runs).Take(2000));
-        return fields;
-    }
-
-    public static JsonNode? SetAlign(JsonNode? node, string? align)
-    {
-        if (node is not JsonObject obj) return S.Clone(node);
-        var fields = (JsonObject)obj.DeepClone();
-        fields["align"] = align is null ? null : JsonValue.Create(align);
-        return fields;
-    }
-
-    /// <summary>分栏行：pair 两栏（左栏 30–80%），trio 三栏，meta 四栏。</summary>
-    public static JsonObject NewRow(string kind)
-    {
-        var count = kind switch { "pair" => 2, "trio" => 3, "meta" => 4, _ => 2 };
-        var cells = new JsonArray();
-        for (var i = 0; i < count; i++)
-            cells.Add(new JsonObject { ["node_id"] = NewNodeID(), ["source_refs"] = new JsonArray(), ["blocks"] = new JsonArray(NewParagraph()) });
-        return new JsonObject
-        {
-            ["node_id"] = NewNodeID(), ["source_refs"] = new JsonArray(), ["block_type"] = "row", ["row_kind"] = kind,
-            ["cells"] = cells, ["left_width_percent"] = kind == "pair" ? S.Num(50) : null, ["column_widths_percent"] = null,
-        };
-    }
-
-    public static JsonObject NewImage(string src, string? alt) => new()
-    {
-        ["node_id"] = NewNodeID(), ["source_refs"] = new JsonArray(), ["block_type"] = "media", ["media_kind"] = "resume_image",
-        ["src"] = src, ["alt"] = alt is null ? null : JsonValue.Create(alt), ["width"] = S.Num(100), ["width_unit"] = "%",
-        ["height_px"] = null, ["align"] = "center", ["system_fallback"] = false,
-    };
-
-    public static readonly (double Min, double Max) AvatarSizeRange = (56.0, 220.0);
-
-    /// <summary>头像：保留原 node_id 与来源引用，只替换图片地址。</summary>
-    public static JsonObject Avatar(JsonNode? previous, string src, double width = 96)
-    {
-        var fields = previous is JsonObject existing ? (JsonObject)existing.DeepClone()
-            : new JsonObject { ["node_id"] = NewNodeID(), ["source_refs"] = new JsonArray() };
-        fields["media_kind"] = "avatar"; fields["src"] = src;
-        if (!fields.ContainsKey("alt")) fields["alt"] = null;
-        if (fields["width"] is null) fields["width"] = S.Num(width);
-        fields["width_unit"] = "px";
-        fields["height_px"] = null; fields["align"] = null; fields["system_fallback"] = false;
-        return fields;
-    }
-
-    /// <summary>简历图片地址只接受 http(s) 或站内 `/api/assets`、`/api/resumes`、`/templates` 路径（schema `src` pattern）。</summary>
-    public static bool ValidImageSource(string src) =>
-        S.Matches(@"^(?:https?://[^\s]{1,2040}|/(?:api/assets|api/resumes|templates)/[^\s]{1,2020})" + S.End, src);
-
-    /// <summary>段落或列表项写入纯文本（只在 RunsEditable 时调用）。</summary>
-    public static JsonNode? SetRuns(JsonNode? node, string text)
-    {
-        if (node is not JsonObject obj) return S.Clone(node);
-        var fields = (JsonObject)obj.DeepClone();
-        fields["runs"] = PlainRuns(text);
-        return fields;
-    }
 
     // MARK: Validation & dispositions
 
@@ -350,83 +212,3 @@ public static class ResumeDocument
     }
 }
 
-/// <summary>JSON 路径：对象键或数组下标。</summary>
-public abstract record JsonPathPart
-{
-    public sealed record Key(string Name) : JsonPathPart;
-    public sealed record Index(int Position) : JsonPathPart;
-}
-
-/// <summary>Mac `ResumeDocument.swift` 里 `extension JSONValue` 的路径读写；都返回新节点，不改动原节点。</summary>
-public static class JsonPathExtensions
-{
-    /// <summary>`json[path:]`：任何一步缺失返回 null；数组下标越界返回 null。</summary>
-    public static JsonNode? At(this JsonNode? node, IReadOnlyList<JsonPathPart> path)
-    {
-        var current = node;
-        foreach (var part in path)
-        {
-            switch (part)
-            {
-                case JsonPathPart.Key key: current = current.Get(key.Name); break;
-                case JsonPathPart.Index index:
-                    if (current is not JsonArray items || index.Position < 0 || index.Position >= items.Count) return null;
-                    current = items[index.Position];
-                    break;
-            }
-        }
-        return current;
-    }
-
-    /// <summary>
-    /// 返回在 path 处写入（null 表示删除对象键或数组元素）后的新值；中间缺失的对象会被创建。
-    /// 与 Swift 不同的唯一一点：Swift 能区分“写入 JSON null”和“删除”，这里两者都用 null 表示删除——要写 JSON null 请传 <paramref name="writeNull"/>。
-    /// </summary>
-    public static JsonNode? Setting(this JsonNode? node, IReadOnlyList<JsonPathPart> path, JsonNode? value, bool writeNull = false)
-    {
-        if (path.Count == 0) return S.Clone(value);
-        var rest = path.Skip(1).ToList();
-        switch (path[0])
-        {
-            case JsonPathPart.Key key:
-                var obj = node is JsonObject existing ? (JsonObject)existing.DeepClone() : new JsonObject();
-                if (rest.Count == 0)
-                {
-                    if (value is not null || writeNull) obj[key.Name] = S.Clone(value); else obj.Remove(key.Name);
-                }
-                else
-                {
-                    var child = obj.ContainsKey(key.Name) ? obj[key.Name] : new JsonObject();
-                    obj[key.Name] = child.Setting(rest, value, writeNull);
-                }
-                return obj;
-            case JsonPathPart.Index index:
-                if (node is not JsonArray array || index.Position < 0 || index.Position >= array.Count) return S.Clone(node);
-                var items = S.Arr(array).Select(S.Clone).ToList();
-                if (rest.Count == 0)
-                {
-                    if (value is not null || writeNull) items[index.Position] = S.Clone(value); else items.RemoveAt(index.Position);
-                }
-                else items[index.Position] = items[index.Position].Setting(rest, value, writeNull);
-                return S.Array(items);
-            default: return S.Clone(node);
-        }
-    }
-
-    /// <summary>在数组 path 末尾追加；path 指向的不是数组时新建数组。</summary>
-    public static JsonNode? Appending(this JsonNode? node, IReadOnlyList<JsonPathPart> path, JsonNode? value)
-    {
-        var items = S.Arr(node.At(path));
-        items.Add(value);
-        return node.Setting(path, S.Array(items));
-    }
-
-    /// <summary>交换数组 path 中两个元素；下标越界时原样返回。</summary>
-    public static JsonNode? Moving(this JsonNode? node, IReadOnlyList<JsonPathPart> path, int from, int to)
-    {
-        var items = S.Arr(node.At(path));
-        if (from < 0 || from >= items.Count || to < 0 || to >= items.Count) return S.Clone(node);
-        (items[from], items[to]) = (items[to], items[from]);
-        return node.Setting(path, S.Array(items));
-    }
-}

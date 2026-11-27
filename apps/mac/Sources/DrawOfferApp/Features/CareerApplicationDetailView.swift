@@ -23,6 +23,8 @@ struct CareerApplicationDetailView: View {
     let perform: (String, CareerApplication) -> Void
     /// 从资料库「求职进程」进来时直接停在资料页，返回回到资料库。
     var libraryMaterials = false
+    /// 资料库里的求职进程页：点开资料进资料预览页。
+    var openDataset: ((String) -> Void)? = nil
     private enum Route: Equatable { case stage(String), report(String, fromStage: Bool), job(String), materials(String?), record(String, paste: Bool, fromMaterials: String?), written(String) }
     @State private var route: Route?
     /// 从投递详情选好的文件：带进资料页，直接进底部浮层（07.02）。
@@ -47,11 +49,17 @@ struct CareerApplicationDetailView: View {
     @State private var delivering = false
     @State private var deciding = false
     @State private var reviewCost: String?
-    @State private var prepCost: String?
-    @State private var prepBusy: String?
+    /// 待投递、回看投递时画出来的那份简历（`GET /api/resumes/{id}` 的 `resume.data`）。
+    @State private var resumeDoc: (id: String, doc: JSONValue)?
+    @State private var match: JobMatch?
+    /// 题目纸按考点列：后端整理好的考点，按场次存（`record-topics`）。
+    @State private var topics: [String: [JSONValue]] = [:]
+    @State private var topicRequests: Set<String> = []
     @State private var adding: JSONValue?
     @State private var addMode: CareerAddContentSheet.Mode = .upload
     @State private var splits: [String: SplitJob] = [:]
+    /// 正往页面上拖文件：录音那一步点亮纸面，其余整页描一圈虚线。
+    @State private var dragOver = false
     private struct SplitJob { var running: Bool; var error: String? }
     @Environment(WorkspaceRouter.self) private var router: WorkspaceRouter?
     private var raw: JSONValue { current ?? application.raw }
@@ -75,8 +83,8 @@ struct CareerApplicationDetailView: View {
                                 openResume: { if !raw.text("resume_id").isEmpty { router?.jump(.editResume(raw.text("resume_id"))) } }, openJob: openJob,
                                 changed: { refreshed = UUID() },
                                 fromLibrary: libraryMaterials, openProgress: libraryMaterials ? { router?.jump(.application(application.id)) } : nil,
-                                intentFiles: materialFiles,
-                                processed: materialFiles.isEmpty || libraryMaterials ? nil : { materialFiles = []; route = nil })
+                                intentFiles: materialFiles, openAsset: libraryMaterials ? openDataset : nil,
+                                processed: materialFiles.isEmpty || libraryMaterials ? nil : { message in materialFiles = []; route = nil; if let message { notice = message } })
                 .task(id: refreshed) { await load() }
                 .centeredSheet(item: Binding(get: { adding.map(CareerSessionRef.init) }, set: { if $0 == nil { adding = nil } })) { entry in
                     CareerAddContentSheet(session: entry.value, recordKind: entry.value.text("stage_type") == "written_test" || entry.value.text("stage_type") == "assessment" ? "笔试" : "面试",
@@ -128,18 +136,8 @@ struct CareerApplicationDetailView: View {
         }
     }
 
-    private func savePrep(_ session: JSONValue, _ items: [JSONValue]) async {
-        let id = session.text("id")
-        prepBusy = id; defer { prepBusy = nil }
-        let lock = details[id]?["session"]?["lock_version"] ?? session["lock_version"] ?? .number(1)
-        do {
-            _ = try await api.careerRequest(path: "/api/interview-sessions/\(id)", method: "PUT", query: [:], body: .object(["prep_items": .array(items), "base_lock_version": lock]))
-            refreshed = UUID()
-        } catch { notice = CareerErrors.message(error) }
-    }
-
-    /// 投递详情（Figma 07 页 04–09 分区）：返回栏，上半「这一步」+ 右侧随状态换的内容，底部全程时间线。
-    /// 点时间线上过去的节点回看那一轮（07.08），Esc 或「回到…」回到现在。
+    /// 投递详情（Figma 07N · 03–06）：返回栏，中间左边「现在该做什么」、右边这一步的那件东西，各自按外轮廓居中在同一条中线上，
+    /// 正好在页头和时间线中间；底部全程时间线。点时间线上过去的节点回看那一轮，Esc 或「回到…」回到现在。
     private var progressPage: some View {
         let deck = CareerDeck(application: raw, sessions: sessions, now: now)
         let current = deck.current ?? deck.stations[deck.stations.count - 1]
@@ -149,51 +147,51 @@ struct CareerApplicationDetailView: View {
         let previous = shownIndex > 0 ? deck.stations[shownIndex - 1] : nil
         let shownSession = shown.session.flatMap { $0.text("status") == "cancelled" ? nil : $0 }
         let shownDetail = shownSession.flatMap { details[$0.text("id")] }
-        let step = CareerJourney.step(application: raw, deck: deck, station: shown, viewing: viewing, now: now, detail: shownDetail, previous: previous, reviewCost: reviewCost)
+        let step = CareerJourney.step(application: raw, deck: deck, station: shown, viewing: viewing, now: now, detail: shownDetail, previous: previous,
+                                      reviewCost: reviewCost, match: needsMatch(deck, shown: shown, viewing: viewing) ? match : nil)
         let timeline = CareerJourney.timeline(application: raw, deck: deck, now: now)
-        let files = shownSession == nil ? [] : shownDetail?["assets"]?.items ?? []
-        // 右侧已经有黑按钮（上传录音、生成准备清单）时，左边只留白按钮
-        let prepEmpty = shownSession.map { ($0["prep_items"]?.items ?? []).isEmpty && ($0["prep_generated_at"] == nil || $0["prep_generated_at"] == .null) } ?? false
-        let sideHasBlack = step.side == .recordEntry || (step.side == .prep && prepEmpty)
+        let advancing = step.primary?.action == .advance || step.secondary?.action == .advance
         return GeometryReader { geometry in
-            // 稿：内容区 1178 宽时左右各 63，主体 500 + 420 两栏
-            let gutter = max(max(40, geometry.size.width * 0.0535), (geometry.size.width - 1200) / 2)
+            // 稿：内容区 1179 宽时左边 64；更宽时内容最多 1200 居中
+            let gutter = max(max(40, geometry.size.width * 0.054), (geometry.size.width - 1200) / 2)
             let width = max(0, geometry.size.width - gutter * 2)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     topBar(deck: deck, shown: shown, shownSession: shownSession)
                     if let error { HStack { Text(error).foregroundStyle(PD.red); Button("重试") { refreshed = UUID() }.buttonStyle(CareerActionStyle()) }.font(V3.sans(12)).padding(.top, 12) }
-                    Spacer(minLength: 48)
-                    let hero = CareerJourneyHero(job: item.company + " · " + item.title, step: step, files: files, sideHasBlack: sideHasBlack, disabled: busy || loading,
-                                                 act: { journeyAction($0, shown: shown, session: shownSession) }, copy: copy, openFile: openAsset,
-                                                 addFromComputer: { if let shownSession { pickFiles(into: shownSession) } },
-                                                 addFromLibrary: { if let shownSession { addMode = .library; adding = shownSession } })
-                        .id(shown.id + (viewing ? ":view" : "")).transition(.opacity)
-                    let side = sideView(step.side, deck: deck, shown: shown, session: shownSession, detail: shownDetail)
-                    if width >= 900 {
-                        HStack(alignment: .center, spacing: 48) {
-                            hero.frame(maxWidth: 500, alignment: .leading)
-                            Spacer(minLength: 0)
-                            side.frame(maxWidth: 420, alignment: .leading)
+                    Spacer(minLength: 44)
+                    let compact = width <= 1010
+                    let hero = CareerJourneyHero(job: item.company + " · " + item.title, step: step, compact: compact, disabled: busy || loading,
+                                                 act: { journeyAction($0, shown: shown, session: shownSession) })
+                    let figure = figureView(step, deck: deck, shown: shown, session: shownSession, detail: shownDetail)
+                        .scaleEffect(compact ? 0.8333 : 1, anchor: .topLeading)
+                    Group {
+                        if width > 840 {
+                            HStack(alignment: .center, spacing: 32) {
+                                hero.frame(maxWidth: 560, alignment: .leading)
+                                Spacer(minLength: 0)
+                                figureBox(figure, compact: compact).padding(.trailing, compact ? 0 : -9)
+                            }
+                        } else {
+                            VStack(alignment: .leading, spacing: 40) { hero; figureBox(figure, compact: compact).padding(.leading, -56) }
                         }
-                    } else {
-                        VStack(alignment: .leading, spacing: 44) { hero; side.frame(maxWidth: 560, alignment: .leading) }
                     }
-                    Spacer(minLength: 64)
-                    CareerJourneyTimeline(timeline: timeline, picked: viewing ? shown.id : nil) { key in
-                        withAnimation(.easeOut(duration: 0.2)) { viewKey = key == current.id ? nil : key }
-                    }
+                    .id(shown.id + (viewing ? ":view" : "")).transition(.opacity)
+                    Spacer(minLength: 44)
+                    CareerJourneyTimeline(timeline: timeline, picked: viewing ? shown.id : nil,
+                                          pick: { key in withAnimation(.easeOut(duration: 0.2)) { viewKey = key == current.id ? nil : key } },
+                                          onAdvance: CareerJourney.canAdvance(deck, viewing: viewing) && !advancing ? { if !busy { perform("advance", item) } } : nil)
                 }
                 .frame(width: width, alignment: .leading)
                 .frame(minHeight: max(0, geometry.size.height - 90), alignment: .top)
                 .padding(.horizontal, gutter).padding(.top, 40).padding(.bottom, 50)
             }
             .overlay(alignment: .topTrailing) {
-                // 09.07 ⋯ 菜单：点外面或 Esc 收起
+                // ⋯ 菜单：点外面或 Esc 收起
                 if menuOpen {
                     ZStack(alignment: .topTrailing) {
                         Color.clear.contentShape(Rectangle()).onTapGesture { menuOpen = false }
-                        CareerDetailMenu(items: menuItems(deck: deck), color: raw.text("calendar_color"),
+                        CareerDetailMenu(items: menuItems(deck: deck, step: step, shown: shown, session: shownSession, detail: shownDetail), color: raw.text("calendar_color"),
                                          pickColor: { color in menuOpen = false; Task { await update(["calendar_color": .string(color)]) } },
                                          close: { menuOpen = false })
                             .padding(.top, 40 + 19 + 6).padding(.trailing, gutter - 4)
@@ -202,9 +200,29 @@ struct CareerApplicationDetailView: View {
             }
         }
         .foregroundStyle(PD.ink).font(V3.sans(13))
-        .overlay(alignment: .top) { TextNoticeToast(text: $notice, kind: { $0.contains("，但") ? .partial : $0.hasPrefix("已") ? .done : $0.contains("还没有") ? .info : .failed }) }
+        .overlay {
+            if dragOver && step.figure != .recordEmpty {
+                RoundedRectangle(cornerRadius: 18).fill(PD.blue.opacity(0.04))
+                    .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(PD.blue, style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])))
+                    .padding(12).allowsHitTesting(false)
+            }
+        }
+        // 资料放进正在看的那一轮，没有就放当前这一轮；一轮都没有时不接
+        .onDrop(of: [.fileURL], delegate: CareerDetailDrop(enabled: (shownSession ?? deck.current?.session) != nil && !loading, over: $dragOver) { providers in
+            let target = (shownSession ?? deck.current?.session)?.text("id")
+            CareerDrop.batch(providers) { urls in
+                let rule = CareerDropRule.accept(urls.map(\.lastPathComponent), figure: step.figure)
+                if let message = rule.notice { notice = message }
+                guard !rule.kept.isEmpty else { return }
+                materialFiles = rule.kept.map { urls[$0] }
+                route = .materials(target)
+            }
+        })
+        .overlay(alignment: .top) { TextNoticeToast(text: $notice, kind: { $0.contains("，但") ? .partial : $0.hasPrefix("已") ? .done : $0.contains("还没有") || $0 == CareerDropRule.recordingOnlyNotice ? .info : .failed }) }
         .task(id: refreshed) { await load() }
         .task { await loadPrices() }
+        .task(id: matchKey) { await loadMatch() }
+        .task(id: topicKey) { await loadTopics() }
         .task(id: waiting) {
             // 复盘或转写在后台跑：5 秒起逐步放慢到 30 秒查一次，只查在跑的那几场；有一场落定才整页刷新。App 不在前台时暂停
             var attempt = 0
@@ -257,24 +275,35 @@ struct CareerApplicationDetailView: View {
         return "删除后无法恢复。岗位也会从岗位看板上移除。\n会删除：\(removed)\n会保留：\(kept)"
     }
 
-    /// 从电脑选资料（07.03「＋ 添加」、07.01「上传录音」）：选好后进资料页底部浮层，逐个选放进哪一轮、怎么处理。
-    private func pickFiles(into session: JSONValue) {
+    /// 从电脑选资料：选好后进资料页底部浮层，逐个选放进哪一轮、怎么处理。录音入口只收录音和视频，
+    /// 文字稿走「粘贴文字」，PDF、Word 从 ⋯ 的「资料」上传。
+    private func pickFiles(into sessionID: String?, recording: Bool) {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = (CareerPendingFile.media + CareerPendingFile.documents).compactMap { UTType(filenameExtension: $0) }
+        panel.allowedContentTypes = (recording ? CareerPendingFile.media : CareerPendingFile.media + CareerPendingFile.documents).compactMap { UTType(filenameExtension: $0) }
         panel.allowsMultipleSelection = true
+        panel.message = recording ? CareerDropRule.recordingOnlyNotice : ""
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
         materialFiles = panel.urls
-        route = .materials(session.text("id"))
+        route = .materials(sessionID)
     }
 
-    /// 09.07 / 09.08 ⋯ 里的编辑类操作；删除在结束或归档后才能点。
-    private func menuItems(deck: CareerDeck) -> [CareerDetailMenu.Item] {
+    /// ⋯ 菜单（Web `ProgressDeckPage` 页面菜单）：看的是某一轮时改这一轮的时间、方式和链接，投递、筛选这类没有场次的阶段改投递信息；
+    /// 这一步不常用的几项、资料、日历颜色，最后是删除（结束或归档后才能点）。
+    private func menuItems(deck: CareerDeck, step: CareerJourneyStep, shown: CareerStation, session: JSONValue?, detail: JSONValue?) -> [CareerDetailMenu.Item] {
         let ended = deck.ended != nil || !raw.text("archived_at").isEmpty
         let currentKind = deck.current?.kind
         let offerMenu = currentKind == .offer || currentKind == .oc || deck.ended?.kind == .accepted || deck.ended?.kind == .declined
-        // 「编辑投递信息」只补投递本身的字段（09.09 / Web DeliveryDialog），不走「记录投递」加阶段
-        var items: [CareerDetailMenu.Item] = [.init(title: "编辑投递信息") { delivering = true }]
+        var items: [CareerDetailMenu.Item] = []
+        if let session {
+            let name = session.text("stage_label").trimmingCharacters(in: .whitespaces).nonEmptyOr(shown.title)
+            items.append(.init(title: "编辑\(name)信息") { rescheduling = session })
+        } else {
+            items.append(.init(title: "编辑投递信息") { delivering = true })
+        }
         if offerMenu { items.append(.init(title: "编辑 Offer 信息") { perform("offer", item) }) }
+        for more in step.more { items.append(.init(title: more.label) { journeyAction(more.action, shown: shown, session: session) }) }
+        let files = session == nil ? details.values.reduce(0) { $0 + ($1["assets"]?.items.count ?? 0) } : detail?["assets"]?.items.count ?? 0
+        items.append(.init(title: "资料", trailing: files > 0 ? String(files) : nil) { route = .materials(session?.text("id")) })
         items.append(.init(title: raw["is_favorite"]?.bool == true ? "取消收藏" : "收藏") { Task { await toggleFavorite() } })
         items.append(.init(title: "日历颜色", colors: true) {})
         items.append(.init(title: raw.text("archived_at").isEmpty ? "归档" : "取消归档") { perform(raw.text("archived_at").isEmpty ? "archive" : "restore", item) })
@@ -298,40 +327,163 @@ struct CareerApplicationDetailView: View {
         }.frame(height: 19)
     }
 
-    @ViewBuilder private func sideView(_ side: CareerJourneySide, deck: CareerDeck, shown: CareerStation, session: JSONValue?, detail: JSONValue?) -> some View {
-        switch side {
+    /// 物件按 1 倍画；放不下时缩到 0.8333，外框跟着缩，免得撑开两栏。
+    private func figureBox(_ figure: some View, compact: Bool) -> some View {
+        figure.frame(width: compact ? 400 : 480, alignment: .topLeading).fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// 右侧这一步的那件东西（Web `ProgressDeckPage` figure）。
+    @ViewBuilder private func figureView(_ step: CareerJourneyStep, deck: CareerDeck, shown: CareerStation, session: JSONValue?, detail: JSONValue?) -> some View {
+        let act = { (action: CareerJourneyAction) in journeyAction(action, shown: shown, session: session) }
+        let start = session.flatMap { CareerApplication.date($0.text("start_at")) }
+        switch step.figure {
         case .resume:
-            CareerJourneyResumeSide(application: raw, pending: deck.pending, api: api,
-                                    open: { if !raw.text("resume_id").isEmpty { router?.jump(.editResume(raw.text("resume_id"))) } },
-                                    pick: { perform("apply", item) })
-        case .prep:
-            CareerJourneyPrepSide(short: shown.short, session: session.map { details[$0.text("id")]?["session"] ?? $0 }, busy: prepBusy != nil && prepBusy == session?.text("id"), cost: prepCost,
-                                  save: { items in if let session { Task { await savePrep(session, items) } } },
-                                  generate: { if let session { Task { await generatePrep(session) } } }, practice: practice)
-        case .recordEntry:
-            if let session {
-                CareerJourneyRecordEntrySide(state: CareerJourney.recordState(session, detail), busy: busy,
-                                             upload: { pickFiles(into: session) },
-                                             paste: { route = .record(session.text("id"), paste: true, fromMaterials: nil) },
-                                             retry: { id in Task { await retryTranscription(session, id) } })
+            let doc = resumeDoc.flatMap { $0.id == resumeID ? $0.doc : nil }
+            ResumeFigure(sketch: CareerJourney.resumeSketch(doc), matched: Array((match?.covered ?? []).prefix(4)), label: deck.pending ? "准备投的简历" : "投的这份简历",
+                         onOpen: { act(resumeID != nil ? .openResume : .pickResume) })
+        case .resumeBlank:
+            BlankResumeFigure(label: "还没记投的是哪份简历", onPick: { act(.pickResume) })
+        case .sent:
+            SentFigure(date: CareerDeckFormat.monthDay(CareerApplication.date(raw.text("applied_at")) ?? shown.start), channel: CareerDeck.source(raw))
+        case .askDay:
+            AskDayFigure(month: Beijing.calendar.component(.month, from: now), onPick: { act(.schedule) })
+        case .writtenDue:
+            if let session, let start, let end = CareerApplication.date(session.text("end_at")) {
+                let open = session.text("schedule_kind") == "open_window"
+                let plan = CareerApplication.date(session.text("answer_plan_start_at"))
+                let day = open ? end : start
+                let minutes = open ? 0 : Int((end.timeIntervalSince(start) / 60).rounded())
+                let note = open
+                    ? plan.map { "打算 \(CareerDeckFormat.monthDay($0)) \(CareerDeckFormat.clock($0)) 做" } ?? "\(CareerDeckFormat.monthDay(start)) \(CareerDeckFormat.clock(start)) 起开放"
+                    : [minutes > 0 ? "\(minutes) 分钟" : nil, session.text("mode") == "onsite" ? "现场" : "线上"].compactMap { $0 }.joined(separator: " · ")
+                WrittenDueFigure(title: open ? "\(shown.short)截止" : shown.short, date: CareerDeckFormat.monthDay(day),
+                                 time: "\(CareerDeckFormat.weekday(day)) \(CareerDeckFormat.clock(day))", note: note, mine: open && plan != nil)
             }
-        case .questions:
-            if let session {
-                CareerJourneyQuestionsSide(session: session, detail: detail, api: api) { _ in route = .record(session.text("id"), paste: false, fromMaterials: nil) }
-            }
+        case .writtenList:
+            let questions = detail?["session"]?["written_questions"]?.items ?? session?["written_questions"]?.items ?? []
+            WrittenListFigure(title: "\(shown.short)题", items: questions.enumerated().map { index, item in
+                let state = item.text("correctness")
+                return SFPaperItem(id: item.display("id").nonEmptyOr(String(index)), title: item.text("question_text"), mark: state == "correct" ? .good : state == "wrong" ? .weak : .open)
+            }, onOpen: { act(.openWritten) }, onAdd: { act(.addWritten) })
+        case .day:
+            if let start { DayFigure(day: start, time: CareerDeckFormat.clock(start), ribbon: true) }
+        case .dayPast:
+            DayFigure(day: CareerJourney.stationDay(shown), time: nil, ribbon: false)
+        case .clock:
+            if let start { ClockFigure(now: now, start: start) }
+        case .recordEmpty:
+            RecordFigure(state: .empty, over: dragOver, onUpload: { act(.upload) })
+        case .recordRunning:
+            RecordFigure(state: .running)
+        case .recordFailed:
+            RecordFigure(state: .failed)
+        case .questions, .reviewFailed:
+            let paper = paper(session, detail)
+            QuestionsFigure(title: shown.short, count: "\(paper.total) 题", items: paper.rows.map { row in
+                SFPaperItem(id: row.id, title: row.title, mark: .open, open: { act(.openRecord) })
+            }, tone: step.figure == .questions ? .blue : .orange)
+        case .reviewing:
+            let rows = CareerJourney.progressQuestions(session)
+            let paper = paper(session, detail)
+            QuestionsFigure(title: shown.short, count: rows.isEmpty ? "\(paper.total) 题" : "\(rows.filter { $0.mark != .waiting }.count) / \(rows.count) 题",
+                            items: rows.isEmpty ? paper.rows.map { SFPaperItem(id: $0.id, title: $0.title, mark: .waiting) } : rows.map { SFPaperItem(id: $0.id, title: $0.title, mark: $0.mark) },
+                            tone: .ink)
         case .review:
-            if let session { CareerJourneyReviewSide(session: session, detail: detail, openReview: { openReview(session) }, practice: practice) }
-        case .written:
-            if let session { CareerJourneyWrittenSide(session: session, detail: detail, open: { route = .written(session.text("id")) }, add: { writtenAdding = session }) }
+            if let session {
+                let questions = CareerJourney.reviewedQuestions(session)
+                if questions.isEmpty {
+                    ReviewTextFigure(title: "\(shown.short)复盘", text: CareerJourney.reviewHeadline(session).title, onOpen: { openReview(session) })
+                } else {
+                    let weak = questions.filter(\.weak)
+                    ReviewFigure(reached: questions.count - weak.count, total: questions.count,
+                                 weak: weak.map { ($0.id, $0.title, $0.line) }, good: questions.map { ($0.id, $0.title) },
+                                 onPractice: { id in practiceQuestions(weak.filter { $0.id == id }) }, onMore: { openReview(session) })
+                }
+            }
+        case .wait:
+            WaitFigure(days: CareerDeckFormat.dayCount(shown.start, now), label: "等结果")
+        case .oral:
+            let told = CareerApplication.date(raw.text("oc_communicated_at"))
+            let rows: [(label: String, value: String)] = [raw.text("oc_start_text").nonEmptyValue.map { ("入职", $0) }, raw.text("oc_contact").nonEmptyValue.map { ("联系人", $0) },
+                                                          told.map { ("时间", CareerDeckFormat.monthDay($0)) }].compactMap { $0 }
+            OralOfferFigure(salary: raw.text("oc_salary_text").nonEmptyValue, rows: rows)
+        case .offerBlank:
+            OfferBlankFigure(onFill: { act(.editOffer) })
         case .offer:
-            CareerJourneyOfferSide(application: raw, oc: false, accepted: deck.ended?.kind == .accepted)
-        case .oc:
-            CareerJourneyOfferSide(application: raw, oc: true, accepted: false)
-        case .left:
-            CareerJourneyLeftSide(deck: deck, details: details, openReview: { openReview(nil) }, practice: practice)
-        case .none:
-            EmptyView()
+            OfferFigure(offer: CareerJourney.offerText(raw))
+        case .offerAccepted:
+            OfferAcceptedFigure(offer: CareerJourney.offerText(raw))
+        case .offerDeclined:
+            OfferDeclinedFigure()
+        case .archive, .archiveOpen:
+            ArchiveFigure(open: step.figure == .archiveOpen, label: CareerJourney.roundLabel(deck))
         }
+    }
+
+    private var resumeID: String? { raw.text("resume_id").nonEmptyValue ?? raw.display("resume_id").nonEmptyValue }
+
+    /// 题目纸：记录里的题按考点列，考点还没整理好时按题列。
+    private func paper(_ session: JSONValue?, _ detail: JSONValue?) -> (total: Int, rows: [CareerJourney.PaperRow]) {
+        guard let session else { return (0, []) }
+        let questions = InterviewRecord.parse(CareerJourney.markdown(session, detail))
+        let groups = (detail?["session"]?["record_topics"] ?? session["record_topics"]).flatMap { $0 == .null ? nil : $0.items } ?? topics[session.text("id")]
+        return (questions.count, CareerJourney.paperRows(questions, groups: groups))
+    }
+
+    private var shownState: (deck: CareerDeck, shown: CareerStation, viewing: Bool) {
+        let deck = CareerDeck(application: raw, sessions: sessions, now: now)
+        let current = deck.current ?? deck.stations[deck.stations.count - 1]
+        let shown = viewKey.flatMap { key in deck.stations.first { $0.id == key } } ?? current
+        return (deck, shown, shown.id != current.id)
+    }
+
+    /// 待投递、筛选要看这份简历和岗位对得上多少；待投递（和回看投递）还要把简历画出来。
+    private func needsMatch(_ deck: CareerDeck, shown: CareerStation, viewing: Bool) -> Bool {
+        (deck.ended == nil || viewing) && (shown.kind == .apply || shown.kind == .screening)
+    }
+
+    private var matchKey: String {
+        let state = shownState
+        guard needsMatch(state.deck, shown: state.shown, viewing: state.viewing), let resumeID else { return "" }
+        return [raw.text("job_description_id"), resumeID, state.shown.kind == .apply ? "doc" : ""].joined(separator: ":")
+    }
+
+    private func loadMatch() async {
+        let parts = matchKey.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 3 else { return }
+        let (job, resume) = (parts[0], parts[1])
+        if parts[2] == "doc", resumeDoc?.id != resume,
+           let result = try? await api.careerRequest(path: "/api/resumes/\(resume)", method: "GET", query: [:], body: nil), let doc = result["resume"]?["data"] {
+            resumeDoc = (resume, doc)
+        }
+        guard !job.isEmpty, !Task.isCancelled else { return }
+        let result = try? await api.careerRequest(path: "/api/job-descriptions/\(job)/match", method: "GET", query: ["resume_id": resume], body: nil)
+        match = JobMatch(result?["match"])
+    }
+
+    /// 有记录还没复盘（或复盘失败）的这一轮，题目纸按考点列：后端没存考点时请求整理一次。
+    private var topicKey: String {
+        let state = shownState
+        guard state.shown.kind == .interview, let session = state.shown.session, session.text("status") != "cancelled" else { return "" }
+        let detail = details[session.text("id")]
+        let status = session.text("review_status")
+        guard status != "generating", status == "failed" || !CareerDeck.hasReview(session) else { return "" }
+        let stored = detail?["session"]?["record_topics"] ?? session["record_topics"]
+        guard stored == nil || stored == .null, topics[session.text("id")] == nil else { return "" }
+        let markdown = CareerJourney.markdown(session, detail)
+        return markdown.isEmpty ? "" : session.text("id") + "\n" + markdown
+    }
+
+    private func loadTopics() async {
+        let key = topicKey
+        guard !key.isEmpty, !topicRequests.contains(key), let id = key.split(separator: "\n").first.map(String.init) else { return }
+        let questions = CareerJourney.topicQuestions(InterviewRecord.parse(String(key.dropFirst(id.count + 1))))
+        guard !questions.isEmpty else { return }
+        topicRequests.insert(key)
+        guard let result = try? await api.careerRequest(path: "/api/interview-sessions/\(id)/record-topics", method: "POST", query: [:],
+                                                        body: .object(["questions": .array(questions.map(JSONValue.string))])),
+              let groups = result["session"]?["record_topics"]?.items else { return }
+        topics[id] = groups
     }
 
     /// 09.03 做决定：460 宽，只写这份 Offer、答复截止、接受后会怎样。
@@ -354,6 +506,9 @@ struct CareerApplicationDetailView: View {
     }
 
     private func journeyAction(_ action: CareerJourneyAction, shown: CareerStation, session: JSONValue?) {
+        let deck = CareerDeck(application: raw, sessions: sessions, now: now)
+        // 资料放进哪一轮：正在看的那一轮，没有就放当前这一轮
+        let target = session?.text("id") ?? deck.current?.session?.text("id")
         switch action {
         case .recordApplied: perform("apply", item)
         case .advance: perform("advance", item)
@@ -368,12 +523,42 @@ struct CareerApplicationDetailView: View {
             if let url = URL(string: raw["job_snapshot"]?.text("source_url") ?? ""), ["http", "https"].contains(url.scheme ?? "") { NSWorkspace.shared.open(url) }
         case .enter:
             if let url = URL(string: session?.text("meeting_url") ?? ""), url.scheme != nil { NSWorkspace.shared.open(url) }
+        case .openPlace:
+            if let url = session.flatMap(CareerJourney.placeOf)?.url { NSWorkspace.shared.open(url) }
+        case .copyPlace:
+            if let place = session.flatMap(CareerJourney.placeOf) { copy(place.label) }
         case .mock: router?.jump(.mockFor(application: application.id))
+        case .practiceWeak: practiceQuestions(CareerJourney.weakQuestions(session))
+        case .upload: pickFiles(into: target, recording: true)
+        case .addWritten: pickFiles(into: target, recording: false)
+        case .paste: if let id = session?.text("id") { route = .record(id, paste: true, fromMaterials: nil) }
+        case .pickLibrary:
+            if let target = session ?? deck.current?.session { addMode = .library; adding = target }
+        case .retryTranscription:
+            if let session, case .failed(_, let datasetID) = CareerJourney.recordState(session, details[session.text("id")]) {
+                Task { await retryTranscription(session, datasetID) }
+            }
+        case .pickResume: delivering = true
+        case .openResume: if let resumeID { router?.jump(.editResume(resumeID)) }
         case .generateReview: if let id = session?.text("id") { route = .stage(id) }
         case .openReview: openReview(session)
         case .openRecord: if let id = session?.text("id") { route = .record(id, paste: false, fromMaterials: nil) }
         case .openWritten: if let id = session?.text("id") { route = .written(id) }
         }
+    }
+
+    /// 练没答到位的题（Web `startPractice`）：最多 3 题，每题追问到讲清为止，带着这条投递进面试设置。
+    private func practiceQuestions(_ questions: [CareerJourney.ReviewedQuestion]) {
+        guard !questions.isEmpty else { return }
+        let items = questions.prefix(CareerJourney.practiceLimit).map { question in
+            let gaps = question.gaps
+            let reached = question.level.map { $0 <= 0 ? "没到「了解」" : "答到「\(MockRV.levelLabel($0))」" } ?? "没记下回答"
+            return MockPracticeItem(label: String(question.title.prefix(120)), question: String(question.ask.prefix(500)),
+                                    signals: gaps.prefix(5).map { String($0.prefix(300)) }, note: question.line, tag: nil,
+                                    last: [reached, question.line].compactMap { $0 }.joined(separator: "，"),
+                                    goal: ["答到「\(MockRV.levelLabel(question.expected))」", gaps.isEmpty ? nil : "把\(gaps.prefix(2).joined(separator: "和"))讲清楚"].compactMap { $0 }.joined(separator: "，"))
+        }
+        router?.jump(.mockPractice(MockPracticePlan(back: item.company + " · " + item.title, items: Array(items), applicationID: application.id)))
     }
 
     /// 打开复盘：优先看的这一轮，否则最近一份复盘。
@@ -383,25 +568,8 @@ struct CareerApplicationDetailView: View {
         if let id = target?.text("id"), !id.isEmpty { route = .report(id, fromStage: false) } else { notice = "这次求职还没有可查看的复盘记录。" }
     }
 
-    /// 「去练这一处」：带着这一处进模拟面试（Web `journey.tsx` practice：kind topic、ref 与 label 都是这一处的标题）。
-    private func practice(_ label: String) {
-        let topic = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        router?.jump(.mock(topic.isEmpty ? nil : PracticeFocus(kind: "topic", ref: topic, label: topic)))
-    }
-
     private func copy(_ text: String) {
         NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string); notice = "已复制"
-    }
-
-    private func openAsset(_ asset: JSONValue) {
-        Task {
-            do {
-                let file = try await api.downloadDataset(id: asset.text("id"), limit: 512 * 1024 * 1024)
-                let named = file.url.deletingLastPathComponent().appendingPathComponent(asset.text("original_file_name").nonEmptyOr(file.url.lastPathComponent))
-                if named != file.url { try? FileManager.default.moveItem(at: file.url, to: named) }
-                NSWorkspace.shared.open(FileManager.default.fileExists(atPath: named.path) ? named : file.url)
-            } catch { notice = CareerErrors.message(error) }
-        }
     }
 
     /// 复盘生成中或录音转写中。
@@ -437,7 +605,6 @@ struct CareerApplicationDetailView: View {
             return points == points.rounded() ? String(Int(points)) : String(points)
         }
         reviewCost = fixed("interview_review").map { "\($0) 积分" }
-        prepCost = fixed("interview_prep").map { "消耗 \($0) 积分" }
     }
 
     private func retryTranscription(_ session: JSONValue, _ datasetID: String) async {
@@ -490,14 +657,6 @@ struct CareerApplicationDetailView: View {
         } catch { notice = CareerErrors.message(error) }
     }
 
-    private func generatePrep(_ session: JSONValue) async {
-        prepBusy = session.text("id"); defer { prepBusy = nil }
-        do {
-            _ = try await api.careerRequest(path: "/api/interview-sessions/\(session.text("id"))/prep-items:generate", method: "POST", query: [:], body: nil)
-            refreshed = UUID()
-        } catch { notice = CareerErrors.message(error) }
-    }
-
     private func load() async {
         loading = true; error = nil; now = Date()
         do {
@@ -541,6 +700,8 @@ struct CareerDetailMenu: View {
         var danger = false
         var enabled = true
         var colors = false
+        /// 右边的灰字（资料份数）。
+        var trailing: String? = nil
         let action: () -> Void
     }
     static let swatches: [(value: String, label: String, color: Color)] = [
@@ -578,7 +739,9 @@ struct CareerDetailMenu: View {
                     }
                 } else {
                     if item.danger { Rectangle().fill(V3.line).frame(height: 1).padding(.vertical, 4).padding(.horizontal, 6) }
-                    CareerDetailMenuRow(title: item.title, enabled: item.enabled, danger: item.danger, trailing: { EmptyView() }) { close(); item.action() }
+                    CareerDetailMenuRow(title: item.title, enabled: item.enabled, danger: item.danger, trailing: {
+                        if let trailing = item.trailing { Text(trailing).font(V3.sans(12)).foregroundStyle(PD.mute) }
+                    }) { close(); item.action() }
                 }
             }
         }
@@ -610,5 +773,21 @@ private struct CareerDetailMenuRow<Trailing: View>: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain).disabled(!enabled).onHover { hover = $0 }
+    }
+}
+
+/// 投递详情的拖放：只认本地文件，没有能放的那一轮时不亮也不接。
+private struct CareerDetailDrop: DropDelegate {
+    let enabled: Bool
+    @Binding var over: Bool
+    let drop: ([NSItemProvider]) -> Void
+    func validateDrop(info: DropInfo) -> Bool { enabled && info.hasItemsConforming(to: [.fileURL]) }
+    func dropEntered(info: DropInfo) { if validateDrop(info: info) { over = true } }
+    func dropExited(info: DropInfo) { over = false }
+    func performDrop(info: DropInfo) -> Bool {
+        over = false
+        guard validateDrop(info: info) else { return false }
+        drop(info.itemProviders(for: [.fileURL]))
+        return true
     }
 }

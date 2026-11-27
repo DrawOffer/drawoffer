@@ -1,5 +1,6 @@
 import AppKit
 @preconcurrency import AVFoundation
+import CoreAudio
 import DrawOfferCore
 import SwiftUI
 
@@ -288,5 +289,18 @@ final class MicrophoneProbe {
 
     nonisolated static func tap(_ deliver: @escaping @Sendable (Float) -> Void) -> AVAudioNodeTapBlock {
         { buffer, _ in deliver(VoiceRecorder.rms(buffer)) }
+    }
+
+    /// 系统默认输出设备的名字（面试官的声音从这里放出来）；取不到时为 nil。
+    static func outputName() -> String? {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var device = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device) == noErr, device != kAudioObjectUnknown else { return nil }
+        address.mSelector = kAudioObjectPropertyName
+        var name: Unmanaged<CFString>?
+        size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &name) == noErr, let value = name?.takeRetainedValue() else { return nil }
+        return (value as String).nonEmptyValue
     }
 }

@@ -8,10 +8,21 @@ public struct PracticeFocus: Equatable, Hashable, Sendable {
     public let kind: String
     public let ref: String
     public let label: String
-    public init(kind: String, ref: String, label: String) { self.kind = kind; self.ref = ref; self.label = label }
+    /// 练经历（Web `newMockInterviewPath` 的 resume / scope / hook / short）：经历在哪份简历、只练延伸点还是整段、从哪个延伸点开始、趁热练的短版
+    public var resumeID: String?
+    public var scope: String?
+    public var hook: String?
+    public var short = false
+    /// 从哪来（outline / section_hint / assistant），只用于产品指标
+    public var origin: String?
+    public init(kind: String, ref: String, label: String, resumeID: String? = nil, scope: String? = nil, hook: String? = nil, short: Bool = false, origin: String? = nil) {
+        self.kind = kind; self.ref = ref; self.label = label
+        self.resumeID = resumeID; self.scope = scope; self.hook = hook; self.short = short; self.origin = origin
+    }
     init?(_ json: JSONValue?) {
         guard let json, case .object = json, !json.text("ref").isEmpty else { return nil }
         kind = json.text("kind"); ref = json.text("ref"); label = json.text("label")
+        resumeID = json.display("resume_id").nonEmptyValue; hook = json.text("hook").nonEmptyValue
     }
 }
 
