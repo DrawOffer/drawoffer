@@ -21,6 +21,14 @@
 //                  不进文档；同一 source 再发一次即替换，两项都空即清除）
 //                 { type: "marks", marks: [{ key, nodeIds, state: "pending" | "current" | "done" }] }（纸边小圆圈）
 //                 { type: "reveal", nodeIds }（滚到这几行）
+//   智能排版（Web `runAiLayout`，量法与应用都直接用 Web 的 layoutGeometry / layoutApply）：
+//     command { type: "layout-measure", requestId } → 页面 { type: "layout-metrics", requestId, blocks, pages }
+//                  （blocks 为 Web `measureDocumentLayout` 的每段度量：行数、末行占比、末行文字等，原生组请求体）
+//     command { type: "layout-apply", requestId, response } → 按刚才量的度量核验（`verifyAndFilterLayoutPlan`），
+//                  只换上确实少一行的收行与左右排布，一次事务写进纸里（进撤销历史）；排完再量一次页数，
+//                  页面 { type: "layout-applied", requestId, count, total, summary, pagesBefore, pagesAfter, undoable }
+//     command { type: "layout-undo" } → 排版后纸面没再改过才整批撤回；页面 { type: "layout-undo", ok }
+//     排版后纸面又被改过：页面 { type: "layout-undoable", value: false }
 //   rect / paper 是页面视口坐标（CSS px，与原生视图的点一致），已含纸面缩放。
 import "../../web/src/styles.css";
 import "../../web/src/design-system/tokens.css";
@@ -74,6 +82,9 @@ import { deleteOutlineSection, insertOutlineSection, outlineSnapshot, renameOutl
 import { blockIdSelector, pmBlockAnchors } from "../../web/src/features/workbench/blockAnchors";
 import { currentLineText, focusUnitsFromDoc, type FocusUnit } from "../../web/src/features/workbench/sectionFocus/sectionModel";
 import { GuidePaperPreview } from "../../web/src/features/workbench/guide/GuidePaper";
+import { measureDocumentLayout, type BlockLayoutMetric } from "../../web/src/features/workbench/layoutGeometry";
+import { applyLayoutBatch, verifyAndFilterLayoutPlan } from "../../web/src/features/workbench/layoutApply";
+import type { LayoutReviewResponse } from "../../web/src/api/client";
 
 type Payload = {
   resumeId: string;
@@ -97,7 +108,10 @@ type Command =
   | { type: "add"; kind: ResumeSectionKind; title: string }
   | { type: "decorate"; source: string; highlight?: string[]; preview?: LineChange[] }
   | { type: "marks"; marks: PaperMark[] }
-  | { type: "reveal"; nodeIds: string[] };
+  | { type: "reveal"; nodeIds: string[] }
+  | { type: "layout-measure"; requestId: string }
+  | { type: "layout-apply"; requestId: string; response: LayoutReviewResponse }
+  | { type: "layout-undo" };
 
 declare global {
   interface Window {
@@ -465,6 +479,9 @@ function Workbench({ payload, styleOverride, view, dataOverride, templatePreview
   // 原生下发的临时装饰：按来源（改这一条 / 检查简历）分开存，互不覆盖
   const decorSources = useRef(new Map<string, Decor>()).current;
   const [marks, setMarks] = useState<PaperMark[]>([]);
+  // 智能排版：最近一次量出的度量（等接口回来核验用），以及排版刚写进纸时的文档（只有它没再变才能整批撤回）
+  const layoutRef = useRef<{ requestId: string; metrics: BlockLayoutMetric[] } | null>(null);
+  const undoDocRef = useRef<PMNode | null>(null);
 
   const editor = useEditor({
     shouldRerenderOnTransaction: false,
@@ -477,6 +494,10 @@ function Workbench({ payload, styleOverride, view, dataOverride, templatePreview
       reportHistory(current);
     },
     onUpdate: ({ editor: current }) => {
+      if (undoDocRef.current && current.state.doc !== undoDocRef.current) {
+        undoDocRef.current = null;
+        post({ type: "layout-undoable", value: false });
+      }
       report(current);
       reportHistory(current);
       const { from, $from } = current.state.selection;
@@ -568,6 +589,46 @@ function Workbench({ payload, styleOverride, view, dataOverride, templatePreview
         case "reveal": {
           const element = command.nodeIds.map((id) => editor.view.dom.querySelector(blockIdSelector(id))).find(Boolean);
           element?.scrollIntoView({ block: "center", behavior: "smooth" });
+          break;
+        }
+        case "layout-measure": {
+          // 与 Web `rescanLayoutMetrics` 相同：只量正文段落（跳过模块标题），度量留给随后的 layout-apply 核验
+          const metrics = measureDocumentLayout(editor);
+          layoutRef.current = { requestId: command.requestId, metrics };
+          post({ type: "layout-metrics", requestId: command.requestId, blocks: metrics.map(metricPayload), pages: pageCountOf(editor) });
+          break;
+        }
+        case "layout-apply": {
+          const measured = layoutRef.current;
+          if (!measured || measured.requestId !== command.requestId || !command.response) break;
+          layoutRef.current = null;
+          const response = normalizeLayoutResponse(command.response);
+          const verified = verifyAndFilterLayoutPlan(editor, measured.metrics, response);
+          const total = verified.tighten.length + verified.bold.length + verified.split.length;
+          const pagesBefore = pageCountOf(editor);
+          // 稿子 F：排版直接写进纸里（一次事务，⌘Z 或“撤销”一次撤回整批）；精简后没少一行的收行不换
+          const count = total ? applyLayoutBatch(editor, {
+            tighten: verified.tighten.filter((op) => op.effective),
+            bold: verified.bold,
+            split: verified.split,
+          }) : 0;
+          const base = { type: "layout-applied", requestId: command.requestId, count, total, summary: verified.summary ?? "", pagesBefore };
+          if (!count) { post({ ...base, pagesAfter: pagesBefore, undoable: false }); break; }
+          const appliedDoc = editor.state.doc;
+          window.setTimeout(() => {
+            if (editor.isDestroyed) return;
+            // 分页插件重排后再数页；这期间纸面又被改过就不给整批撤回
+            const undoable = editor.state.doc === appliedDoc;
+            undoDocRef.current = undoable ? editor.state.doc : null;
+            post({ ...base, pagesAfter: pageCountOf(editor), undoable });
+          }, 320);
+          break;
+        }
+        case "layout-undo": {
+          const ok = Boolean(undoDocRef.current) && editor.state.doc === undoDocRef.current;
+          undoDocRef.current = null;
+          if (ok) editor.chain().focus().undo().run();
+          post({ type: "layout-undo", ok });
           break;
         }
       }
@@ -738,6 +799,39 @@ function Workbench({ payload, styleOverride, view, dataOverride, templatePreview
       </main>
     </div>
   );
+}
+
+/** 与总页数回报同一来源（Web 规格行“共 N 页”）。 */
+function pageCountOf(editor: Editor) {
+  return Math.max(1, outlineSnapshot(editor.state).pageCount);
+}
+
+/** Web 量出的每段度量，原样交给原生（原生按 Web `runAiLayout` 截断、组请求体）。 */
+function metricPayload(metric: BlockLayoutMetric) {
+  return {
+    node_id: metric.nodeId,
+    section: metric.sectionLabel,
+    section_kind: metric.sectionKind,
+    text: metric.text,
+    is_list_item: metric.isListItem,
+    is_entry_head: metric.isEntryHead,
+    is_in_resume_row: metric.isInResumeRow,
+    has_bold: metric.hasBold,
+    line_count: metric.lineCount,
+    fill_ratio: metric.fillRatio,
+    last_line_text: metric.lastLineText,
+    severity: metric.severity,
+  };
+}
+
+/** 原生转来的接口返回：缺的数组按空处理，免得核验时报错。 */
+function normalizeLayoutResponse(value: Partial<LayoutReviewResponse>): LayoutReviewResponse {
+  return {
+    summary: typeof value.summary === "string" ? value.summary : "",
+    tighten_lines: Array.isArray(value.tighten_lines) ? value.tighten_lines : [],
+    bold_spans: Array.isArray(value.bold_spans) ? value.bold_spans : [],
+    split_rows: Array.isArray(value.split_rows) ? value.split_rows : [],
+  };
 }
 
 let commandSink: ((command: Command) => void) | null = null;

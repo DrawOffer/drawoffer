@@ -3,7 +3,8 @@ import SwiftUI
 
 /// 12 · 安排时间与修改时间（Figma 07 页 84:523，12.01–12.03；Web `progress/ScheduleDialogs.tsx`）：
 /// 和推进弹窗同一套骨架——面包屑「投递 › 安排时间」、衬线标题、备注、一排固定宽度的属性胶囊，
-/// 时间在胶囊下方的浮层里按日历填（12.04 统一日期时间选择器）。时间和别的安排重叠时提示，可以改时间或「仍然保存」。
+/// 时间在胶囊下方的浮层里按日历填（12.04 统一日期时间选择器）。时间撞上本人另一场安排时（409 `INTERVIEW_SCHEDULE_OVERLAP`）
+/// 说清撞上的是哪一场并禁用保存，改了时间才能再保存；不提供「仍然保存」（Web #1560）。
 /// 接口：安排用 `interview-sessions` + `answer-plan`；修改用 `reschedule` 与 `PUT interview-sessions/{id}`。
 struct CareerScheduleSheet: View {
     enum Target {
@@ -39,7 +40,8 @@ struct CareerScheduleSheet: View {
     @State private var note = ""
     @State private var busy = false
     @State private var error: String?
-    @State private var conflict = false
+    /// 服务端说这个时间被另一场占了：提示文案；非空时保存按钮不可点。
+    @State private var conflict: String?
     @State private var requestID = UUID().uuidString.lowercased()
 
     // MARK: 派生
@@ -77,10 +79,10 @@ struct CareerScheduleSheet: View {
                         if note.isEmpty { Text(notePlaceholder).font(V3.sans(14)).foregroundStyle(V3.fnt).allowsHitTesting(false) }
                     }
                     .onChange(of: note) { _, _ in touched() }
-                if conflict {
+                if let conflict {
                     HStack(alignment: .top, spacing: 8) {
                         Circle().fill(V3.orange).frame(width: 5, height: 5).padding(.top, 7)
-                        Text("这个时间和其他安排重叠。可以改时间，或仍然保存。").font(V3.sans(12.5)).foregroundStyle(V3.sub)
+                        Text(conflict).font(V3.sans(12.5)).foregroundStyle(V3.sub).fixedSize(horizontal: false, vertical: true)
                     }.padding(.top, 4).accessibilityElement(children: .combine)
                 }
             }.padding(.horizontal, 25).padding(.top, 23)
@@ -90,8 +92,8 @@ struct CareerScheduleSheet: View {
             HStack(spacing: 10) {
                 Spacer(minLength: 0)
                 Button("取消", action: close).buttonStyle(V3ButtonStyle(kind: .ghost)).disabled(busy).keyboardShortcut(.cancelAction)
-                Button(busy ? "正在保存…" : conflict ? "仍然保存" : submitLabel) { Task { await save() } }
-                    .buttonStyle(V3ButtonStyle(kind: .dark)).disabled(busy || (session != nil && !changed))
+                Button(busy ? "正在保存…" : submitLabel) { Task { await save() } }
+                    .buttonStyle(V3ButtonStyle(kind: .dark)).disabled(busy || conflict != nil || (session != nil && !changed))
             }.padding(.horizontal, 25).padding(.vertical, 15)
         }
         .frame(width: 640, alignment: .leading)
@@ -216,7 +218,7 @@ struct CareerScheduleSheet: View {
     private func binding<Value>(_ source: Binding<Value>) -> Binding<Value> {
         Binding(get: { source.wrappedValue }, set: { source.wrappedValue = $0; touched() })
     }
-    private func touched() { error = nil; conflict = false }
+    private func touched() { error = nil; conflict = nil }
 
     // MARK: 状态
 
@@ -272,15 +274,14 @@ struct CareerScheduleSheet: View {
 
     private func iso(_ date: Date) -> String { ISO8601DateFormatter().string(from: date) }
     private func trimmed(_ text: String) -> JSONValue { text.trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyValue.map(JSONValue.string) ?? .null }
-    private func isConflict(_ error: Error) -> Bool { if case APIError.server(_, "INTERVIEW_TIME_CONFLICT") = error { return true }; return false }
+    private var timeZone: TimeZone { session.flatMap { TimeZone(identifier: $0.text("timezone")) } ?? Beijing.timeZone }
 
     private func save() async {
-        guard !busy else { return }
+        guard !busy, conflict == nil else { return }
         if session != nil { await saveEdit() } else { await saveArrange() }
     }
 
     private func saveArrange() async {
-        let allowConflict = conflict
         if isWindow && deadline == nil { error = "请选择截止时间。"; return }
         if isWindow, let deadline, deadline <= (openAt ?? Date()) { error = "截止时间必须晚于可开始作答时间。"; return }
         if !isWindow && startAt == nil { error = "请选择开始时间。"; return }
@@ -300,15 +301,16 @@ struct CareerScheduleSheet: View {
             "stage_label": .string(label), "start_at": .string(iso(start)), "end_at": .string(iso(end)),
             "schedule_kind": .string(isWindow ? "open_window" : "fixed_slot"), "timezone": .string(Beijing.identifier),
             "mode": .string(written ? "video" : mode), "meeting_url": onsite ? .null : trimmed(link), "location": onsite ? trimmed(link) : .null,
-            "preparation_note": trimmed(note), "allow_conflict": .bool(allowConflict),
+            "preparation_note": trimmed(note),
         ]
         if !written, let name = interviewer.trimmingCharacters(in: .whitespaces).nonEmptyValue { body["interviewer_name"] = .string(name) }
         let created: JSONValue
         do {
             created = try await api.careerRequest(path: "/api/job-applications/\(app.text("id"))/interview-sessions", method: "POST", query: [:], body: .object(body))
         } catch {
-            if isConflict(error) && !allowConflict {
-                requestID = UUID().uuidString.lowercased(); conflict = true
+            if let overlap = ScheduleOverlap.message(error, timeZone: timeZone) {
+                // 这次请求没有建出记录，改时间后用新的请求号重新提交。
+                requestID = UUID().uuidString.lowercased(); conflict = overlap
             } else {
                 if case APIError.server(let status, _) = error, [400, 409, 422].contains(status) { requestID = UUID().uuidString.lowercased() }
                 self.error = CareerErrors.message(error)
@@ -321,14 +323,16 @@ struct CareerScheduleSheet: View {
                     "answer_plan_start_at": .string(iso(planAt)), "answer_plan_end_at": .string(iso(planAt.addingTimeInterval(Double(Int(planMinutes) ?? 60) * 60))),
                     "base_lock_version": session["lock_version"] ?? .number(1),
                 ]))
-            } catch { saved("排期已保存，但作答计划保存失败，可在安排详情中重试。"); return }
+            } catch {
+                saved(ScheduleOverlap.message(error, timeZone: timeZone).map { "排期已保存，作答计划没有保存：\($0)" } ?? "排期已保存，但作答计划保存失败，可在安排详情中重试。")
+                return
+            }
         }
         saved(nil)
     }
 
     private func saveEdit() async {
         guard let session, changed else { return }
-        let allowConflict = conflict
         let valid = readOnlySchedule || (startAt != nil && editedEnd.map { $0 > startAt! } == true && (isWindow || (duration > 0 && duration <= 525_600)))
         if !valid { error = isWindow ? "截止时间必须晚于开放时间。" : "请选择开始时间和时长。"; return }
         busy = true; error = nil
@@ -341,7 +345,7 @@ struct CareerScheduleSheet: View {
             if scheduleChanged && !correctingHistory {
                 let result = try await api.careerRequest(path: "/api/interview-sessions/\(id)/reschedule", method: "POST", query: [:], body: .object([
                     "start_at": .string(iso(startAt!)), "end_at": .string(iso(editedEnd!)), "timezone": timezone,
-                    "allow_conflict": .bool(allowConflict), "base_lock_version": lock,
+                    "base_lock_version": lock,
                 ]))
                 lock = result["session"]?["lock_version"] ?? lock
                 rescheduled = true
@@ -364,7 +368,7 @@ struct CareerScheduleSheet: View {
             }
             saved(nil)
         } catch {
-            if isConflict(error) && !allowConflict { conflict = true } else { self.error = CareerErrors.message(error) }
+            if let overlap = ScheduleOverlap.message(error, timeZone: timeZone) { conflict = overlap } else { self.error = CareerErrors.message(error) }
         }
     }
 }

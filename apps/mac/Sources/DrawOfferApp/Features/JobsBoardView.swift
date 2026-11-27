@@ -20,6 +20,9 @@ struct JobsBoardView: View {
     @Environment(SessionStore.self) private var session
     /// 其他页面（岗位广场）要求打开的求职进程；加载完成后进入详情并清空。
     var openApplication: Binding<String?> = .constant(nil)
+    /// 跟着 `openApplication` 一起来：进详情后直接打开资料页（铃铛里录音传完点「查看」，"" 为全部场次）。
+    var openMaterials: Binding<String?> = .constant(nil)
+    @State private var materialsTarget: String?
     /// 对话预览等处按 id 打开的岗位详情（不经过某条投递卡片）。
     var openJob: Binding<WorkspaceRouter.JobTarget?> = .constant(nil)
     @State private var standaloneJob: WorkspaceRouter.JobTarget?
@@ -73,12 +76,12 @@ struct JobsBoardView: View {
                               back: { self.standaloneJob = nil; refreshing = UUID() }, deleted: { self.standaloneJob = nil; refreshing = UUID() })
                     .id(standaloneJob.id + (standaloneJob.applicationID ?? ""))
             } else if let selected {
-                CareerApplicationDetailView(application: selected, api: session.api, back: { self.selected = nil; refreshing = UUID() }, perform: { kind, app in
+                CareerApplicationDetailView(application: selected, api: session.api, back: { self.selected = nil; materialsTarget = nil; refreshing = UUID() }, perform: { kind, app in
                     action = JobAction(kind: kind, application: app,
                         stage: kind == "apply" ? "screening" : kind == "schedule-current" ? app.stage : CareerStage.nextStages(app).first(where: { $0 == "interview" }) ?? CareerStage.nextStages(app).first ?? "screening",
                         label: kind == "stage" ? Self.roundLabel((app.raw["current_round_no"]?.integer ?? 0) + 1) : app.stageLabel,
                         round: kind == "schedule-current" ? app.raw["current_round_no"]?.integer : nil)
-                }).id(refreshing)
+                }, initialMaterials: materialsTarget).id(refreshing.uuidString + (materialsTarget ?? ""))
             } else {
                 VStack(alignment: .leading, spacing: 0) {
                     // 01 · 岗位看板页头：CAREER · 本周，衬线标题，一行进度；右侧白色「已有面试安排」+ 唯一黑按钮「导入岗位」
@@ -590,7 +593,10 @@ struct JobsBoardView: View {
             } while !cursor.isEmpty
             try Task.checkCancellation()
             applications = result.map { $0.includingSessions(arrangements) }; sessions = arrangements; overview = metrics
-            if let target = openApplication.wrappedValue { selected = applications.first { $0.id == target }; openApplication.wrappedValue = nil }
+            if let target = openApplication.wrappedValue {
+                selected = applications.first { $0.id == target }; openApplication.wrappedValue = nil
+                materialsTarget = selected == nil ? nil : openMaterials.wrappedValue; openMaterials.wrappedValue = nil
+            }
             if let target = openJob.wrappedValue { selected = nil; standaloneJob = target; openJob.wrappedValue = nil }
             if let target = pendingOpen { pendingOpen = nil; if let app = applications.first(where: { $0.id == target }) { selected = app } }
         } catch is CancellationError { return }
@@ -672,7 +678,6 @@ struct CareerForm: View {
     @State private var ocStartText = ""
     @State private var ocNote = ""
     @State private var reuseCurrentStage = false
-    @State private var allowConflict = false
     @State private var interviewMode = "video"
     @State private var start = Date()
     @State private var end = Date().addingTimeInterval(3600)
@@ -784,7 +789,7 @@ struct CareerForm: View {
                                 if stage == "interview" && !isHR { roundFields }
                                 CareerStageScheduleFields(stage: stage, isHR: isHR, window: $window, startSet: $slotSet, start: $start, endSet: $deadlineSet, end: $end, duration: $duration,
                                     planSet: $planSet, planStart: $planStart, planDuration: $planDuration, mode: $interviewMode, link: $meeting,
-                                    interviewer: $interviewer, note: $prepNote, allowConflict: $allowConflict, hasError: error != nil)
+                                    interviewer: $interviewer, note: $prepNote)
                             }
                             if staged { Text("阶段已保存，剩余排期或 Offer 信息尚待确认。重试将复用原请求。").font(V3.sans(12)).foregroundStyle(V3.orange).padding(.top, 16) }
                         }
@@ -1345,7 +1350,6 @@ struct CareerForm: View {
                             "round_no": stage == "interview" && !isHR ? .number(Double(round)) : .null,
                             "start_at": .string(formatter.string(from: begin)), "end_at": .string(formatter.string(from: finish)),
                             "schedule_kind": .string(isWindow ? "open_window" : "fixed_slot"), "timezone": .string(Beijing.identifier), "mode": .string(mode),
-                            "allow_conflict": .bool(allowConflict),
                             "meeting_url": ["video", "phone"].contains(mode) && !place.isEmpty ? .string(place) : .null,
                             "location": ["onsite", "other"].contains(mode) && !place.isEmpty ? .string(place) : .null,
                             "preparation_note": note.isEmpty ? .null : .string(note)]
@@ -1386,11 +1390,16 @@ struct CareerForm: View {
             }
             completed()
         } catch {
+            // 时间撞上另一场（409 INTERVIEW_SCHEDULE_OVERLAP）与其他 4xx 一样解冻，改了时间再提交。
+            if error is ScheduleOverlapError {
+                if !savedSession { frozenSession = nil }; frozenOffer = nil
+            }
             if case APIError.server(let status, let code) = error, [400, 422, 409].contains(status), code != "INTERVIEW_EDIT_CONFLICT" {
                 if !staged { frozenStage = nil }; if !savedSession { frozenSession = nil }; frozenOffer = nil
             }
             if creating {
-                if case APIError.server(let status, _) = error, (400..<500).contains(status) { creationUnknown = false }
+                if error is ScheduleOverlapError { creationUnknown = false }
+                else if case APIError.server(let status, _) = error, (400..<500).contains(status) { creationUnknown = false }
                 else { creationUnknown = true }
             }
             self.error = creationUnknown ? "创建结果尚未确认。请关闭后刷新岗位列表确认，避免重复创建。" : explain(error)
@@ -1400,6 +1409,7 @@ struct CareerForm: View {
     private func explain(_ error: Error) -> String {
         if error is CancellationError { return "操作已取消。" }
         if case APIError.unauthorized = error { return "登录已失效，请关闭并重新登录。" }
+        if let overlap = ScheduleOverlap.message(error) { return overlap }
         if case APIError.server(let status, let code) = error {
             if status == 409 { return "服务端状态发生变化或操作冲突（\(code)）。请刷新后重试；已保存步骤不会回滚。" }
             if status == 403 { return "当前服务尚未开放桌面岗位权限，请更新服务端后重试。" }

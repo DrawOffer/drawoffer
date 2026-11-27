@@ -3,6 +3,14 @@ import Foundation
 /// App 注入真实 HTTP 客户端；Mock 仅用于离线测试。
 public protocol APIClient: Sendable {
     func uploadDataset(_ upload: DatasetUpload) async throws -> JSONValue
+    /// 同上，带进度（已发送字节、总字节）；超过 4 MiB 走分片通道。
+    func uploadDataset(_ upload: DatasetUpload, progress: @escaping @Sendable (Int64, Int64) -> Void) async throws -> JSONValue
+    /// 公共上传通道 `/api/uploads`：开始、查询、传一片、完成、取消（后台录音上传用）。
+    func startPieceUpload(_ start: PieceUploadStart, key: String) async throws -> PieceUploadState
+    func pieceUploadState(_ id: String) async throws -> PieceUploadState
+    func putPiece(_ id: String, index: Int, data: Data, progress: @escaping @Sendable (Int64) -> Void) async throws
+    func completePieceUpload(_ id: String) async throws -> PieceUploadState
+    func cancelPieceUpload(_ id: String) async throws
     func downloadDataset(id: String, limit: Int64) async throws -> DatasetFile
     func careerRequest(path: String, method: String, query: [String: String], body: JSONValue?) async throws -> JSONValue
     func currentUser() async throws -> User?
@@ -63,6 +71,12 @@ extension APIClient {
     public func purgeCache() async {}
     public func streamEvents(onEvent: @escaping @Sendable (UserEvent) async -> Void) async throws { throw APIError.server(status: 404, code: "NOT_FOUND") }
     public func uploadDataset(_ upload: DatasetUpload) async throws -> JSONValue { throw APIError.unauthorized }
+    public func uploadDataset(_ upload: DatasetUpload, progress: @escaping @Sendable (Int64, Int64) -> Void) async throws -> JSONValue { try await uploadDataset(upload) }
+    public func startPieceUpload(_ start: PieceUploadStart, key: String) async throws -> PieceUploadState { throw APIError.unauthorized }
+    public func pieceUploadState(_ id: String) async throws -> PieceUploadState { throw APIError.unauthorized }
+    public func putPiece(_ id: String, index: Int, data: Data, progress: @escaping @Sendable (Int64) -> Void) async throws { throw APIError.unauthorized }
+    public func completePieceUpload(_ id: String) async throws -> PieceUploadState { throw APIError.unauthorized }
+    public func cancelPieceUpload(_ id: String) async throws { throw APIError.unauthorized }
     public func downloadDataset(id: String, limit: Int64) async throws -> DatasetFile { throw APIError.unauthorized }
     public func careerRequest(path: String, method: String = "GET", query: [String: String] = [:], body: JSONValue? = nil) async throws -> JSONValue { throw APIError.unauthorized }
     public func listResumes() async throws -> [ResumeSummary] { throw APIError.unauthorized }
@@ -82,4 +96,15 @@ extension APIClient {
 public enum UserEvent: Sendable, Equatable {
     case ready
     case change(topic: String, ref: String?)
+}
+
+/// 把分片发送接到带登录态的客户端上：每个请求各自走一遍刷新与重试登录。
+public struct APIPieceTransport: PieceTransport {
+    public let api: any APIClient
+    public init(api: any APIClient) { self.api = api }
+    public func state(_ id: String) async throws -> PieceUploadState { try await api.pieceUploadState(id) }
+    public func put(_ id: String, index: Int, data: Data, progress: @escaping @Sendable (Int64) -> Void) async throws {
+        try await api.putPiece(id, index: index, data: data, progress: progress)
+    }
+    public func complete(_ id: String) async throws -> PieceUploadState { try await api.completePieceUpload(id) }
 }

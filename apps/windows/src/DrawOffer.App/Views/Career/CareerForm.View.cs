@@ -111,8 +111,7 @@ public sealed partial class CareerForm
                 stack.Children.Add(new CareerStageScheduleFields(_stage, IsHR, _window, v => { _window = v; Render(); }, _slotSet, v => { _slotSet = v; Render(); }, _start, v => { _start = v; Render(); },
                     _deadlineSet, v => { _deadlineSet = v; Render(); }, _end, v => { _end = v; Render(); }, _duration, v => { _duration = v; Render(); },
                     _planSet, v => { _planSet = v; Render(); }, _planStart, v => { _planStart = v; Render(); }, _planDuration, v => { _planDuration = v; Render(); },
-                    _interviewMode, v => _interviewMode = v, _meeting, v => _meeting = v, _interviewer, v => _interviewer = v, _prepNote, v => { _prepNote = v; RenderSummaryOnly(); },
-                    _allowConflict, v => _allowConflict = v, _error is not null));
+                    _interviewMode, v => _interviewMode = v, _meeting, v => _meeting = v, _interviewer, v => _interviewer = v, _prepNote, v => { _prepNote = v; RenderSummaryOnly(); }));
             }
             if (_staged) stack.Children.Add(Sans("阶段已保存，剩余排期或 Offer 信息尚待确认。重试将复用原请求。", 12, V3.Orange).Wrap().Top(16));
             yield return stack;

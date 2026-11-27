@@ -150,7 +150,6 @@ public sealed partial class CareerForm
                     ["round_no"] = _stage == "interview" && !IsHR ? _round : null,
                     ["start_at"] = Iso(begin), ["end_at"] = Iso(finish),
                     ["schedule_kind"] = IsWindow ? "open_window" : "fixed_slot", ["timezone"] = JobsBoardView.TimeZoneId(), ["mode"] = mode,
-                    ["allow_conflict"] = _allowConflict,
                     ["meeting_url"] = mode is "video" or "phone" && place.Length > 0 ? place : null,
                     ["location"] = mode is "onsite" or "other" && place.Length > 0 ? place : null,
                     ["preparation_note"] = note.Length == 0 ? null : note,

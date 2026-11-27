@@ -51,6 +51,12 @@ public enum ResumeEditorCommand: Sendable {
     case marks([PaperMark])
     /// 滚到这几行（放在屏幕中间）。
     case reveal([String])
+    /// 智能排版：量纸上每段的行数与末行（页面回 `layoutMetrics`）。
+    case layoutMeasure(requestID: String)
+    /// 把 `review:layout` 的返回交给页面核验并写进纸里（页面回 `layoutApplied`）。
+    case layoutApply(requestID: String, response: JSONValue)
+    /// 排版后纸面没再改过时整批撤回（页面回 `layoutUndo`）。
+    case layoutUndo
 
     var json: JSONValue {
         switch self {
@@ -71,6 +77,10 @@ public enum ResumeEditorCommand: Sendable {
                 .object(["key": .string($0.key), "nodeIds": .array($0.nodeIDs.map(JSONValue.string)), "state": .string($0.state.rawValue)])
             })])
         case .reveal(let ids): return .object(["type": .string("reveal"), "nodeIds": .array(ids.map(JSONValue.string))])
+        case .layoutMeasure(let id): return .object(["type": .string("layout-measure"), "requestId": .string(id)])
+        case .layoutApply(let id, let response):
+            return .object(["type": .string("layout-apply"), "requestId": .string(id), "response": response])
+        case .layoutUndo: return .object(["type": .string("layout-undo")])
         }
     }
 }
@@ -91,6 +101,24 @@ public enum ResumeEditorEvent: Sendable {
     case pages(Int)
     /// 点了纸边的小圆圈。
     case mark(String)
+    /// 智能排版：每段度量（Web `measureDocumentLayout`，字段同 `review:layout` 的 blocks，未截断）与当时的页数。
+    case layoutMetrics(requestID: String, blocks: [JSONValue], pages: Int)
+    /// 智能排版写进纸里了：`total` 条建议里换上了 `applied` 处；`undoable` 表示可以整批撤回。
+    case layoutApplied(LayoutApplied)
+    /// 整批撤回的结果（false：排版后纸面又改过，没撤）。
+    case layoutUndo(Bool)
+    /// 排版后纸面又被改过，不能再整批撤回。
+    case layoutUndoExpired
+}
+
+public struct LayoutApplied: Equatable, Sendable {
+    public let requestID: String
+    public let total: Int
+    public let applied: Int
+    public let summary: String
+    public let pagesBefore: Int
+    public let pagesAfter: Int
+    public let undoable: Bool
 }
 
 /// 把指令排进纸面：编辑器视图持有它，页面 ready 后才真正执行。
@@ -235,6 +263,18 @@ public final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationD
                 if let count = (body["count"] as? NSNumber)?.intValue, count > 0 { onEvent(.pages(count)) }
             case "mark":
                 if let key = body["key"] as? String { onEvent(.mark(key)) }
+            case "layout-metrics":
+                guard let id = body["requestId"] as? String, case .array(let blocks)? = Self.json(body["blocks"]) else { return }
+                onEvent(.layoutMetrics(requestID: id, blocks: blocks, pages: (body["pages"] as? NSNumber)?.intValue ?? 1))
+            case "layout-applied":
+                guard let id = body["requestId"] as? String else { return }
+                let int = { (key: String) in (body[key] as? NSNumber)?.intValue ?? 0 }
+                onEvent(.layoutApplied(LayoutApplied(requestID: id, total: int("total"), applied: int("count"), summary: body["summary"] as? String ?? "",
+                                                     pagesBefore: int("pagesBefore"), pagesAfter: int("pagesAfter"), undoable: body["undoable"] as? Bool ?? false)))
+            case "layout-undo":
+                onEvent(.layoutUndo(body["ok"] as? Bool ?? false))
+            case "layout-undoable":
+                if body["value"] as? Bool == false { onEvent(.layoutUndoExpired) }
             default: break
             }
         }

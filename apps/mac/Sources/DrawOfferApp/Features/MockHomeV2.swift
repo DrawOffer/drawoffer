@@ -9,6 +9,8 @@ import SwiftUI
 struct MockHomeV2: View {
     @Environment(SessionStore.self) private var session
     @Environment(WorkspaceRouter.self) private var router: WorkspaceRouter?
+    /// 后台导入推进了一步就重读（Web `subscribeMockInterviews`）。
+    @Environment(RecordImports.self) private var recordImports: RecordImports?
     /// 从别处带进来直接开始：打开确认弹窗，关掉后清空
     @Binding var request: MockStartRequest?
     let open: (String) -> Void
@@ -83,6 +85,7 @@ struct MockHomeV2: View {
         .background(.white)
         .overlay { MockNoticeToast(notice: $notice) }
         .task(id: "\(account):\(tick)") { await load() }
+        .onChange(of: recordImports?.changed) { _, _ in tick += 1 }
         .task(id: extraKey) { await loadExtra() }
         .task(id: evaluating?.text("status") == "evaluating" ? evaluating?.text("id") ?? "" : "") {
             // 评估中：5 秒起逐步放慢到 30 秒刷新一次，好了提示一下
@@ -114,7 +117,7 @@ struct MockHomeV2: View {
         .centeredPanel(item: $importing) { _ in
             MockImportDialog(close: { importing = nil }, done: {
                 importing = nil
-                notice = MockNotice(kind: .queued, title: "已开始生成复盘", message: "好了会出现在这里，也会记进长期记忆")
+                // Web `onDone`：关弹窗、重读；进度在铃铛里，页面不再弹提示
                 tick += 1
             })
         }

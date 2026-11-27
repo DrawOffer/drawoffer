@@ -201,6 +201,10 @@ struct InterviewScheduleView: View {
         detail = interviews.first { $0.id == item.id } ?? item
     }
     private func move(_ item: ScheduledInterview, kind: String, start: Date, end: Date) {
+        // 拖动改期前先按已加载的安排判断，撞上了直接提示、不动卡片；最终仍以服务端校验为准（Web `findOccupiedSlot`）。
+        if let occupied = ScheduleOverlap.find(interviews, moving: item.id, start: start, end: end) {
+            notice = .attention(ScheduleOverlap.describe(occupied)); return
+        }
         action = ScheduleAction(kind: kind, interview: item, start: start, end: end)
     }
     /// Web `INTERVIEW_CALENDAR_COLORS`; a third interview round without a colour shows purple,
@@ -574,7 +578,6 @@ private struct ScheduleSessionForm: View {
     @State private var review = ""
     @State private var improvement = ""
     @State private var removePlan = false
-    @State private var allowConflict = false
     @State private var busy = false
     @State private var failure: String?
     @State private var frozen: JSONValue?
@@ -618,11 +621,8 @@ private struct ScheduleSessionForm: View {
                                 DatePicker("开始时间", selection: $start).disabled(frozen != nil)
                                 DatePicker("结束时间", selection: $end).disabled(frozen != nil)
                             }
-                            if kind == "reschedule" {
-                                let conflicts = ScheduleCalendar.conflicts(interviews, excluding: item.id, start: start, end: end)
-                                if !conflicts.isEmpty { Text("与 \(conflicts.count) 场安排重叠，请确认时间。").foregroundStyle(.orange); ForEach(conflicts) { Text($0.caption).font(.system(size: 12)) } }
-                                Toggle("确认仍保存有时间冲突的安排", isOn: $allowConflict).disabled(frozen != nil)
-                            }
+                            // 同一时间只能参加一场：撞上已加载的另一场时说清是哪一场，改了时间才能保存。
+                            if let occupied { Text(ScheduleOverlap.describe(occupied)).font(.system(size: 13)).foregroundStyle(.orange) }
                         } else if kind == "edit" {
                             Picker("面试方式", selection: $mode) { Text("视频").tag("video"); Text("现场").tag("onsite"); Text("电话").tag("phone"); Text("其他").tag("other") }
                             field("会议或作答链接", $meeting); field("地点", $location)
@@ -640,7 +640,7 @@ private struct ScheduleSessionForm: View {
                 if kind != "detail" && action.kind == "detail" { Button("返回详情") { kind = "detail"; frozen = nil }.buttonStyle(CareerActionStyle(kind: .text)).disabled(busy) }
                 Spacer()
                 Button("取消", action: close).buttonStyle(V3ButtonStyle(kind: .ghost, height: 36)).disabled(busy)
-                if kind != "detail" { Button(busy ? "保存中…" : "确认保存") { Task { await save() } }.buttonStyle(V3ButtonStyle(kind: .dark, height: 36)).disabled(busy || item == nil) }
+                if kind != "detail" { Button(busy ? "保存中…" : "确认保存") { Task { await save() } }.buttonStyle(V3ButtonStyle(kind: .dark, height: 36)).disabled(busy || item == nil || occupied != nil) }
             }.padding(.horizontal, 28).frame(height: 76).overlay(alignment: .top) { Rectangle().fill(V3.line).frame(height: 1) }
         }.interactiveDismissDisabled(busy).task {
             item = nil; kind = action.kind; start = action.start; end = action.end; busy = true
@@ -652,6 +652,11 @@ private struct ScheduleSessionForm: View {
             } catch { failure = explain(error) }
             busy = false
         }
+    }
+    /// 改期或设作答计划时，新时间段撞上的另一场（清除作答计划不占时间）。
+    private var occupied: OccupiedSlot? {
+        guard let item, ["reschedule", "answer-plan"].contains(kind), !removePlan, end > start else { return nil }
+        return ScheduleOverlap.find(interviews, moving: item.id, start: start, end: end)
     }
     private func display(_ date: Date) -> String { let f = Beijing.formatter(); f.dateFormat = "M月d日 HH:mm"; return f.string(from: date) }
     private func field(_ label: String, _ value: Binding<String>) -> some View { VStack(alignment: .leading, spacing: 6) { Text(label).font(.system(size: 12)); TextField(label, text: value, axis: .vertical).lineLimit(2...6).textFieldStyle(.roundedBorder) }.disabled(frozen != nil) }
@@ -668,7 +673,7 @@ private struct ScheduleSessionForm: View {
         fill()
     }
     private func save() async {
-        guard let item, item.editable, !busy else { return }
+        guard let item, item.editable, !busy, occupied == nil else { return }
         if ["reschedule", "answer-plan"].contains(kind) && !removePlan && end <= start { failure = "结束时间须晚于开始时间。"; return }
         if kind == "answer-plan" && !removePlan && (start < item.start || end > item.end) { failure = "个人作答计划必须位于开放窗口内。"; return }
         busy = true; failure = nil
@@ -678,7 +683,7 @@ private struct ScheduleSessionForm: View {
                 let f = ISO8601DateFormatter()
                 switch kind {
                 case "reschedule":
-                    body["start_at"] = .string(f.string(from: start)); body["end_at"] = .string(f.string(from: end)); body["timezone"] = .string(Beijing.identifier); body["allow_conflict"] = .bool(allowConflict)
+                    body["start_at"] = .string(f.string(from: start)); body["end_at"] = .string(f.string(from: end)); body["timezone"] = .string(Beijing.identifier)
                 case "answer-plan":
                     body["answer_plan_start_at"] = removePlan ? .null : .string(f.string(from: start)); body["answer_plan_end_at"] = removePlan ? .null : .string(f.string(from: end))
                 case "complete":
@@ -696,12 +701,14 @@ private struct ScheduleSessionForm: View {
             completed()
         } catch {
             if case APIError.server(let status, let code) = error, [400, 422, 409].contains(status), code != "INTERVIEW_EDIT_CONFLICT" { frozen = nil }
+            if error is ScheduleOverlapError { frozen = nil }
             failure = explain(error)
         }
         busy = false
     }
     private func explain(_ error: Error) -> String {
         if case APIError.unauthorized = error { return "登录已失效，请重新登录。"}
+        if let overlap = ScheduleOverlap.message(error) { return overlap }
         if case APIError.server(let status, let code) = error {
             if status == 409 { return "时间或版本冲突（\(code)）。请确认时间；若记录已变化，请关闭并刷新。" }
             return "保存失败（\(code)），输入已保留。"

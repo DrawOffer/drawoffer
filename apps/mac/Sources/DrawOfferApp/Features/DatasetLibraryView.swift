@@ -1057,7 +1057,14 @@ struct DatasetLibraryView: View {
         for id in queue.filter({["selected","unknown","rejected"].contains($0.status)}).map(\.id) {
             guard let index = queue.firstIndex(where:{$0.id==id}), owner == account, !Task.isCancelled else { break }
             let upload = queue[index].upload; queue[index].status = "uploading"; queue[index].message = "正在上传…"
-            do { _ = try await session.api.uploadDataset(upload); guard active, owner == account else { break }; if let index = queue.firstIndex(where:{$0.id==id}) { queue[index].status = "accepted"; queue[index].message = "服务器已接受"; upload.discard() } }
+            do {
+                // 超过 4 MB 分片上传（同时 3 片、断点续传），进度写在这一行的状态里
+                _ = try await session.api.uploadDataset(upload) { sent, total in
+                    guard total > 0 else { return }
+                    let percent = min(99, Int(Double(sent) / Double(total) * 100))
+                    Task { @MainActor in if let index = queue.firstIndex(where: { $0.id == id }), queue[index].status == "uploading" { queue[index].message = "正在上传… \(percent)%" } }
+                }
+                guard active, owner == account else { break }; if let index = queue.firstIndex(where:{$0.id==id}) { queue[index].status = "accepted"; queue[index].message = "服务器已接受"; upload.discard() } }
             catch { guard active, owner == account, let index = queue.firstIndex(where:{$0.id==id}) else { break }; if case APIError.server(let status,let code) = error, (400..<500).contains(status) { queue[index].status = code.contains("CONFLICT") ? "conflict":"rejected"; queue[index].upload = upload.rekey(); queue[index].message = explain(error) } else { queue[index].status = "unknown"; queue[index].message = "结果尚未确认；重试沿用原标识。" } }
         }
         if owner == account {

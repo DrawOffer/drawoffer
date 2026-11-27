@@ -10,6 +10,11 @@ private final class RedirectBlocker: NSObject, URLSessionTaskDelegate, Sendable 
 protocol DesktopRequesting: Sendable {
     func uploadDataset(_ upload: DatasetUpload, access: String?) async throws -> JSONValue
     func uploadAgentAttachment(_ upload: AgentAttachmentUpload, access: String?) async throws -> JSONValue
+    func startPieceUpload(_ start: PieceUploadStart, key: String, access: String?) async throws -> PieceUploadState
+    func pieceUploadState(_ id: String, access: String?) async throws -> PieceUploadState
+    func putPiece(_ id: String, index: Int, data: Data, access: String?, progress: @escaping @Sendable (Int64) -> Void) async throws
+    func completePieceUpload(_ id: String, access: String?) async throws -> PieceUploadState
+    func cancelPieceUpload(_ id: String, access: String?) async throws
     func downloadDataset(id: String, to: URL, limit: Int64, access: String?) async throws
     var origin: URL { get }
     func downloadImage(path: String, limit: Int, access: String?) async throws -> DesktopImage
@@ -28,6 +33,11 @@ protocol DesktopRequesting: Sendable {
 extension DesktopRequesting {
     func uploadDataset(_ upload: DatasetUpload, access: String?) async throws -> JSONValue { throw APIError.invalidResponse }
     func uploadAgentAttachment(_ upload: AgentAttachmentUpload, access: String?) async throws -> JSONValue { throw APIError.invalidResponse }
+    func startPieceUpload(_ start: PieceUploadStart, key: String, access: String?) async throws -> PieceUploadState { throw APIError.invalidResponse }
+    func pieceUploadState(_ id: String, access: String?) async throws -> PieceUploadState { throw APIError.invalidResponse }
+    func putPiece(_ id: String, index: Int, data: Data, access: String?, progress: @escaping @Sendable (Int64) -> Void) async throws { throw APIError.invalidResponse }
+    func completePieceUpload(_ id: String, access: String?) async throws -> PieceUploadState { throw APIError.invalidResponse }
+    func cancelPieceUpload(_ id: String, access: String?) async throws { throw APIError.invalidResponse }
     func downloadDataset(id: String, to: URL, limit: Int64, access: String?) async throws { throw APIError.invalidResponse }
     func career(path: String, method: String, query: [String: String], body: JSONValue?, access: String?) async throws -> JSONValue { throw APIError.invalidResponse }
     func downloadImage(path: String, limit: Int, access: String?) async throws -> DesktopImage { throw APIError.invalidResponse }
@@ -329,7 +339,10 @@ final class DesktopTransport: DesktopRequesting {
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         if http.statusCode == 401 { throw APIError.unauthorized }
         guard (200..<300).contains(http.statusCode) else {
-            let code = (try? JSONDecoder().decode(JSONValue.self, from: data))?["error"]?.stringValue
+            let failure = try? JSONDecoder().decode(JSONValue.self, from: data)
+            // 排期撞上本人另一场安排：带回被占用的那一场，界面据此说清是哪家哪一轮（Web `scheduleOverlapMessage`）。
+            if let overlap = ScheduleOverlapError(status: http.statusCode, body: failure) { throw overlap }
+            let code = failure?["error"]?.stringValue
             throw APIError.server(status: http.statusCode, code: code ?? "HTTP_\(http.statusCode)")
         }
         if http.mimeType == "text/event-stream", path.hasPrefix("/api/mock-interviews/") { return try MockInterviewRequest.decodeEvents(data) }
@@ -452,7 +465,20 @@ public struct HTTPAPIClient: APIClient {
     init(coordinator: SessionCoordinator) { self.coordinator = coordinator }
 
     public func preparePaper(_ request: ResumeRenderRequest) async throws -> PaperPreparation { try await coordinator.preparePaper(request) }
-    public func uploadDataset(_ upload: DatasetUpload) async throws -> JSONValue { try await coordinator.uploadDataset(upload) }
+    /// 所有资料库、替换与场次素材上传都从这里走：超过 4 MiB 自动分片（Web 同样规则）。
+    public func uploadDataset(_ upload: DatasetUpload) async throws -> JSONValue { try await uploadDataset(upload, progress: { _, _ in }) }
+    /// 录音先按 Web `uploadDataset` / `uploadInterviewAsset` 的规则压成 m4a（压不了或压不小就传原文件），压缩在会话 actor 外面做；
+    /// 传完（成功或失败）删掉压缩出来的文件，快照本身仍由调用方 `discard`。
+    public func uploadDataset(_ upload: DatasetUpload, progress: @escaping @Sendable (Int64, Int64) -> Void) async throws -> JSONValue {
+        let prepared = try await upload.compressingAudio()
+        defer { prepared.dropCompressed(from: upload) }
+        return try await coordinator.uploadDataset(prepared, progress: progress)
+    }
+    public func startPieceUpload(_ start: PieceUploadStart, key: String) async throws -> PieceUploadState { try await coordinator.startPieceUpload(start, key: key) }
+    public func pieceUploadState(_ id: String) async throws -> PieceUploadState { try await coordinator.pieceUploadState(id) }
+    public func putPiece(_ id: String, index: Int, data: Data, progress: @escaping @Sendable (Int64) -> Void) async throws { try await coordinator.putPiece(id, index: index, data: data, progress: progress) }
+    public func completePieceUpload(_ id: String) async throws -> PieceUploadState { try await coordinator.completePieceUpload(id) }
+    public func cancelPieceUpload(_ id: String) async throws { try await coordinator.cancelPieceUpload(id) }
     public func downloadDataset(id: String, limit: Int64) async throws -> DatasetFile { try await coordinator.downloadDataset(id: id, limit: limit) }
     public func careerRequest(path: String, method: String, query: [String: String], body: JSONValue?) async throws -> JSONValue { try await coordinator.careerRequest(path: path, method: method, query: query, body: body) }
     public func uploadAgentAttachment(_ upload: AgentAttachmentUpload) async throws -> JSONValue { try await coordinator.uploadAgentAttachment(upload) }

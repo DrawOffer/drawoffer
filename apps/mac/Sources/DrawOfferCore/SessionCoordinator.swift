@@ -334,6 +334,49 @@ public actor SessionCoordinator {
         purgeCache(afterWriteTo: "/api/datasets"); defer { purgeCache(afterWriteTo: "/api/datasets") }
         return try await authorized { access in try await transport.uploadDataset(upload, access: access) }
     }
+    /// 带进度的资料上传（Web `uploadDataset` / `replaceDataset` / `uploadInterviewAsset`）：超过 4 MiB 走公共上传通道，
+    /// 同时发 3 片、断了按服务端记录补缺片；小文件仍是一次 multipart。取消或遇到重试也不会好的错误时通知服务端丢掉已传的分片。
+    public func uploadDataset(_ upload: DatasetUpload, progress: @escaping @Sendable (Int64, Int64) -> Void) async throws -> JSONValue {
+        let size = Int64(try upload.file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
+        guard PieceUpload.chunked(size: size) else {
+            let result = try await uploadDataset(upload); progress(size, size); return result
+        }
+        guard size <= upload.limit else { throw APIError.invalidResponse }
+        purgeCache(afterWriteTo: "/api/datasets"); defer { purgeCache(afterWriteTo: "/api/datasets") }
+        let started = try await startPieceUpload(try PieceUploadStart.from(upload, size: size), key: upload.id)
+        do {
+            let state = try await PieceSender.send(CoordinatorPieces(coordinator: self), id: started.id, file: upload.file, size: size,
+                                                   events: PieceEvents(progress: progress))
+            guard let result = state.result else { throw APIError.invalidResponse }
+            return result
+        } catch {
+            if PieceUpload.cancelled(error) || PieceUpload.isFinal(error) {
+                Task { try? await self.cancelPieceUpload(started.id) }
+            }
+            throw error
+        }
+    }
+    public func startPieceUpload(_ start: PieceUploadStart, key: String) async throws -> PieceUploadState {
+        let transport = self.transport
+        return try await authorized { access in try await transport.startPieceUpload(start, key: key, access: access) }
+    }
+    public func pieceUploadState(_ id: String) async throws -> PieceUploadState {
+        let transport = self.transport
+        return try await authorized { access in try await transport.pieceUploadState(id, access: access) }
+    }
+    public func putPiece(_ id: String, index: Int, data: Data, progress: @escaping @Sendable (Int64) -> Void) async throws {
+        let transport = self.transport
+        try await authorized { access in try await transport.putPiece(id, index: index, data: data, access: access, progress: progress) }
+    }
+    public func completePieceUpload(_ id: String) async throws -> PieceUploadState {
+        let transport = self.transport
+        purgeCache(afterWriteTo: "/api/datasets"); defer { purgeCache(afterWriteTo: "/api/datasets") }
+        return try await authorized { access in try await transport.completePieceUpload(id, access: access) }
+    }
+    public func cancelPieceUpload(_ id: String) async throws {
+        let transport = self.transport
+        try await authorized { access in try await transport.cancelPieceUpload(id, access: access) }
+    }
     public func downloadDataset(id: String, limit: Int64) async throws -> DatasetFile {
         let directory = try DatasetUpload.privateDirectory(), target = directory.appendingPathComponent("source")
         let transport = self.transport
@@ -650,4 +693,14 @@ private enum SharedRead {
             }
         } onCancel: { once.finish(.failure(CancellationError())) }
     }
+}
+
+/// 分片发送时每个请求都回到会话协调器，拿当前的访问令牌。
+private struct CoordinatorPieces: PieceTransport {
+    let coordinator: SessionCoordinator
+    func state(_ id: String) async throws -> PieceUploadState { try await coordinator.pieceUploadState(id) }
+    func put(_ id: String, index: Int, data: Data, progress: @escaping @Sendable (Int64) -> Void) async throws {
+        try await coordinator.putPiece(id, index: index, data: data, progress: progress)
+    }
+    func complete(_ id: String) async throws -> PieceUploadState { try await coordinator.completePieceUpload(id) }
 }

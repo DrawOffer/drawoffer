@@ -25,6 +25,8 @@ struct CareerApplicationDetailView: View {
     var libraryMaterials = false
     /// 资料库里的求职进程页：点开资料进资料预览页。
     var openDataset: ((String) -> Void)? = nil
+    /// 一进来就打开资料页（铃铛里录音传完点「查看」，Web `careerMaterialsPath`）：场次 id，"" 为全部场次。
+    var initialMaterials: String? = nil
     private enum Route: Equatable { case stage(String), report(String, fromStage: Bool), job(String), materials(String?), record(String, paste: Bool, fromMaterials: String?), written(String) }
     @State private var route: Route?
     /// 从投递详情选好的文件：带进资料页，直接进底部浮层（07.02）。
@@ -69,6 +71,13 @@ struct CareerApplicationDetailView: View {
     private var active: Bool { raw.text("lifecycle_status") != "terminated" && raw.text("status") == "active" && raw.text("archived_at").isEmpty }
 
     var body: some View {
+        Group { page }
+            .onAppear {
+                if route == nil, let initialMaterials { route = .materials(initialMaterials.isEmpty ? nil : initialMaterials) }
+            }
+    }
+
+    @ViewBuilder private var page: some View {
         switch route ?? (libraryMaterials ? .materials(nil) : nil) {
         case .stage(let id):
             CareerStageDetailView(sessionID: id, api: api, back: { route = nil; refreshed = UUID() }, openReport: { route = .report(id, fromStage: true) })
@@ -451,8 +460,8 @@ struct CareerApplicationDetailView: View {
     private var matchKey: String {
         let state = shownState
         guard needsMatch(state.deck, shown: state.shown, viewing: state.viewing), let resumeID else { return "" }
-        // 回看筛选也画投的那份简历（07N · 07 稿；Web 目前只在投递这一步取简历正文，取不到时画空白简历）
-        let doc = state.shown.kind == .apply || (state.viewing && state.shown.kind == .screening)
+        // 与 Web ProgressDeckPage needsDoc 一致：只在投递这一步取简历正文，筛选沿用已取到的那份，没有就画空白简历
+        let doc = state.shown.kind == .apply
         return [raw.text("job_description_id"), resumeID, doc ? "doc" : ""].joined(separator: ":")
     }
 

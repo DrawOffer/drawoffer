@@ -4,12 +4,15 @@ import SwiftUI
 /// 编辑器右上角的小绘（Figma 5:10 分区 214:6501 C1，Web `WorkbenchAiOrb`）：40×40 品牌花，画布右 24、上 20。
 struct ResumeEditorOrb: View {
     var open: Bool
+    /// 正在排版：外圈一道 1.5 蓝细环 1 秒转一圈（Web `.wbs-ai-orb.is-busy::after`）。
+    var busy = false
     let action: () -> Void
     @State private var hover = false
     var body: some View {
         Button(action: action) {
             ResumeTalkAvatar().scaleEffect(40 / 28).frame(width: 40, height: 40)
                 .scaleEffect(hover || open ? 1.06 : 1).animation(.easeOut(duration: 0.15), value: hover || open)
+                .overlay { if busy { ResumeOrbRing() } }
                 .contentShape(Circle())
         }
         .buttonStyle(.plain).onHover { hover = $0 }
@@ -57,6 +60,7 @@ struct ResumeOrbBoard: View {
                 Text(reply).font(V3.sans(12.5)).foregroundStyle(V3.orange).padding(.top, 8)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if dialogue.input {
             TextField("", text: $text, axis: .vertical)
                 .textFieldStyle(.plain).font(V3.sans(13)).foregroundStyle(V3.txt).lineLimit(1...4).focused($focused)
                 .overlay(alignment: .topLeading) {
@@ -65,6 +69,7 @@ struct ResumeOrbBoard: View {
                 .onSubmit { send() }
                 .padding(.top, 14)
                 .accessibilityLabel("直接说想改什么")
+            }
         }
         .frame(width: Self.width, alignment: .leading)
         .onExitCommand(perform: close)
@@ -75,6 +80,57 @@ struct ResumeOrbBoard: View {
         guard !said.isEmpty else { return }
         text = ""
         say(said)
+    }
+}
+
+/// 外圈细环：inset 2、1.5 宽，只画上沿一段 #3366d9，1 秒转一圈；减少动态效果时不转。
+private struct ResumeOrbRing: View {
+    @State private var turn = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        Circle().trim(from: 0, to: 0.25).stroke(ResumeOrbNudge.blue, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+            .rotationEffect(.degrees(turn ? 225 : -135)).padding(2)
+            .animation(reduceMotion ? nil : .linear(duration: 1).repeatForever(autoreverses: false), value: turn)
+            .onAppear { turn = true }
+            .allowsHitTesting(false).accessibilityHidden(true)
+    }
+}
+
+/// 小绘白板收着时挂在它左边的一句（Web `.wbs-ai-nudge`，Mac 稿 03N-F）：
+/// 正在排版——灰字“正在排版…”+ 蓝字“停下”，不加底；排好了——14 墨黑一句，带“撤销”时是白底细边胶囊（#e6e4de，内边距 9/14，间距 14）。
+struct ResumeOrbNudge: View {
+    enum Kind { case busy, said }
+    /// Web `.wbs-ai-nudge-action` / 细环的 #3366d9。
+    static let blue = Color(hex: 0x3366D9)
+    let kind: Kind
+    let text: String
+    var actionLabel: String? = nil
+    var action: (() -> Void)? = nil
+
+    var body: some View {
+        switch kind {
+        case .busy:
+            HStack(spacing: 12) {
+                Text(text).font(V3.sans(14)).foregroundStyle(Color(hex: 0x87867F))
+                if let actionLabel, let action {
+                    Button(actionLabel, action: action).buttonStyle(.plain).font(V3.sans(13)).foregroundStyle(ResumeOrbNudge.blue)
+                }
+            }
+            .accessibilityElement(children: .contain)
+        case .said:
+            if let actionLabel, let action {
+                HStack(spacing: 14) {
+                    Text(text).font(V3.sans(14)).foregroundStyle(V3.txt).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    Button(actionLabel, action: action).buttonStyle(.plain).font(V3.sans(14, weight: .medium)).foregroundStyle(ResumeOrbNudge.blue)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 9)
+                .background(.white, in: Capsule()).overlay(Capsule().strokeBorder(Color(hex: 0xE6E4DE)))
+                .frame(maxWidth: 360, alignment: .trailing)
+            } else {
+                Text(text).font(V3.sans(14)).foregroundStyle(V3.txt).lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 320, alignment: .trailing).multilineTextAlignment(.trailing)
+            }
+        }
     }
 }
 

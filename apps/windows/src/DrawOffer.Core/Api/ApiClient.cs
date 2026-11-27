@@ -22,10 +22,12 @@ public interface IApiClient
     Task<IReadOnlyList<ResumeTemplate>> ListResumeTemplatesAsync(CancellationToken ct = default);
 }
 
-public sealed class ApiException(HttpStatusCode status, string code) : Exception(code)
+public sealed class ApiException(HttpStatusCode status, string code, JsonNode? payload = null) : Exception(code)
 {
     public HttpStatusCode Status { get; } = status;
     public string Code { get; } = code;
+    /// <summary>错误响应体（如 409 `INTERVIEW_SCHEDULE_OVERLAP` 的 `conflict`）；没有或读不出时为 null。</summary>
+    public JsonNode? Payload { get; } = payload;
 }
 
 /// <summary>
@@ -166,7 +168,7 @@ public sealed partial class DesktopTransport : IDesktopTransport, IDisposable
         // 204 或空正文（删除、勾选一类接口）：Mac 返回 `.null`，这里返回空对象，调用方读取字段时同样得到空值
         if (response.StatusCode == HttpStatusCode.NoContent || response.Content.Headers.ContentLength == 0) return new JsonObject();
         var result = await response.Content.ReadFromJsonAsync<JsonNode>(ct) ?? new JsonObject();
-        if (!response.IsSuccessStatusCode) throw new ApiException(response.StatusCode, result.Text("error") is { Length: > 0 } code ? code : $"HTTP_{(int)response.StatusCode}");
+        if (!response.IsSuccessStatusCode) throw new ApiException(response.StatusCode, result.Text("error") is { Length: > 0 } code ? code : $"HTTP_{(int)response.StatusCode}", result);
         return result;
     }
 

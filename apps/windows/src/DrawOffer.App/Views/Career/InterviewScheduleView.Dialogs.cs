@@ -254,6 +254,7 @@ sealed class ScheduleDetailDialog : UserControl
             _changed();
             return;
         }
+        catch (ApiException error) when (ScheduleOverlap.Message(error) is { } overlap) { _error = overlap; }
         catch (ApiException error) { _error = error.Status == System.Net.HttpStatusCode.Conflict ? $"记录已更新，请关闭后刷新再试（{error.Code}）。" : $"保存失败（{error.Code}）。"; }
         catch (Exception) { _error = "连接失败，作答计划尚未确认保存。"; }
         _busy = false; Render();
@@ -276,7 +277,7 @@ sealed class ScheduleSessionForm : UserControl
     string _kind = "detail";
     DateTimeOffset _start, _end;
     string _reason = "", _mode = "video", _meeting = "", _location = "", _interviewer = "", _interviewerTitle = "", _note = "", _questions = "", _review = "", _improvement = "";
-    bool _removePlan, _allowConflict, _busy;
+    bool _removePlan, _busy;
     string? _failure;
     JsonObject? _frozen;
 
@@ -389,17 +390,11 @@ sealed class ScheduleSessionForm : UserControl
                     _content.Children.Add(HStack(8, Label("开始时间", 13), DateTime(_start, v => { _start = v; Render(); }, !locked)));
                     _content.Children.Add(HStack(8, Label("结束时间", 13), DateTime(_end, v => { _end = v; Render(); }, !locked)));
                 }
-                if (_kind == "reschedule")
+                // 同一时间只能参加一场（Web #1560）：撞上已加载的另一场时说清是哪一场，改了时间才能保存；不再有「仍然保存」。
+                if (Occupied() is { } occupied)
                 {
-                    var conflicts = ScheduleCalendar.Conflicts(_interviews, item.Id, _start, _end);
-                    if (conflicts.Count > 0)
-                    {
-                        _content.Children.Add(Label($"与 {conflicts.Count} 场安排重叠，请确认时间。", 13, Hex(0xFF9500)));
-                        foreach (var conflict in conflicts) _content.Children.Add(Label(conflict.Caption, 12));
-                    }
-                    var allow = new CheckBox { Content = "确认仍保存有时间冲突的安排", IsChecked = _allowConflict, IsEnabled = !locked, FontSize = 13 };
-                    allow.Click += (_, _) => _allowConflict = allow.IsChecked == true;
-                    _content.Children.Add(allow);
+                    var text = Label(ScheduleOverlap.Describe(occupied), 13, Hex(0xFF9500)); text.TextWrapping = TextWrapping.Wrap;
+                    _content.Children.Add(text);
                 }
             }
             else if (_kind == "edit")
@@ -434,7 +429,7 @@ sealed class ScheduleSessionForm : UserControl
         var left = HStack(10);
         if (_kind != "detail" && _action.Kind == "detail") left.Children.Add(new CareerAction("返回详情", () => { _kind = "detail"; _frozen = null; Render(); }, CareerAction.Kind.Text) { Enabled = !_busy });
         var right = HStack(10, new V3Button("取消", _close, height: 36) { Enabled = !_busy });
-        if (_kind != "detail") right.Children.Add(new V3Button(_busy ? "保存中…" : "确认保存", () => _ = SaveAsync(), V3Button.Kind.Dark, height: 36) { Enabled = !_busy && _item is not null });
+        if (_kind != "detail") right.Children.Add(new V3Button(_busy ? "保存中…" : "确认保存", () => _ = SaveAsync(), V3Button.Kind.Dark, height: 36) { Enabled = !_busy && _item is not null && Occupied() is null });
         var foot = Spread(left, right, 10);
         foot.Padding = new Thickness(28, 0, 28, 0);
         foot.Height = 76;
@@ -476,7 +471,7 @@ sealed class ScheduleSessionForm : UserControl
 
     async Task SaveAsync()
     {
-        if (_item is not { Editable: true } item || _busy) return;
+        if (_item is not { Editable: true } item || _busy || Occupied() is not null) return;
         if (_kind is "reschedule" or "answer-plan" && !_removePlan && _end <= _start) { _failure = "结束时间须晚于开始时间。"; Render(); return; }
         if (_kind == "answer-plan" && !_removePlan && (_start < item.Start || _end > item.End)) { _failure = "个人作答计划必须位于开放窗口内。"; Render(); return; }
         _busy = true; _failure = null; Render();
@@ -490,7 +485,7 @@ sealed class ScheduleSessionForm : UserControl
                 switch (_kind)
                 {
                     case "reschedule":
-                        body["start_at"] = Iso(_start); body["end_at"] = Iso(_end); body["timezone"] = JobsBoardView.TimeZoneId(); body["allow_conflict"] = _allowConflict;
+                        body["start_at"] = Iso(_start); body["end_at"] = Iso(_end); body["timezone"] = JobsBoardView.TimeZoneId();
                         break;
                     case "answer-plan":
                         body["answer_plan_start_at"] = _removePlan ? null : Iso(_start); body["answer_plan_end_at"] = _removePlan ? null : Iso(_end);
@@ -521,9 +516,15 @@ sealed class ScheduleSessionForm : UserControl
         _busy = false; Render();
     }
 
+    /// <summary>改期或设作答计划时，新时间段撞上的另一场（清除作答计划不占时间）。</summary>
+    OccupiedSlot? Occupied() =>
+        _item is { } item && _kind is "reschedule" or "answer-plan" && !_removePlan && _end > _start
+            ? ScheduleOverlap.Find(_interviews, item.Id, _start, _end) : null;
+
     static string Explain(Exception error)
     {
         if (error is ApiException { Status: System.Net.HttpStatusCode.Unauthorized }) return "登录已失效，请重新登录。";
+        if (ScheduleOverlap.Message(error) is { } overlap) return overlap;
         if (error is ApiException api)
             return api.Status == System.Net.HttpStatusCode.Conflict ? $"时间或版本冲突（{api.Code}）。请确认时间；若记录已变化，请关闭并刷新。" : $"保存失败（{api.Code}），输入已保留。";
         return "连接失败，结果尚未确认。重试会保留原版本，不会覆盖其他修改。";

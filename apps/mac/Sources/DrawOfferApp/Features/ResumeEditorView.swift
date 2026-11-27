@@ -41,6 +41,11 @@ struct ResumeEditorView: View {
     /// 右上角小绘的白板（C1）是否展开，以及选了某项后的一句回应。
     @State private var orbOpen = false
     @State private var orbReply: String?
+    /// 智能排版（Web `runAiLayout`）：进行中这一轮的编号（量纸 → 调接口 → 交回纸面写入，晚到的旧回报按编号丢掉）。
+    @State private var layoutRun: String?
+    @State private var layoutTask: Task<Void, Never>?
+    /// 小绘白板收着时左边说的一句（排好了 / 没要动的），带“撤销”时可整批撤回。
+    @State private var orbSaid: OrbSaid?
     @State private var zoom = 1.0
     @State private var zoomBadge: Double?
     @State private var uploading = false
@@ -99,7 +104,7 @@ struct ResumeEditorView: View {
             scheduleAutosave()
         }
         .onChange(of: title) { _, _ in scheduleAutosave() }
-        .onDisappear { autosaveTask?.cancel() }
+        .onDisappear { autosaveTask?.cancel(); layoutTask?.cancel() }
         .centeredConfirmation("放弃未保存的修改？", isPresented: $confirmLeave) {
             Button("放弃修改", role: .destructive, action: close)
             Button("继续编辑", role: .cancel) {}
@@ -236,20 +241,31 @@ struct ResumeEditorView: View {
         let cursor = cursorUnit
         return HStack(alignment: .top, spacing: 12) {
             if orbOpen {
-                ResumeOrbBoard(dialogue: ResumeOrb.dialogue(unitID: cursor?.unit.id, unitLabel: cursor?.label),
+                ResumeOrbBoard(dialogue: ResumeOrb.dialogue(unitID: cursor?.unit.id, unitLabel: cursor?.label, layoutBusy: layoutRun != nil),
                                pick: runOrb, say: { sayToOrb($0) }, close: { orbOpen = false }, reply: orbReply)
                     .padding(.top, 2)
                     .transition(.opacity.combined(with: .offset(x: 8)))
+            } else if layoutRun != nil {
+                ResumeOrbNudge(kind: .busy, text: "正在排版…", actionLabel: "停下", action: cancelLayout)
+                    .frame(height: 40).transition(.opacity.combined(with: .offset(x: 8)))
+            } else if let orbSaid {
+                ResumeOrbNudge(kind: .said, text: orbSaid.text, actionLabel: orbSaid.undo ? "撤销" : nil,
+                               action: orbSaid.undo ? { channel.send(.layoutUndo) } : nil)
+                    .frame(minHeight: 40).transition(.opacity.combined(with: .offset(x: 8)))
+                    .accessibilityElement(children: .contain).accessibilityLabel(orbSaid.text)
             }
-            ResumeEditorOrb(open: orbOpen) {
+            ResumeEditorOrb(open: orbOpen, busy: layoutRun != nil) {
                 // 选中了文字再点小绘：直接去改这一句（Web `orbTakesSelection`）
                 if let paperLine, paperLine.selection != nil, canAsk { orbOpen = false; openLine(paperLine); return }
                 orbReply = nil
+                orbSaid = nil
                 orbOpen.toggle()
             }
             .disabled(busy || conflict)
         }
         .animation(.easeOut(duration: 0.16), value: orbOpen)
+        .animation(.easeOut(duration: 0.18), value: layoutRun)
+        .animation(.easeOut(duration: 0.18), value: orbSaid)
     }
 
     private func runOrb(_ action: ResumeOrb.Action) {
@@ -269,8 +285,77 @@ struct ResumeEditorView: View {
             orbOpen = false
             openLine(line)
         case .layout:
-            orbReply = "智能排版要先量出纸上每一行的长短，桌面端还没接上。可以先在顶栏「排版」里调字号和间距。"
+            runLayout()
+        case .layoutCancel:
+            orbOpen = false
+            cancelLayout()
         }
+    }
+
+    // MARK: 智能排版
+
+    struct OrbSaid: Equatable {
+        let id = UUID()
+        let text: String
+        var undo: Bool
+    }
+
+    /// 小绘左边说一句，`seconds` 后自己收起（再说新的一句时旧的计时作废）。
+    private func say(_ text: String, undo: Bool = false, seconds: Double = 4) {
+        let said = OrbSaid(text: text, undo: undo)
+        orbSaid = said
+        Task {
+            try? await Task.sleep(for: .seconds(seconds))
+            if orbSaid?.id == said.id { orbSaid = nil }
+        }
+    }
+
+    /// Web `runAiLayout`：先让纸面量每段（行数、末行占比、末行文字），回来后组请求体调 `review:layout`，
+    /// 返回交回纸面核验并一次写进纸里；纸面照常能改，正在排版时小绘外圈转、左边可“停下”。
+    private func runLayout() {
+        guard layoutRun == nil, record != nil, !conflict else { return }
+        orbOpen = false
+        orbReply = nil
+        orbSaid = nil
+        let id = UUID().uuidString
+        layoutRun = id
+        channel.send(.layoutMeasure(requestID: id))
+    }
+
+    private func cancelLayout() {
+        layoutTask?.cancel()
+        layoutTask = nil
+        layoutRun = nil
+    }
+
+    private func layoutMeasured(_ id: String, blocks: [JSONValue]) {
+        guard layoutRun == id else { return }
+        guard let body = ResumeSmartLayout.requestBody(blocks: blocks) else {
+            layoutRun = nil
+            paperNote = ResumeSmartLayout.emptyMessage
+            return
+        }
+        layoutTask = Task {
+            do {
+                let response = try await session.api.careerRequest(path: "/api/resumes/\(resumeID)/review:layout", method: "POST", query: [:], body: body)
+                guard !Task.isCancelled, layoutRun == id else { return }
+                channel.send(.layoutApply(requestID: id, response: response))
+            } catch {
+                guard !Task.isCancelled, layoutRun == id else { return }
+                layoutRun = nil
+                if case APIError.unauthorized = error { session.reportAuthenticationFailure() }
+                paperNote = ResumeSmartLayout.errorMessage(error)
+            }
+        }
+    }
+
+    private func layoutApplied(_ result: LayoutApplied) {
+        guard layoutRun == result.requestID else { return }
+        layoutRun = nil
+        let outcome = ResumeSmartLayout.outcome(total: result.total, applied: result.applied, summary: result.summary,
+                                                pagesBefore: result.pagesBefore, pagesAfter: result.pagesAfter,
+                                                smartOnePage: ResumeTypeSettings.read(style)?.smartOnePage == true, undoable: result.undoable)
+        say(outcome.message, undo: outcome.undoable, seconds: outcome.seconds)
     }
 
     /// “或者直接说想改什么…”：有光标所在段就带着这句话去改那一条；没有就请用户先点一段。
@@ -455,6 +540,11 @@ struct ResumeEditorView: View {
         case .pages(let count): pageCount = count
         // 纸边标记只给检查简历用，Web 已下线检查简历
         case .mark: break
+        case .layoutMetrics(let id, let blocks, _): layoutMeasured(id, blocks: blocks)
+        case .layoutApplied(let result): layoutApplied(result)
+        // 撤回了就收起那句话；没撤（纸面又改过）只去掉“撤销”
+        case .layoutUndo(let ok): if ok { orbSaid = nil } else { orbSaid?.undo = false }
+        case .layoutUndoExpired: orbSaid?.undo = false
         }
     }
 
@@ -537,8 +627,9 @@ struct ResumeEditorView: View {
         style = savedStyle
         title = resume.text("title")
         paperNote = nil
-        // 换了正文来源（重新载入、换模板），光标所在行不再可靠
+        // 换了正文来源（重新载入、换模板），光标所在行不再可靠；进行中的排版与“撤销”一并作废
         paperLine = nil
+        cancelLayout(); orbSaid = nil
         templatePreviewTask?.cancel(); templatePreviewName = nil; templatePreviewCache = [:]
         if panel == "check" || panel == "line" { panel = nil; lineTarget = nil }
         importWarnings = (resume["import"]?["warnings"]?.items ?? resume["import_warnings"]?.items ?? []).compactMap(\.stringValue)

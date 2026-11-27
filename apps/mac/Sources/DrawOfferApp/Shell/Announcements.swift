@@ -17,7 +17,13 @@ extension InboxMessage {
         case "interviews": return .section(.schedule)
         case "assistant", "home": return .section(.home)
         case "career":
-            if path.count >= 3, path[1] == "applications" { return .application(path[2]) }
+            if path.count >= 3, path[1] == "applications" {
+                // Web `careerMaterialsPath`：`?materials=<场次>|all` 进这条投递的资料页
+                if let materials = parts.queryItems?.first(where: { $0.name == "materials" })?.value, !materials.isEmpty {
+                    return .materials(application: path[2], session: materials == "all" ? nil : materials)
+                }
+                return .application(path[2])
+            }
             // 面试复盘 `/career/reviews?session=…&application=…`：进这条投递的详情
             if path.count >= 2, path[1] == "reviews", let id = parts.queryItems?.first(where: { $0.name == "application" })?.value, !id.isEmpty { return .application(id) }
             return .section(.jobs)
@@ -144,37 +150,82 @@ final class AnnouncementCenter {
 
 /// 侧栏右上角铃铛（12 页 03 · Announcement/Bell 90:4512）：28×28、圆角 7；悬停或展开时 #E4E4E0 底；
 /// 有未读时右上角 8px 蓝点，外圈 1.5px 窗口底色描边。
+/// 后台录音上传并入铃铛（12 页 05.1–05.4，Web `AnnouncementBell` + `BackgroundUploadBell`）：上传中外圈一道蓝色进度环、不亮点；
+/// 传完亮蓝点、失败或中断亮橙点（优先于未读点）；第一次上传时铃铛下方提示一句「进度在铃铛这里」。
+/// 后台导入面试记录（Web `RecordImportBell`）也并进来：导入中外圈是估算进度环，没导入完的亮橙点（优先于上传的点）。
 struct AnnouncementBell: View {
     @Environment(SessionStore.self) private var session
     @Environment(AnnouncementCenter.self) private var center
+    @Environment(BackgroundUploads.self) private var uploads
+    @Environment(RecordImports.self) private var imports
     @Environment(WorkspaceRouter.self) private var router: WorkspaceRouter?
     @State private var open = false
     @State private var hover = false
 
     var body: some View {
+        let bell = uploads.bell
+        let importing = imports.items.filter(\.working)
+        let busy = bell.progress != nil || !importing.isEmpty
+        let warn = imports.items.count > importing.count || bell.dot == .warn
+        let dot: Color? = busy ? nil : warn ? NoticeUploadPalette.warn : bell.dot == .info ? V3.blue : center.unreadCount > 0 ? Color(hex: 0xE8791A) : nil
         Button {
             if open { open = false; return }
             open = true
+            uploads.opened()
             Task { await center.refresh(api: session.api, force: true); center.viewList(api: session.api) }
         } label: {
             SideIconView(icon: .bell)
                 .foregroundStyle(open || hover ? V3.txt : V3.sub).frame(width: 28, height: 28)
                 .background(open || hover ? V3.cl : .clear, in: RoundedRectangle(cornerRadius: 7))
+                .overlay {
+                    if let progress = bell.progress { UploadRing(progress: progress) }
+                    else if !importing.isEmpty {
+                        // Web `importRing`：各场导入的估算进度取平均
+                        TimelineView(.periodic(from: .now, by: 2)) { context in
+                            UploadRing(progress: importing.reduce(0) { $0 + $1.progress(now: context.date) } / Double(importing.count))
+                        }
+                    }
+                }
                 .overlay(alignment: .topTrailing) {
                     // 10.02 / 06：未读时铃铛右上角橙点，外圈一道侧栏底色把它和铃铛分开
-                    if center.unreadCount > 0 {
-                        Circle().fill(Color(hex: 0xE8791A)).frame(width: 8, height: 8)
+                    if let dot {
+                        Circle().fill(dot).frame(width: 8, height: 8)
                             .overlay(Circle().stroke(WorkspaceSidebar.background, lineWidth: 1.5)).padding(3)
                     }
                 }
                 .contentShape(Rectangle())
         }.buttonStyle(.plain).onHover { hover = $0 }
-            .help("通知").accessibilityLabel(center.unreadCount > 0 ? "通知，\(center.unreadCount > 99 ? "99+" : String(center.unreadCount)) 条未读" : "通知")
+            .help("通知").accessibilityLabel(label(bell))
             // 10.02：通知弹层从铃铛下方展开
             .popover(isPresented: $open, arrowEdge: .bottom) {
                 NoticeCenterList(pick: { ids, index in open = false; center.detail = (ids, index) },
-                                 pickMessage: { message in open = false; openMessage(message) })
+                                 pickMessage: { message in open = false; openMessage(message) },
+                                 leave: { open = false })
             }
+            .onChange(of: open) { _, now in if !now { uploads.markSeen() } }
+            .onChange(of: uploads.revealed) { _, _ in
+                guard !open else { return }
+                open = true; uploads.opened()
+                Task { await center.refresh(api: session.api, force: true); center.viewList(api: session.api) }
+            }
+            // 05.1：第一次后台上传时在铃铛下方提示一句，点「知道了」或打开铃铛后不再出现
+            .background {
+                Color.clear.popover(isPresented: Binding(get: { uploads.hint && !open }, set: { if !$0 { uploads.dismissHint() } }), arrowEdge: .bottom) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("录音在后台上传，进度在铃铛这里").font(V3.sans(13.5, weight: .medium)).foregroundStyle(V3.txt)
+                        Text("可以先去做别的。关掉 App 会中断，之后选回同一个文件就能接着传。").font(V3.sans(12.5)).foregroundStyle(V3.sub)
+                            .lineSpacing(4).fixedSize(horizontal: false, vertical: true)
+                        Button("知道了") { uploads.dismissHint() }.buttonStyle(.plain).font(V3.sans(12.5)).foregroundStyle(V3.blue)
+                    }.padding(.horizontal, 16).padding(.vertical, 14).frame(width: 276, alignment: .leading)
+                }
+            }
+    }
+
+    private func label(_ bell: UploadBellState) -> String {
+        if let progress = bell.progress { return "通知，正在上传 \(Int(progress * 100))%" }
+        if imports.items.contains(where: \.working) { return "通知，正在导入面试记录" }
+        if center.unreadCount > 0 { return "通知，\(center.unreadCount > 99 ? "99+" : String(center.unreadCount)) 条未读" }
+        return bell.dot != nil ? "通知，有未读" : "通知"
     }
 
     /// Web `openMessage`：记一次打开，再去消息指向的页面；原生没有对应栏目的交给浏览器。
@@ -209,6 +260,9 @@ private struct NoticeCenterList: View {
     @Environment(AnnouncementCenter.self) private var center
     let pick: ([String], Int) -> Void
     let pickMessage: (InboxMessage) -> Void
+    let leave: () -> Void
+    @Environment(BackgroundUploads.self) private var uploads
+    @Environment(RecordImports.self) private var imports
 
     var body: some View {
         let list = (center.items.map(NoticeEntry.announcement) + center.messages.map(NoticeEntry.message))
@@ -217,9 +271,17 @@ private struct NoticeCenterList: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("通知").font(V3.serif(17)).foregroundStyle(V3.txt)
                 let fresh = list.filter { center.freshIDs.contains($0.id) }.count
-                if fresh > 0 { Text("\(fresh) 条未读").font(V3.sans(11.5)).foregroundStyle(V3Skeleton.faint) }
+                let working = imports.items.filter(\.working).count
+                if let summary = uploads.bell.summary ?? (working > 0 ? "\(working) 场正在处理" : nil) { Text(summary).font(V3.sans(11.5)).foregroundStyle(V3Skeleton.faint) }
+                else if fresh > 0 { Text("\(fresh) 条未读").font(V3.sans(11.5)).foregroundStyle(V3Skeleton.faint) }
             }.frame(height: 24).padding(.horizontal, 24).padding(.top, 20)
-            if list.isEmpty {
+            // 05.2–05.4：正在上传的每个文件一行进度，下面是传完、失败和中断的条目，再往下才是公告与消息
+            // Web 顺序：导入面试记录的进度与失败在最上面，再是上传
+            RecordImportRows()
+            UploadRows(leave: leave)
+            if list.isEmpty && (!uploads.items.isEmpty || !imports.items.isEmpty) {
+                Color.clear.frame(height: 8)
+            } else if list.isEmpty {
                 switch center.status {
                 case .ready, .error:
                     VStack(spacing: 8) {
@@ -282,6 +344,8 @@ private struct NoticeCenterRow: View {
     let arrow: Bool
     let open: () -> Void
     let remove: () -> Void
+    /// 未读点颜色：上传失败或中断的条目是橙点（Web `.ann-item-dot.is-warn`）。
+    var dot: Color = V3.blue
     @State private var hover = false
     @State private var closeHover = false
 
@@ -289,7 +353,7 @@ private struct NoticeCenterRow: View {
         Button(action: open) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    if fresh { Circle().fill(V3.blue).frame(width: 6, height: 6).alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }.accessibilityLabel("新") }
+                    if fresh { Circle().fill(dot).frame(width: 6, height: 6).alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }.accessibilityLabel("新") }
                     if important { NoticeImportantChip() }
                     Text(title).font(V3.sans(14, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1)
                     Spacer(minLength: 8)
@@ -402,3 +466,151 @@ private struct NoticeCloseStyle: ButtonStyle {
             .onHover { hover = $0 }
     }
 }
+
+enum NoticeUploadPalette {
+    static let warn = Color(hex: 0xD9822B)
+    static let line = Color(hex: 0xECECEA)
+}
+
+/// 套在铃铛外面的进度环（Web `UploadRing`）：r 12.5、1.6 线宽，#E4E4E0 底轨、蓝色进度，从 12 点顺时针走。
+struct UploadRing: View {
+    let progress: Double
+    var body: some View {
+        ZStack {
+            Circle().stroke(Color(hex: 0xE4E4E0), lineWidth: 1.6)
+            Circle().trim(from: 0, to: max(0.02, min(1, progress)))
+                .stroke(V3.blue, style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .animation(.easeOut(duration: 0.3), value: progress)
+        }.frame(width: 25, height: 25).accessibilityHidden(true).allowsHitTesting(false)
+    }
+}
+
+/// 铃铛浮层最上面的导入面试记录（Web `RecordImportRows`）：正在导入的每场一行估算进度，下面是没导入完的（橙点、需要处理、可重试的带「重试 →」）。
+private struct RecordImportRows: View {
+    @Environment(RecordImports.self) private var imports
+
+    var body: some View {
+        let working = imports.items.filter(\.working)
+        let failed = imports.items.filter { !$0.working }
+        if !imports.items.isEmpty {
+            TimelineView(.periodic(from: .now, by: 2)) { context in
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(working) { item in runningRow(item, now: context.date) }
+                    if !failed.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(failed) { item in
+                                NoticeCenterRow(fresh: true, important: false, title: item.failedTitle, time: RecordImport.ago(item.since, now: context.date),
+                                                summary: item.error ?? "", category: "需要处理", tone: Color(hex: 0xC46C26), action: item.retryable ? "重试" : nil, arrow: true,
+                                                open: { if item.retryable { imports.retry(item.id) } }, remove: { imports.dismiss(item.id) },
+                                                dot: NoticeUploadPalette.warn)
+                            }
+                        }.padding(.top, 4).padding(.bottom, 6)
+                            .overlay(alignment: .bottom) { Rectangle().fill(NoticeUploadPalette.line).frame(height: 1) }
+                    }
+                }
+            }.padding(.horizontal, 24).padding(.top, 6)
+        }
+    }
+
+    /// 「正在导入「公司」面试记录」，3pt 估算进度条，灰字是这一步在做什么。
+    private func runningRow(_ item: RecordImport, now: Date) -> some View {
+        let value = Int(item.progress(now: now) * 100)
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(item.runningTitle).font(V3.sans(14, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1).truncationMode(.middle).frame(height: 21)
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(NoticeUploadPalette.line)
+                    Capsule().fill(V3.blue).frame(width: proxy.size.width * CGFloat(value) / 100)
+                        .animation(.easeOut(duration: 0.3), value: value)
+                }
+            }.frame(height: 3)
+                .accessibilityElement().accessibilityLabel("\(item.company)面试记录导入进度（估算）").accessibilityValue("\(value)%")
+            Text(item.stepText).font(V3.sans(12)).foregroundStyle(V3Skeleton.faint).lineLimit(1)
+        }.padding(.top, 10).padding(.bottom, 16)
+            .overlay(alignment: .bottom) { Rectangle().fill(NoticeUploadPalette.line).frame(height: 1) }
+    }
+}
+
+/// 铃铛浮层最上面的上传部分（Web `UploadRows`）：正在上传的每个文件一行进度，下面是传完、失败和中断的条目。
+private struct UploadRows: View {
+    @Environment(BackgroundUploads.self) private var uploads
+    @Environment(WorkspaceRouter.self) private var router: WorkspaceRouter?
+    let leave: () -> Void
+    @State private var mismatch: Set<String> = []
+
+    var body: some View {
+        let running = uploads.items.filter(\.running)
+        let results = uploads.items.filter { !$0.running }
+        if !uploads.items.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                if !running.isEmpty {
+                    TimelineView(.periodic(from: .now, by: 2)) { context in
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(running) { item in runningRow(item, now: context.date) }
+                        }
+                    }
+                }
+                if !results.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(results) { item in resultRow(item) }
+                    }.padding(.top, 4).padding(.bottom, 6)
+                        .overlay(alignment: .bottom) { Rectangle().fill(NoticeUploadPalette.line).frame(height: 1) }
+                }
+            }.padding(.horizontal, 24).padding(.top, 6)
+        }
+    }
+
+    /// 05.2：「正在上传 文件名」+ 右侧「取消」，3pt 进度条，灰字「已传 15% · 约 3 分钟 · 可以先去做别的」。
+    private func runningRow(_ item: BackgroundUpload, now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(item.runningTitle).font(V3.sans(14, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 0)
+                Button("取消") { uploads.dismiss(item.id) }.buttonStyle(.plain).font(V3.sans(12)).foregroundStyle(V3.sub)
+                    .accessibilityLabel("取消上传 \(item.fileName)")
+            }.frame(height: 21)
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(NoticeUploadPalette.line)
+                    Capsule().fill(V3.blue).frame(width: proxy.size.width * CGFloat(item.percent) / 100)
+                        .animation(.easeOut(duration: 0.3), value: item.percent)
+                }
+            }.frame(height: 3)
+                .accessibilityElement().accessibilityLabel("\(item.fileName) 上传进度").accessibilityValue("\(item.percent)%")
+            Text(item.runningMeta(now: now)).font(V3.sans(12)).foregroundStyle(V3Skeleton.faint).lineLimit(1)
+        }.padding(.top, 10).padding(.bottom, 16)
+            .overlay(alignment: .bottom) { Rectangle().fill(NoticeUploadPalette.line).frame(height: 1) }
+    }
+
+    /// 05.3 / 05.4：传完（蓝点、处理结果、查看 →）、没传完（橙点、需要处理、重试 →）、中断（橙点、需要处理、选择文件 →）。
+    private func resultRow(_ item: BackgroundUpload) -> some View {
+        let done = item.status == .done
+        return NoticeCenterRow(fresh: !item.seen, important: false, title: item.resultTitle, time: "刚刚",
+                               summary: item.resultBody(mismatch: mismatch.contains(item.id)), category: item.resultCategory,
+                               tone: done ? V3.blue : Color(hex: 0xC46C26), action: item.resultAction, arrow: true,
+                               open: { open(item) }, remove: { uploads.dismiss(item.id) },
+                               dot: done ? V3.blue : NoticeUploadPalette.warn)
+    }
+
+    private func open(_ item: BackgroundUpload) {
+        switch item.status {
+        case .done:
+            // Web `navigateTo(careerMaterialsPath(applicationId, sessionId))`：去这场面试的资料页
+            uploads.dismiss(item.id); leave()
+            if !item.applicationID.isEmpty { router?.jump(.materials(application: item.applicationID, session: item.sessionID)) }
+        case .interrupted:
+            let panel = NSOpenPanel()
+            panel.allowsMultipleSelection = false; panel.canChooseDirectories = false
+            panel.message = "选回 \(item.fileName)，从断点接着传"
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            Task {
+                let same = await uploads.resume(item.id, file: url)
+                if same { mismatch.remove(item.id) } else { mismatch.insert(item.id) }
+            }
+        default:
+            if item.retryable { uploads.retry(item.id) }
+        }
+    }
+}
+

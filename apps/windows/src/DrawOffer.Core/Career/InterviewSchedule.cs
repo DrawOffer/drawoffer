@@ -1,4 +1,7 @@
+using System.Net;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
+using DrawOffer.Core.Api;
 namespace DrawOffer.Core.Models;
 
 /// <summary>面试日程里的一场安排（`interview-sessions` 的一项）。</summary>
@@ -72,9 +75,6 @@ public static class ScheduleCalendar
         return days;
     }
 
-    public static List<ScheduledInterview> Conflicts(IEnumerable<ScheduledInterview> items, string? excluding, DateTimeOffset start, DateTimeOffset end) =>
-        items.Where(x => x.Id != excluding && x.Editable && !x.OpenWindow && x.Overlaps(start, end)).ToList();
-
     /// <summary>每组相互重叠的安排各自分道；首尾相接的安排共用一道。</summary>
     public static Dictionary<string, (int Index, int Count)> Lanes(IEnumerable<ScheduledInterview> items)
     {
@@ -102,5 +102,69 @@ public static class ScheduleCalendar
         }
         if (group.Count > 0) Flush();
         return result;
+    }
+}
+
+/// <summary>新时间撞上的那一场：后端 409 `INTERVIEW_SCHEDULE_OVERLAP` 的 `conflict`，或拖动前本地查到的安排；开放窗口给的是作答计划时段。</summary>
+public sealed record OccupiedSlot(string Company, string StageLabel, DateTimeOffset Start, DateTimeOffset End);
+
+/// <summary>
+/// 同一时间只能参加一场面试或笔试（Web `scheduleConflicts.ts` 的 scheduleOverlapMessage / describeOccupiedSlot / findOccupiedSlot，#1560）。
+/// 后端拒绝重叠的安排并带回被占用的那一场；`allow_conflict` 不再放行。
+/// </summary>
+public static class ScheduleOverlap
+{
+    public const string Code = "INTERVIEW_SCHEDULE_OVERLAP";
+    public const string GenericMessage = "这个时间已经有别的面试或笔试了，同一时间没法参加两场，换个时间吧。";
+    static readonly string[] Weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+    /// <summary>Web `shortCompany`：去掉「科技 / 网络 / 集团 / 有限公司」等尾巴，全去掉了就用原名。</summary>
+    public static string ShortCompany(string name)
+    {
+        var shortName = Regex.Replace(name, @"(科技|网络|信息技术|集团|股份|有限公司|（中国）|\(中国\))+$", "");
+        return shortName.Length == 0 ? name : shortName;
+    }
+
+    /// <summary>「这个时间你已经安排了示例资讯一面（10月9日周五 14:00–15:00），同一时间没法参加两场，换个时间吧。」</summary>
+    public static string Describe(OccupiedSlot slot, TimeZoneInfo? zone = null)
+    {
+        var tz = zone ?? Beijing.Zone;
+        var from = TimeZoneInfo.ConvertTime(slot.Start, tz);
+        var to = TimeZoneInfo.ConvertTime(slot.End, tz);
+        var time = $"{from.Month}月{from.Day}日{Weekdays[(int)from.DayOfWeek]} {from.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture)}–{to.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture)}";
+        return $"这个时间你已经安排了{ShortCompany(slot.Company)}{slot.StageLabel}（{time}），同一时间没法参加两场，换个时间吧。";
+    }
+
+    /// <summary>从服务端错误里读出被占用的那一场；不是重叠错误或没带 `conflict` 时为 null。</summary>
+    public static OccupiedSlot? Slot(Exception error)
+    {
+        if (error is not ApiException { Status: HttpStatusCode.Conflict, Code: Code } api) return null;
+        var conflict = api.Payload?["conflict"];
+        var company = conflict.Text("company_name");
+        if (company.Length == 0 || CareerApplication.Date(conflict.Text("start_at")) is not { } start || CareerApplication.Date(conflict.Text("end_at")) is not { } end) return null;
+        return new OccupiedSlot(company, conflict.Text("stage_label"), start, end);
+    }
+
+    /// <summary>Web `scheduleOverlapMessage`：是重叠错误就返回提示，否则 null。</summary>
+    public static string? Message(Exception error, TimeZoneInfo? zone = null)
+    {
+        if (error is not ApiException { Status: HttpStatusCode.Conflict, Code: Code }) return null;
+        return Slot(error) is { } slot ? Describe(slot, zone) : GenericMessage;
+    }
+
+    /// <summary>
+    /// Web `findOccupiedSlot`：拖动改期前先在本地判断，最终仍以服务端校验为准。
+    /// 只看待进行且未结束的安排；开放窗口按作答计划算，没计划的不占时间；首尾相接不算。
+    /// </summary>
+    public static OccupiedSlot? Find(IEnumerable<ScheduledInterview> items, string movingId, DateTimeOffset start, DateTimeOffset end, DateTimeOffset? now = null)
+    {
+        var current = now ?? DateTimeOffset.UtcNow;
+        foreach (var item in items)
+        {
+            if (item.Id == movingId || item.Raw.Text("status") != "scheduled") continue;
+            if (item.Timed is not { } range || range.Start >= range.End || range.End <= current || range.Start >= end || range.End <= start) continue;
+            return new OccupiedSlot(item.Company, item.Label, range.Start, range.End);
+        }
+        return null;
     }
 }

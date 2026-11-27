@@ -18,6 +18,10 @@ struct WorkspaceView: View {
     @State private var network = NetworkStatus()
     @State private var networkNotice: NoticeToastItem?
     @State private var announcements = AnnouncementCenter()
+    /// 后台录音上传（进度并入铃铛）。
+    @State private var uploads = BackgroundUploads()
+    /// 后台导入面试记录、录音等转写后自动复盘（进度并入铃铛）。
+    @State private var recordImports = RecordImports()
     @State private var plansPresented = false
     @State private var careerProfile = false
     /// 额度弹窗打开时停在哪个标签（"credits" 为积分页）。
@@ -35,6 +39,8 @@ struct WorkspaceView: View {
     /// 首页“选择文件”导入简历：我的简历页收到后打开导入。
     @State private var importRequest: UUID?
     @State private var openApplication: String?
+    /// 和 `openApplication` 一起设：打开那条投递后直接进资料页（"" 为全部场次）。
+    @State private var openMaterials: String?
     @State private var openDataset: String?
     /// 第 17 页：侧栏可以收起（⌃⌘S 或左上角开关），收起后开关浮在内容区同一位置。
     @AppStorage("sidebarVisible") private var sidebarVisible = true
@@ -130,9 +136,14 @@ struct WorkspaceView: View {
         .environment(\.coachMarkExternalHost, true).coachMarkHost()
         .environment(router)
         .environment(announcements)
+        .environment(uploads)
+        .environment(recordImports)
         .onAppear { if fixture { selection = .mock } }
         .task(id: user?.id ?? "") {
             announcements.reset(account: user?.id ?? "")
+            uploads.imports = recordImports
+            uploads.reset(account: user?.id ?? "", api: session.api)
+            recordImports.reset(account: user?.id ?? "", api: session.api)
             await announcements.refresh(api: session.api)
             announcements.autoOpenImportant(api: session.api)
         }
@@ -162,7 +173,8 @@ struct WorkspaceView: View {
             case .plans: plansTab = nil; plansPresented = true
             case .credits: plansTab = "credits"; plansPresented = true
             case .feedback: feedbackShown = true
-            case .application(let id): openApplication = id; selection = .jobs
+            case .application(let id): openApplication = id; openMaterials = nil; selection = .jobs
+            case .materials(let id, let sessionID): openApplication = id; openMaterials = sessionID ?? ""; selection = .jobs
             case .mock(let focus): mockFocus = focus; selection = .mock
             case .mockSession(let id): mockSession = id; selection = .mock
             case .mockPractice(let plan): mockPlan = plan; selection = .mock
@@ -211,7 +223,7 @@ struct WorkspaceView: View {
         case .datasets: DatasetLibraryView(openDataset: $openDataset)
                 case .mock: MockInterviewView(showSchedule: { selection = .schedule }, navigate: { selection = $0 }, incomingFocus: $mockFocus, incomingSession: $mockSession, incomingPlan: $mockPlan, incomingApplication: $mockApplication, fullScreen: $mockFullScreen)
         case .schedule: InterviewScheduleView()
-        case .jobs: JobsBoardView(openApplication: $openApplication, openJob: $openJob)
+        case .jobs: JobsBoardView(openApplication: $openApplication, openMaterials: $openMaterials, openJob: $openJob)
         case .templates:
             TemplatesView(onCreated: { id in editResumeID = id.isEmpty ? nil : id; selection = .resumes })
         case .resumes:
