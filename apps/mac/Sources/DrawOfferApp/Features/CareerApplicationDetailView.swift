@@ -57,6 +57,8 @@ struct CareerApplicationDetailView: View {
     /// 题目纸按考点列：后端整理好的考点，按场次存（`record-topics`）。
     @State private var topics: [String: [JSONValue]] = [:]
     @State private var topicRequests: Set<String> = []
+    /// 台历上的考点（Web `useMemoryTopics`）：哪条投递读到的长期记忆里没答稳的几处；还没读完时为 nil。
+    @State private var memoryTopics: (id: String, topics: [MemorySummary.Topic])?
     @State private var adding: JSONValue?
     @State private var addMode: CareerAddContentSheet.Mode = .upload
     @State private var splits: [String: SplitJob] = [:]
@@ -156,8 +158,10 @@ struct CareerApplicationDetailView: View {
         let previous = shownIndex > 0 ? deck.stations[shownIndex - 1] : nil
         let shownSession = shown.session.flatMap { $0.text("status") == "cancelled" ? nil : $0 }
         let shownDetail = shownSession.flatMap { details[$0.text("id")] }
+        let upcoming = CareerJourney.memoryTopicsDue(deck: deck, station: shown, viewing: viewing, now: now)
         let step = CareerJourney.step(application: raw, deck: deck, station: shown, viewing: viewing, now: now, detail: shownDetail, previous: previous,
-                                      reviewCost: reviewCost, match: needsMatch(deck, shown: shown, viewing: viewing) ? match : nil)
+                                      reviewCost: reviewCost, match: needsMatch(deck, shown: shown, viewing: viewing) ? match : nil,
+                                      memoryTopics: upcoming ? loadedMemoryTopics?.count ?? 0 : 0)
         let timeline = CareerJourney.timeline(application: raw, deck: deck, now: now)
         let advancing = step.primary?.action == .advance || step.secondary?.action == .advance
         return GeometryReader { geometry in
@@ -172,7 +176,7 @@ struct CareerApplicationDetailView: View {
                     let compact = width <= 1010
                     let hero = CareerJourneyHero(job: item.company + " · " + item.title, step: step, compact: compact, disabled: busy || loading,
                                                  act: { journeyAction($0, shown: shown, session: shownSession) })
-                    let figure = figureView(step, deck: deck, shown: shown, session: shownSession, detail: shownDetail)
+                    let figure = figureView(step, deck: deck, shown: shown, session: shownSession, detail: shownDetail, upcoming: upcoming)
                         .environment(\.careerFigureStamp, step.stamp)
                         .scaleEffect(compact ? 0.8333 : 1, anchor: .topLeading)
                     Group {
@@ -234,6 +238,7 @@ struct CareerApplicationDetailView: View {
         .task { await loadPrices() }
         .task(id: matchKey) { await loadMatch() }
         .task(id: topicKey) { await loadTopics() }
+        .task(id: memoryTopicKey) { await loadMemoryTopics() }
         .task(id: waiting) {
             // 复盘或转写在后台跑：5 秒起逐步放慢到 30 秒查一次，只查在跑的那几场；有一场落定才整页刷新。App 不在前台时暂停
             var attempt = 0
@@ -344,7 +349,7 @@ struct CareerApplicationDetailView: View {
     }
 
     /// 右侧这一步的那件东西（Web `ProgressDeckPage` figure）。
-    @ViewBuilder private func figureView(_ step: CareerJourneyStep, deck: CareerDeck, shown: CareerStation, session: JSONValue?, detail: JSONValue?) -> some View {
+    @ViewBuilder private func figureView(_ step: CareerJourneyStep, deck: CareerDeck, shown: CareerStation, session: JSONValue?, detail: JSONValue?, upcoming: Bool) -> some View {
         let act = { (action: CareerJourneyAction) in journeyAction(action, shown: shown, session: session) }
         let start = session.flatMap { CareerApplication.date($0.text("start_at")) }
         switch step.figure {
@@ -377,7 +382,12 @@ struct CareerApplicationDetailView: View {
                 return SFPaperItem(id: item.display("id").nonEmptyOr(String(index)), title: item.text("question_text"), mark: state == "correct" ? .good : state == "wrong" ? .weak : .open)
             }, onOpen: { act(.openWritten) }, onAdd: { act(.addWritten) })
         case .day:
-            if let start { DayFigure(day: start, time: CareerDeckFormat.clock(start), ribbon: true) }
+            if let start {
+                // 约好还没面时日期右边列没答稳的考点；还在读时先不写字（Web `topics={upcoming ? topics : []}`）
+                DayFigure(day: start, time: CareerDeckFormat.clock(start), ribbon: true,
+                          topics: upcoming ? loadedMemoryTopics.map { $0.map { (ref: $0.ref, label: $0.label) } } : [],
+                          onPractice: { ref, label in practiceTopic(ref: ref, label: label) })
+            }
         case .dayPast:
             DayFigure(day: CareerJourney.stationDay(shown), time: nil, ribbon: false)
         case .clock:
@@ -501,6 +511,44 @@ struct CareerApplicationDetailView: View {
                                                         body: .object(["questions": .array(questions.map(JSONValue.string))])),
               let groups = result["session"]?["record_topics"]?.items else { return }
         topics[id] = groups
+    }
+
+    /// 读台历考点的键：约好还没面时是这条投递，否则不读（空）。
+    private var memoryTopicKey: String {
+        let state = shownState
+        return CareerJourney.memoryTopicsDue(deck: state.deck, station: state.shown, viewing: state.viewing, now: now) ? application.id : ""
+    }
+
+    /// 读到的是这条投递的才用；读取中为 nil。
+    private var loadedMemoryTopics: [MemorySummary.Topic]? { memoryTopics?.id == application.id ? memoryTopics?.topics : nil }
+
+    /// 台历上的考点（Web `useMemoryTopics`）：面试前才读，3 秒读不到、出错或没有都当没有；
+    /// 及时读到且列出来了，就把这几处登记为已告知（`prep`）。
+    private func loadMemoryTopics() async {
+        let id = memoryTopicKey
+        guard !id.isEmpty else { return }
+        let api = api
+        let found: [MemorySummary.Topic]? = await withTaskGroup(of: [MemorySummary.Topic]?.self) { group in
+            group.addTask {
+                guard let json = try? await api.careerRequest(path: "/api/memory/summary", method: "GET",
+                                                              query: ["application_id": id, "limit": String(MemorySummary.topicFetchLimit)], body: nil) else { return [] }
+                return MemorySummary(json: json).topics
+            }
+            group.addTask { try? await Task.sleep(for: .seconds(3)); return nil }
+            defer { group.cancelAll() }
+            return await group.next() ?? nil
+        }
+        guard !Task.isCancelled else { return }
+        let topics = found ?? []
+        memoryTopics = (id, topics)
+        guard found != nil, !topics.isEmpty else { return }
+        _ = try? await api.careerRequest(path: "/api/memory/disclosures", method: "POST", query: [:],
+                                         body: .object(["page": .string("prep"), "issues": .array(MemorySummary.disclosed(topics).map(JSONValue.string))]))
+    }
+
+    /// 点台历上的一处考点：带着这条投递单练这一处（Web `practiceTopic` → `newMockInterviewPath({ applicationId, focus })`）。
+    private func practiceTopic(ref: String, label: String) {
+        router?.jump(.mock(PracticeFocus(kind: "topic", ref: ref, label: label, applicationID: application.id)))
     }
 
     /// 09.03 做决定：460 宽，只写这份 Offer、答复截止、接受后会怎样。

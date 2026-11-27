@@ -15,9 +15,12 @@ public struct PracticeFocus: Equatable, Hashable, Sendable {
     public var short = false
     /// 从哪来（outline / section_hint / assistant），只用于产品指标
     public var origin: String?
-    public init(kind: String, ref: String, label: String, resumeID: String? = nil, scope: String? = nil, hook: String? = nil, short: Bool = false, origin: String? = nil) {
+    /// 带着哪个投递来练（Web `newMockInterviewPath({ applicationId, focus })`，投递详情台历上的考点）
+    public var applicationID: String?
+    public init(kind: String, ref: String, label: String, resumeID: String? = nil, scope: String? = nil, hook: String? = nil, short: Bool = false, origin: String? = nil,
+                applicationID: String? = nil) {
         self.kind = kind; self.ref = ref; self.label = label
-        self.resumeID = resumeID; self.scope = scope; self.hook = hook; self.short = short; self.origin = origin
+        self.resumeID = resumeID; self.scope = scope; self.hook = hook; self.short = short; self.origin = origin; self.applicationID = applicationID
     }
     init?(_ json: JSONValue?) {
         guard let json, case .object = json, !json.text("ref").isEmpty else { return nil }

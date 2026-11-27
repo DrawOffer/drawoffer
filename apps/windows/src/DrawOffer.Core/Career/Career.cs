@@ -51,6 +51,15 @@ public static class CareerRequest {
     }
 
     /// <summary>`career` 请求允许携带的查询参数（Mac `DesktopTransport.career`）。</summary>
+    /// <summary>只在个别路径上用的查询键：复盘上下文的 kind / id；记忆反馈与复盘对比按哪场模拟面试或面试取（Mac <c>DesktopTransport.scopedQueryKey</c>）。</summary>
+    public static bool ScopedQueryKey(string path, string key) => path switch
+    {
+        "/api/mock-interviews/review-context" => key is "kind" or "id",
+        "/api/memory/feedback" => key is "mock_interview_id" or "interview_session_id" or "kinds",
+        "/api/memory/review-comparison" => key is "mock_interview_id" or "interview_session_id",
+        _ => false,
+    };
+
     public static readonly HashSet<string> QueryKeys = ["scope", "cursor", "limit", "week_start", "timezone", "application_id", "include_archived", "v", "job_application_id", "resume_id", "status", "folder_id", "confirm_contents", "start_at", "end_at", "type", "q", "prefix", "session_id", "include_history", "keyword", "company_ids", "city", "job_category", "recruitment_type", "job_id"];
 }
 

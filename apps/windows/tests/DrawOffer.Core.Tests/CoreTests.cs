@@ -96,4 +96,14 @@ public class CoreTests
         Assert.False(User.IsDefaultAvatar("https://media.example.com/static/default-avatar-0123456789abcdef.png?x=1"));
         Assert.False(User.IsDefaultAvatar("/api/account/avatar/7"));
     }
+
+    [Fact]
+    public void ScopedQueryKeysOnlyOnTheirPaths()
+    {
+        Assert.True(CareerRequest.ScopedQueryKey("/api/memory/feedback", "kinds"));
+        Assert.True(CareerRequest.ScopedQueryKey("/api/memory/review-comparison", "mock_interview_id"));
+        Assert.True(CareerRequest.ScopedQueryKey("/api/mock-interviews/review-context", "id"));
+        Assert.False(CareerRequest.ScopedQueryKey("/api/memory/review-comparison", "kinds"));
+        Assert.False(CareerRequest.ScopedQueryKey("/api/job-applications", "id"));
+    }
 }

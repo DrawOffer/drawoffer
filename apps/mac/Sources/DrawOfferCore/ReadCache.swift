@@ -39,6 +39,8 @@ public enum ReadCache {
         if path.hasPrefix("/api/agent/sessions/"), path.hasSuffix("/rating") || path.hasSuffix(":switch") { return false }
         // 提交反馈不改任何用户数据
         if path == "/api/feedback" { return false }
+        // 登记记忆问题已告知（台历列出的考点）只记一笔展示，不动投递、面试和简历
+        if path == "/api/memory/disclosures" { return false }
         if path.hasPrefix("/api/account/") { return readPath.hasPrefix("/api/account/") }
         return true
     }

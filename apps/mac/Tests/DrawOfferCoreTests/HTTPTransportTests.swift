@@ -158,6 +158,11 @@ private final class HTTPFixture: @unchecked Sendable {
         try await transport.career(path: "/api/job-applications", method: "GET", query: ["id": "1"], body: nil, access: "fixture-access")
     }
     #expect(fixture.requests.count == 3)
+    // 记忆反馈与复盘对比按模拟面试取：只有这两条路径放行 mock_interview_id / kinds
+    #expect(DesktopTransport.scopedQueryKey(path: "/api/memory/feedback", key: "kinds"))
+    #expect(DesktopTransport.scopedQueryKey(path: "/api/memory/review-comparison", key: "mock_interview_id"))
+    #expect(!DesktopTransport.scopedQueryKey(path: "/api/memory/review-comparison", key: "kinds"))
+    #expect(!DesktopTransport.scopedQueryKey(path: "/api/job-applications", key: "mock_interview_id"))
 }
 
 

@@ -28,6 +28,8 @@ struct MockReviewOverview<Crumb: View, Actions: View, Memory: View, Footnote: Vi
     let practice: ([MockRV.Question]) -> Void
     /// 练这几处的结果（Figma 10.23a）：不列建议先补，改列这次练的几处和前后分数；给的是「完整模拟」开一场完整模拟
     var full: (() -> Void)? = nil
+    /// 分数下面那一行末尾的「准备度 40% → 55%」（Web `ReviewReport` `readiness`，只有模拟面试复盘给）
+    var readiness: String? = nil
     @ViewBuilder var crumb: () -> Crumb
     @ViewBuilder var actions: () -> Actions
     @ViewBuilder var memory: () -> Memory
@@ -123,13 +125,13 @@ struct MockReviewOverview<Crumb: View, Actions: View, Memory: View, Footnote: Vi
         }
     }
 
-    /// 分数下面的灰色一行：答题达标 3/6 题 · 语速 · 长停顿。
+    /// 分数下面的灰色一行：答题达标 3/6 题 · 语速 · 长停顿 · 准备度。
     private var stats: [String] {
         let judged = view.questions.filter { $0.outcome != .unrecorded }
         let reached = judged.filter { $0.outcome == .reached }.count
         return [judged.isEmpty ? nil : "答题达标 \(reached)/\(judged.count) 题",
                 view.voice.map { v in v.pace.map { "语速 \(v.speed)（\($0)）" } ?? "语速 \(v.speed)" },
-                view.voice.flatMap { $0.longPauses > 0 ? "长停顿 \($0.pauses)" : nil }].compactMap { $0 }
+                view.voice.flatMap { $0.longPauses > 0 ? "长停顿 \($0.pauses)" : nil }, readiness].compactMap { $0 }
     }
 
     @ViewBuilder private func hero(_ abilities: [MockRV.Ability], wide: Bool) -> some View {

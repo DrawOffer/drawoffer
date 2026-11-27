@@ -199,3 +199,22 @@ private func pastStep(_ extra: String, cost: String? = nil) throws -> CareerJour
     // 回看不能更新进度
     #expect(!CareerJourney.canAdvance(deck, viewing: true))
 }
+
+/// 台历上列考点只在约好还没面的当前这一轮（Web `ProgressDeckPage` `upcoming`）：到点、回看、自选时段都不列。
+@Test func memoryTopicsOnlyBeforeAScheduledInterview() throws {
+    let app = try json(application)
+    let before = at("2030-10-07T02:00:00Z"), after = at("2030-10-08T06:30:00Z")
+    let deck = CareerDeck(application: app, sessions: try json(sessions).items, now: before)
+    let current = try #require(deck.current)
+    #expect(CareerJourney.memoryTopicsDue(deck: deck, station: current, viewing: false, now: before))
+    #expect(!CareerJourney.memoryTopicsDue(deck: deck, station: current, viewing: true, now: before))
+    #expect(!CareerJourney.memoryTopicsDue(deck: deck, station: current, viewing: false, now: after))
+    let written = try #require(deck.stations.first { $0.kind == .written })
+    #expect(!CareerJourney.memoryTopicsDue(deck: deck, station: written, viewing: false, now: before))
+    let open = try json(sessions.replacingOccurrences(of: #""schedule_kind":"fixed_slot"},"#, with: #""schedule_kind":"open_window"},"#)).items
+    let openDeck = CareerDeck(application: app, sessions: open, now: before)
+    #expect(!CareerJourney.memoryTopicsDue(deck: openDeck, station: try #require(openDeck.current), viewing: false, now: before))
+    // 台历上列了几处，左边的说明跟着换
+    let step = CareerJourney.step(application: app, deck: deck, station: current, viewing: false, now: before, detail: nil, previous: nil, reviewCost: nil, memoryTopics: 2)
+    #expect(step.desc == "台历上几处之前没答稳，点一处就能单独练。")
+}

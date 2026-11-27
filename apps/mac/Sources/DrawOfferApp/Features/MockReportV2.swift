@@ -32,6 +32,8 @@ struct MockReportV2: View {
     @State private var notice: MockNotice?
     @State private var player = InterviewerVoice()
     @State private var playing: String?
+    /// 准备度现在的数（长期记忆里这个投递的目标），读到哪一键的（投递:练前）
+    @State private var readinessAfter: (key: String, value: Double?)?
 
     private var reportShown: Bool { detail.map { $0["report"] != nil && $0["report"] != .null } ?? false }
 
@@ -60,6 +62,7 @@ struct MockReportV2: View {
         }
         .task(id: id) { await load() }
         .task(id: "\(id)-\(detail?["report"]?["total_score"]?.numberValue ?? -1)") { await loadContext() }
+        .task(id: readinessKey) { await loadReadiness() }
         .onDisappear { player.stop() }
         .centeredSheet(item: $judging) { item in
             MockJudgeDialog(question: item, busy: saving, save: { depth in Task { await saveJudge(item, depth) } }, close: { judging = nil })
@@ -104,7 +107,7 @@ struct MockReportV2: View {
             .id(current.id)
         } else {
             MockReviewOverview(view: view, open: { question = $0 }, practice: { start($0, detail, view) },
-                               full: layout == .set ? { restart(application) } : nil) {
+                               full: layout == .set ? { restart(application) } : nil, readiness: readinessLine) {
                 if layout == .set { MockBackCrumb(label: "模拟面试", action: home) } else { MockBackCrumb(label: "全部记录", action: records) }
             } actions: {
                 // 练这几处的结果右上不放按钮（Web `actions={practiceSet ? null : …}`）
@@ -122,6 +125,30 @@ struct MockReportV2: View {
                 if anyRecording { Button("删除本场录音") { removing = true }.buttonStyle(MockLinkStyle(blue: true, size: 12)) }
             }
         }
+    }
+
+    // MARK: 准备度
+
+    /// 练前的数在报告里（`report.readiness_before`），现在的数从长期记忆读；没挂投递或报告里没有练前的数就不读。
+    private var readinessKey: String {
+        guard let detail, let application = detail.display("job_application_id").nonEmptyValue,
+              let before = detail["report"]?["readiness_before"]?.numberValue else { return "" }
+        return "\(application):\(before)"
+    }
+
+    /// 「准备度 40% → 55%」：任一边没有就不写（Web `useReadiness`）。
+    private var readinessLine: String? {
+        let key = readinessKey
+        guard !key.isEmpty, readinessAfter?.key == key else { return nil }
+        return MemorySummary.readinessLine(before: detail?["report"]?["readiness_before"]?.numberValue, after: readinessAfter?.value)
+    }
+
+    private func loadReadiness() async {
+        let key = readinessKey
+        guard !key.isEmpty, let application = key.split(separator: ":").first.map(String.init) else { return }
+        guard let json = try? await session.api.careerRequest(path: "/api/memory/summary", method: "GET", query: ["application_id": application], body: nil),
+              !Task.isCancelled else { return }
+        readinessAfter = (key, MemorySummary(json: json).readinessValue(applicationID: application))
     }
 
     // MARK: 动作
