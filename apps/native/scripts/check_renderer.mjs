@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadSeedTemplates } from './seed_templates.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const require = createRequire(resolve(root, 'apps/web/package.json'));
 const { build } = require('esbuild');
@@ -18,14 +19,10 @@ for (const directory of ['apps/mac/Sources/DrawOfferRender/Resources', 'apps/win
   for (const filename of ['avatar-administrative.png', 'avatar-administrative.svg', 'avatar-campus.png', 'avatar-campus.svg', 'avatar-cat.jpg', 'avatar-civic.png', 'avatar-civic.svg', 'avatar-creative.png', 'avatar-creative.svg'])
     assert.deepEqual(readFileSync(resolve(root, directory, 'templates', filename)), readFileSync(resolve(root, 'apps/web/public/templates', filename)), `stale editor avatar: ${directory}/${filename}`);
 }
-for (const path of ['apps/mac/Sources/DrawOfferApp/Resources/Branding/wordmark.png', 'apps/windows/src/DrawOffer.App/Assets/Branding/wordmark.png']) {
-  assert.deepEqual(readFileSync(resolve(root, path)), readFileSync(resolve(root, 'apps/web/src/assets/drawoffer-wordmark.png')), `stale brand: ${path}`);
+for (const path of ['apps/mac/Sources/DrawOfferApp/Resources/Branding/mark.png', 'apps/windows/src/DrawOffer.App/Assets/Branding/mark.png']) {
+  assert.deepEqual(readFileSync(resolve(root, path)), readFileSync(resolve(root, 'apps/web/src/assets/drawoffer-mark.png')), `stale brand: ${path}`);
 }
-const fixtures = readFileSync(resolve(root, 'apps/native/shared/fixtures/resume-templates.json'), 'utf8');
-for (const path of ['apps/windows/src/DrawOffer.Core/Resources/resume-templates.json']) {
-  assert.equal(readFileSync(resolve(root, path), 'utf8'), fixtures, `stale fixture: ${path}`);
-}
-const { templates } = JSON.parse(fixtures);
+const { templates, validation } = loadSeedTemplates(root);
 assert.equal(templates.length, 9);
 assert.equal(templates.filter(t => t.key.startsWith('muse-')).length, 6);
 const shared = await build({ stdin: { contents: `export {renderResumePrintDocument} from './apps/web/src/features/preview/print/resumePrintDocument'; export {syncResumeIdentityCentering, syncResumeSheetColumns} from './apps/web/src/features/preview/print/resumeSheetDecoration';`, resolveDir: root }, bundle: true, write: false, format: 'iife', globalName: 'SharedPaper' });
@@ -57,7 +54,6 @@ try {
       const style = getComputedStyle(el); return [style.color, style.backgroundColor, style.display];
     }), text: root.textContent };
   };
-  const validation = JSON.parse(readFileSync(resolve(root, 'apps/native/shared/fixtures/paper-validation.json'), 'utf8'));
   for (const template of [...templates, ...validation]) {
     const key = template.style.template_key;
     const request = { protocol_version: 1, title: template.name, ...(template.assets ? { assets: template.assets } : {}), data: template.data, layout_plan: template.layout_plan, style: { schema_version: 'resume-presentation.v1', portable: { smart_one_page: false }, template_scoped: { [key]: {} }, template_snapshot: template.style } };

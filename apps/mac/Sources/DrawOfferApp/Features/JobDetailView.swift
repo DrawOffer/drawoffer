@@ -264,8 +264,9 @@ struct JobDetailView: View {
                 }
             }.frame(height: 14)
             if matchResume == nil {
-                if !resumesLoaded { Text("正在读取简历…").font(V3.sans(12.5)).foregroundStyle(V3.fnt).padding(.top, 14) }
-                else {
+                if !resumesLoaded {
+                    if hasDescription { readingResumes } else { Text("正在读取简历…").font(V3.sans(12.5)).foregroundStyle(V3.fnt).padding(.top, 14) }
+                } else {
                     Text("还没有简历").font(V3.serif(16)).padding(.top, 16)
                     Text("创建第一份简历后，打开岗位就会自动对照岗位描述算出匹配度。").font(V3.sans(12.5)).foregroundStyle(V3.sub).lineSpacing(4).fixedSize(horizontal: false, vertical: true).padding(.top, 6)
                     Button { router?.jump(.section(.resumes)) } label: { HStack(spacing: 6) { Image(systemName: "plus").font(.system(size: 11)); Text("去创建简历") }.frame(maxWidth: .infinity) }
@@ -304,6 +305,7 @@ struct JobDetailView: View {
             }.frame(width: 260, height: 6).padding(.top, 2).accessibilityHidden(true)
             Text(title).font(V3.serif(16)).foregroundStyle(V3.txt).fixedSize(horizontal: false, vertical: true).padding(.top, 17)
             if let note { Text(note).font(V3.sans(12.5)).foregroundStyle(V3.sub).fixedSize(horizontal: false, vertical: true).padding(.top, 6) }
+            if matchLoading || analyzing { matchPlaceholders }
             if let ready {
                 if !ready.hits.isEmpty { matchLine("已覆盖", ready.hits).padding(.top, 14) }
                 if !ready.gaps.isEmpty { matchLine("还缺", ready.gaps).padding(.top, 14) }
@@ -317,6 +319,28 @@ struct JobDetailView: View {
                     Button("重新分析") { Task { await analyze() } }.buttonStyle(.plain).font(V3.sans(11, weight: .medium)).foregroundStyle(V3.link).disabled(matchLoading || analyzing)
                 }
             }.padding(.top, 14)
+        }
+    }
+
+    /// 匹配结果还没到：已覆盖 / 还缺两行的位置先放骨架，结果到了不跳动。
+    private var matchPlaceholders: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            V3Skeleton(height: 11, radius: 3).frame(width: 260 * 0.74, height: 20, alignment: .leading)
+            V3Skeleton(height: 11, radius: 3).frame(width: 260 * 0.56, height: 20, alignment: .leading)
+        }.padding(.top, 10).accessibilityHidden(true)
+    }
+
+    /// 简历还在读、岗位已有描述：分数卡先按最终形状占位（Web 同一状态），按钮不可点。
+    private var readingResumes: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("—").font(V3.serif(46)).foregroundStyle(V3.txt).frame(height: 57).padding(.top, 13)
+            Capsule().fill(V3.field).frame(width: 260, height: 6).padding(.top, 2).accessibilityHidden(true)
+            Text("正在读取简历…").font(V3.serif(16)).foregroundStyle(V3.txt).padding(.top, 17)
+            matchPlaceholders
+            Button {} label: {
+                HStack(spacing: 6) { Image(systemName: "pencil.line").font(.system(size: 12)); Text("按 JD 优化这份简历") }.frame(maxWidth: .infinity)
+            }.buttonStyle(CareerRailButtonStyle()).disabled(true).padding(.top, 18)
+            Text("简历或岗位描述改动后，会提示重新分析").font(V3.sans(11)).foregroundStyle(V3.fnt).padding(.top, 14)
         }
     }
 

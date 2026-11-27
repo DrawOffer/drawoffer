@@ -17,6 +17,4 @@ public static class Beijing {
     public static DateOnly TodayDate=>DateOnly.FromDateTime(Now.DateTime);
     /// <summary>The same instant with the Beijing offset, so its Date, Hour and ToString read Beijing time.</summary>
     public static DateTimeOffset ToBeijing(this DateTimeOffset value)=>value.ToOffset(Offset);
-    /// <summary>A Beijing wall-clock date and time as an instant.</summary>
-    public static DateTimeOffset At(DateOnly date,TimeSpan time=default)=>new(date.ToDateTime(TimeOnly.MinValue).Add(time),Offset);
 }

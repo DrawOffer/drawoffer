@@ -10,6 +10,8 @@ struct ChatPreviewTab: Equatable {
         case resume, dataset, generated, image
         /// 对话里点开的岗位广场岗位、我的岗位（含匹配度）、投递和模拟面试报告（Web `ObjectTab`，Figma 02B·09 · 02.10a/b/c）。
         case poolJob = "pool_job", job, application, mockInterview = "mock_interview"
+        /// 找匹配岗位时画像没填好，在右侧打开求职画像（02B-16）。
+        case careerProfile = "career_profile"
         var isObject: Bool { [.poolJob, .job, .application, .mockInterview].contains(self) }
     }
     let kind: Kind
@@ -27,6 +29,7 @@ struct ChatPreviewTab: Equatable {
     var key: String { kind.rawValue + ":" + id }
 
     static let maximum = 6
+    static let careerProfile = ChatPreviewTab(kind: .careerProfile, id: "me", label: "求职画像")
 
     /// 同一文件只保留一个标签，内容有变化时就地更新；超出上限时丢掉最早打开的。
     static func open(_ tabs: [ChatPreviewTab], _ tab: ChatPreviewTab) -> [ChatPreviewTab] {
@@ -61,6 +64,8 @@ struct ChatPreviewPanel: View {
     let markUnavailable: (String) -> Void
     /// 全屏查看 / 恢复面板大小（Web `PreviewPanel` 的全屏切换）。
     var fullscreen: Binding<Bool> = .constant(false)
+    /// 求职画像标签读到或保存后的画像与求职意向。
+    var profileChanged: (JSONValue, JSONValue) -> Void = { _, _ in }
     @Environment(SessionStore.self) private var session
     @State private var downloading = false
     @State private var downloadError: String?
@@ -78,6 +83,7 @@ struct ChatPreviewPanel: View {
                 }
                 HStack(spacing: 4) {
                     Menu {
+                        if current?.kind == .careerProfile { Button("在新页面打开") { router?.jump(.careerProfile) } }
                         Button("重新加载") { reload = UUID() }
                         Button("关闭其他标签") { tabs.filter { $0.key != current?.key }.forEach { closeTab($0.key) } }.disabled(tabs.count < 2)
                     } label: { Image(systemName: "ellipsis").font(.system(size: 12)) }
@@ -95,11 +101,12 @@ struct ChatPreviewPanel: View {
                     case .image: ChatImagePreview(data: current.imageData, label: current.label)
                     case .dataset: ChatDatasetPreview(datasetID: current.id, onMissing: { markUnavailable(current.key) })
                     case .poolJob, .job, .application, .mockInterview: ChatObjectPreview(tab: current, onMissing: { markUnavailable(current.key) })
+                    case .careerProfile: CareerProfileView(back: {}, panel: true, changed: profileChanged)
                     case .generated: ScrollView { NativeMarkdownView(source: current.content, size: 13.5, line: 24).textSelection(.enabled).padding(24).frame(maxWidth: .infinity, alignment: .leading) }
                     }
                 }
             }.id((current?.key ?? "") + reload.uuidString).frame(maxWidth: .infinity, maxHeight: .infinity)
-            if let current, !current.kind.isObject {
+            if let current, !current.kind.isObject, current.kind != .careerProfile {
                 Rectangle().fill(V3.line).frame(height: 1)
                 footer(current).padding(.leading, 18).padding(.trailing, 14).frame(height: 54)
             }
@@ -152,7 +159,7 @@ struct ChatPreviewPanel: View {
     /// 标签（02B·06）：当前标签 #F4F4F2 底、圆角 7，显示完整名称；其余只显示图标 + 截断名称，悬停显示全名。
     private func tabButton(_ tab: ChatPreviewTab) -> some View {
         let selected = tab.key == current?.key
-        let symbol = ["resume": "doc.text", "generated": "doc.richtext", "image": "photo", "pool_job": "briefcase", "job": "briefcase", "application": "rectangle.3.group", "mock_interview": "mic"][tab.kind.rawValue] ?? "doc"
+        let symbol = ["resume": "doc.text", "generated": "doc.richtext", "image": "photo", "pool_job": "briefcase", "job": "briefcase", "application": "rectangle.3.group", "mock_interview": "mic", "career_profile": "person"][tab.kind.rawValue] ?? "doc"
         return HStack(spacing: 8) {
             Button { activate(tab.key) } label: {
                 HStack(spacing: 8) {
@@ -183,7 +190,7 @@ struct ChatPreviewPanel: View {
                 footButton(downloading ? "正在下载…" : "下载文件", symbol: "arrow.down.circle") { Task { await download(tab) } }
                     .disabled(downloading || unavailable.contains(tab.key))
                 footButton("在资料库中打开", symbol: "arrow.up.forward.square") { router?.jump(.section(.datasets)) }
-            case .poolJob, .job, .application, .mockInterview:
+            case .poolJob, .job, .application, .mockInterview, .careerProfile:
                 EmptyView()
             case .image:
                 status("截图 · 仅在本次对话中可见")

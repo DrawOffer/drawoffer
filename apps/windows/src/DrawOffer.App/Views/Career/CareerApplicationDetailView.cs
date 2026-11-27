@@ -12,26 +12,6 @@ using static DrawOffer.App.DesignSystem.V3;
 
 namespace DrawOffer.App.Views.Career;
 
-/// <summary>Mac `CareerButtonStyle`：12px 中粗、左右 16、默认 34 高、圆角 6；主按钮黑底白字，次按钮白底 #E4E4E0 边；按下 0.7。</summary>
-public sealed class CareerButton : BorderControl
-{
-    public CareerButton(string title, Action action, bool primary = false, double radius = 6, double height = 34)
-    {
-        Child = Sans(title, 12, primary ? V3.White : Hex(0x1D1D1B), Medium).Align(HorizontalAlignment.Center, VerticalAlignment.Center);
-        Padding = new Thickness(16, 0, 16, 0);
-        Height = height;
-        CornerRadius = new CornerRadius(radius);
-        Background = Brush(primary ? Hex(0x1D1D1B) : V3.White);
-        BorderBrush = Brush(primary ? Clear : Hex(0xE4E4E0));
-        BorderThickness = new Thickness(1);
-        AutomationProperties.SetName(this, title);
-        PointerPressed += (_, e) => { Opacity = 0.7; e.Handled = true; };
-        PointerReleased += (_, e) => { Opacity = 1; e.Handled = true; action(); };
-        PointerExited += (_, _) => Opacity = 1;
-        ProtectedCursor = Microsoft.UI.Input.InputSystemCursor.Create(Microsoft.UI.Input.InputSystemCursorShape.Hand);
-    }
-}
-
 /// <summary>
 /// Mac `CareerIcon`：读 `Resources/Career/&lt;name&gt;.png`，Windows 打包在 `ms-appx:///Assets/Career/&lt;name&gt;.png`。
 /// template 时按 alpha 单色着色（Swift `.renderingMode(.template)`），颜色取 tint（默认 V3.Txt）；读屏忽略。
@@ -96,7 +76,6 @@ public sealed partial class CareerApplicationDetailView : UserControl
     JsonNode Raw => _current ?? _application.Raw;
     CareerApplication Item => new CareerApplication(Raw).IncludingSessions(_sessions);
     CareerDetailModel Model => new(Raw, _sessions, _now);
-    bool Active => Raw.Text("lifecycle_status") != "terminated" && Raw.Text("status") == "active" && Raw.Text("archived_at").Length == 0;
     CareerDeck Deck => new(Raw, _sessions, _now);
 
     public CareerApplicationDetailView(CareerApplication application, Action back, Action<string, CareerApplication> perform, bool libraryMaterials = false, Action? openApplication = null)

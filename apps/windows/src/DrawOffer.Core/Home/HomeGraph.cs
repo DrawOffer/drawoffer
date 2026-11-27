@@ -74,10 +74,7 @@ namespace DrawOffer.Core.Home
 
         /// <summary>最近进展的一条（Web `HomeGraphProgress`）。</summary>
         public sealed record Progress(Source Kind, string Date, string Source, string SourceId, ProgressTone Tone, string? Name, string? Before, string? After,
-            int Asked, int Missed, string? PracticeLabel, string? PracticeRef, string? PracticeKind)
-        {
-            public string Id => $"{Kind}:{SourceId}";
-        }
+            int Asked, int Missed, string? PracticeLabel, string? PracticeRef, string? PracticeKind);
 
         public sealed class Entries
         {

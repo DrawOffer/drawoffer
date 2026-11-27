@@ -4,61 +4,70 @@ import DrawOfferCore
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// 导入面试记录（Figma 09 · 09.01 弹窗、09.02 粘贴文字；Web `v2/ImportDialog.tsx`）：只要文件或文字、公司和时间，不用先有投递。
-/// 文字和文档当场拆题、生成复盘；录音先上传转写，转写好后在这场的面试资料里接着生成。
+/// 导入真实面试（Figma 09N · 09.10a–e；Web `v2/ImportDialog.tsx`）：录音、文件或粘贴文字，挂到一场已结束的面试，
+/// 或者在已有投递下补一轮（选轮次和日期，不推进投递）。那一场已经有记录时先确认替换，替换后按新记录重新生成复盘。
+/// 文字和文档在弹窗里拆题、提交复盘；录音上传后由服务端转写，转写好后在这场的面试资料里生成复盘。
 struct MockImportDialog: View {
     @Environment(SessionStore.self) private var session
+    @Environment(WorkspaceRouter.self) private var router: WorkspaceRouter?
+    var sessionID: String? = nil
     let close: () -> Void
     let done: () -> Void
 
     private static let media = ["mp3", "m4a", "wav", "webm", "ogg", "mp4", "mov", "aac"]
     private static let documents = ["pdf", "docx", "doc", "txt", "md"]
 
+    @State private var targets: JSONValue?
+    @State private var target: MockRecords.Target?
+    @State private var round = "1"
+    @State private var date = Date()
     @State private var paste = false
     @State private var file: URL?
     @State private var text = ""
-    @State private var company = ""
-    @State private var date = Date()
     @State private var over = false
     @State private var busy = false
     @State private var failed: String?
+    @State private var menu = false
+    @State private var confirmReplace = false
     /// 失败后重试不再建一条新的面试记录
     @State private var created: (key: String, sessionID: String, applicationID: String)?
     @State private var upload: DatasetUpload?
 
-    private var ready: Bool { !company.trimmingCharacters(in: .whitespaces).isEmpty && (paste ? !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty : file != nil) }
+    private var nothing: Bool { targets.map { ($0["sessions"]?.items ?? []).isEmpty && ($0["applications"]?.items ?? []).isEmpty } ?? false }
+    private var future: Bool { if case .application = target { return day > Self.day(Date()) }; return false }
+    private var ready: Bool { target != nil && !future && (paste ? !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty : file != nil) }
 
     var body: some View {
-        MockFormCard(title: "导入面试记录", sub: "录音或文字稿都可以，导入后会记进你的长期记忆。", serif: !paste, subColor: paste ? MockPalette.fnt : MockPalette.sub,
-                     close: { if !busy { close() } }, footLine: !paste, footTop: paste ? 18 : 25, footBottom: paste ? 15 : 0) {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("导入真实面试").font(V3.serif(20)).foregroundStyle(MockPalette.ink).lineHeight(20, 29, .serif)
+                Text("支持录音或文字稿，导入后会生成复盘并更新长期记忆。").font(V3.sans(14)).foregroundStyle(MockPalette.mute).lineHeight(14, 21)
+            }
+            MockSeg(label: "导入方式", options: [("file", "文件导入", false), ("paste", "粘贴文字", false)], current: paste ? "paste" : "file", pill: true) { paste = $0 == "paste" }
+                .padding(.top, 20)
             if paste {
                 ZStack(alignment: .topLeading) {
                     TextEditor(text: $text).font(V3.sans(13)).foregroundStyle(MockPalette.sub).scrollContentBackground(.hidden).padding(.horizontal, 9).padding(.vertical, 8)
                         .accessibilityLabel("面试文字稿")
-                    if text.isEmpty { Text("把面试问答贴在这里").font(V3.sans(13)).foregroundStyle(MockPalette.mute).padding(.horizontal, 14).padding(.vertical, 12).allowsHitTesting(false) }
+                    if text.isEmpty {
+                        Text("面试官：介绍一下你做的项目。\n我：这个项目主要负责……").font(V3.sans(13)).foregroundStyle(MockPalette.mute).lineSpacing(4)
+                            .padding(.horizontal, 14).padding(.vertical, 12).allowsHitTesting(false)
+                    }
                 }
-                .frame(height: 160).background(MockPalette.field, in: RoundedRectangle(cornerRadius: 10)).padding(.top, 16)
-                Button("‹ 改为上传文件") { paste = false }.buttonStyle(MockLinkStyle()).padding(.top, 12)
+                .frame(height: 140).background(MockPalette.field, in: RoundedRectangle(cornerRadius: 10)).padding(.top, 14)
             } else {
-                // Figma 09.01：虚线框里一行标题、一行格式说明，「粘贴文字 ›」跟在格式说明后面
                 Button(action: pick) {
-                    RoundedRectangle(cornerRadius: 12).fill(MockPalette.rowHover)
-                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(over ? MockPalette.blue : MockPalette.faint, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
-                        .frame(maxWidth: .infinity).frame(height: 111)
-                        .contentShape(RoundedRectangle(cornerRadius: 12))
-                }
-                .buttonStyle(.plain).padding(.top, 22).accessibilityLabel("选择录音或文字稿")
-                .overlay {
                     VStack(spacing: 6) {
                         Text(verbatim: file?.lastPathComponent ?? "拖入录音或文字稿，或点击选择").font(V3.sans(14, weight: .medium)).foregroundStyle(MockPalette.ink)
-                            .lineLimit(1).truncationMode(.middle).allowsHitTesting(false)
-                        HStack(spacing: 8) {
-                            Text(verbatim: file == nil ? "mp3、m4a、wav、PDF、Word" : "点击换一个文件").font(V3.sans(12.5)).foregroundStyle(MockPalette.fnt).allowsHitTesting(false)
-                            Button("粘贴文字 ›") { paste = true }.buttonStyle(MockLinkStyle(blue: true, size: 12.5))
-                        }
+                            .lineLimit(1).truncationMode(.middle)
+                        Text(verbatim: file == nil ? "mp3、m4a、wav、PDF、Word" : "点击换一个文件").font(V3.sans(12.5)).foregroundStyle(MockPalette.fnt)
                     }
-                    .padding(.horizontal, 16).padding(.top, 22)
+                    .padding(.horizontal, 16).frame(maxWidth: .infinity).frame(height: 104)
+                    .background(MockPalette.rowHover, in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(over ? MockPalette.blue : MockPalette.faint, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+                    .contentShape(RoundedRectangle(cornerRadius: 12))
                 }
+                .buttonStyle(.plain).padding(.top, 14).accessibilityLabel("选择录音或文字稿")
                 .onDrop(of: [.fileURL], isTargeted: $over) { providers in
                     guard let provider = providers.first else { return false }
                     _ = provider.loadObject(ofClass: URL.self) { url, _ in
@@ -67,31 +76,116 @@ struct MockImportDialog: View {
                     return true
                 }
             }
-            HStack(alignment: .top, spacing: 12) {
-                field("公司") {
-                    TextField("", text: Binding(get: { company }, set: { company = String($0.prefix(100)) })).textFieldStyle(.plain).font(V3.sans(13.5))
-                        .overlay(alignment: .leading) { if company.isEmpty { Text("比如云川科技").font(V3.sans(13.5)).foregroundStyle(MockPalette.mute).allowsHitTesting(false) } }
+            VStack(alignment: .leading, spacing: 6) {
+                row("场次") {
+                    if nothing {
+                        Text("还没有可选的面试或岗位").font(V3.sans(14)).foregroundStyle(MockPalette.mute)
+                        Spacer(minLength: 12)
+                        Button("去添加岗位 ›") { close(); router?.jump(.section(.jobs)) }.buttonStyle(MockLinkStyle(blue: true, size: 14))
+                    } else {
+                        Text(verbatim: target?.label ?? (targets == nil ? "正在读取…" : "")).font(V3.sans(14, weight: .medium))
+                            .foregroundStyle(MockPalette.ink).lineLimit(1).help(target?.label ?? "")
+                        Spacer(minLength: 12)
+                        Button("更换") { menu.toggle() }.buttonStyle(MockLinkStyle(blue: true, size: 14)).disabled(targets == nil || busy)
+                    }
                 }
-                field("时间") {
-                    DatePicker("时间", selection: $date, in: ...Date(), displayedComponents: .date).labelsHidden().datePickerStyle(.field)
-                        .environment(\.timeZone, Beijing.calendar.timeZone)
+                .zIndex(menu ? 2 : 0)
+                .overlay(alignment: .topTrailing) { if menu, let targets { targetMenu(targets).offset(x: 8, y: 42) } }
+                if case .application = target {
+                    row("轮次") {
+                        MockSeg(label: "轮次", options: [("1", "一面", false), ("2", "二面", false), ("3", "三面", false), ("hr", "HR 面", false)], current: round, pill: true) { round = $0 }
+                    }
+                    row("面试日期") {
+                        DatePicker("面试日期", selection: $date, displayedComponents: .date).labelsHidden().datePickerStyle(.field)
+                            .environment(\.timeZone, Beijing.calendar.timeZone).disabled(busy)
+                        Spacer(minLength: 0)
+                    }
                 }
-            }.padding(.top, paste ? 12 : 21)
-        } left: {
-            if let failed { Text(verbatim: failed).font(V3.sans(12.5)).foregroundStyle(MockPalette.orange).frame(maxWidth: 200, alignment: .leading).fixedSize(horizontal: false, vertical: true) }
-        } foot: {
-            Button("取消", action: close).buttonStyle(MockPillStyle(kind: .ghost, height: 32, padding: 21, size: 13)).disabled(busy)
-            Button(busy ? "正在导入…" : "开始导入") { Task { await run() } }.buttonStyle(MockPillStyle(height: paste ? 38 : 36, padding: 24)).disabled(!ready || busy)
+            }
+            .padding(.top, 14).zIndex(1)
+            HStack(spacing: 12) {
+                Group {
+                    if let note = failed ?? (future ? "面试日期不能晚于今天" : nil) {
+                        Text(verbatim: note).font(V3.sans(13)).foregroundStyle(MockPalette.orange).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Button("取消", action: close).buttonStyle(MockDialogButton(dark: false)).disabled(busy)
+                Button(busy ? "正在导入…" : "开始导入") { Task { await run() } }.buttonStyle(MockDialogButton(dark: true)).disabled(!ready || busy)
+            }
+            .padding(.top, 24)
         }
+        .padding(.horizontal, 28).padding(.top, 28).padding(.bottom, 24)
+        .frame(width: 462, alignment: .leading)
+        .background {
+            ZStack {
+                RoundedRectangle(cornerRadius: 18).fill(.white).shadow(color: .black.opacity(0.08), radius: 14, y: 8)
+                if menu { Color.white.opacity(0.001).onTapGesture { menu = false } }
+            }
+        }
+        .background { Button("", action: { if menu { menu = false } else if !busy { close() } }).keyboardShortcut(.cancelAction).opacity(0).accessibilityHidden(true) }
+        .overlay {
+            if confirmReplace, case .session(let picked) = target {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 18).fill(.black.opacity(0.06))
+                    MockSessionConfirm(title: "替换这场的记录？", desc: "\(picked.text("title"))已经有面试记录，替换后会按新记录重新生成复盘。", confirm: "替换并重新复盘",
+                                       onConfirm: { Task { await run(replace: true) } }, onCancel: { confirmReplace = false })
+                        .background(.white, in: RoundedRectangle(cornerRadius: 14)).shadow(color: .black.opacity(0.12), radius: 20, y: 10)
+                }
+            }
+        }
+        .task { await loadTargets() }
         .onDisappear { upload?.discard() }
     }
 
-    private func field<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(verbatim: label).font(V3.sans(paste ? 12.5 : 13)).foregroundStyle(paste ? MockPalette.fnt : MockPalette.sub).frame(height: 20)
-            content().padding(.horizontal, 13).frame(height: 38)
-                .background(.white, in: RoundedRectangle(cornerRadius: 6)).overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.black.opacity(0.14)))
-        }.frame(width: 192)
+    private func row<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 0) {
+            Text(verbatim: label).font(V3.sans(14)).foregroundStyle(MockPalette.mute).frame(width: 84, alignment: .leading)
+            content()
+        }.frame(minHeight: 36)
+    }
+
+    /// 选场次：已结束的面试（已有记录的标出来），再是「在已有岗位下新增一轮」，最后去投递看板添加岗位。
+    private func targetMenu(_ targets: JSONValue) -> some View {
+        let sessions = targets["sessions"]?.items ?? [], applications = targets["applications"]?.items ?? []
+        return MockPopMenu(width: 380) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    if !sessions.isEmpty { group("已结束的面试") }
+                    ForEach(sessions, id: \.self) { item in
+                        MockPopRow(on: target == .session(item), title: item.text("title"),
+                                   sub: "\(MockHome.mmdd(item.text("at"))) · \(item.text("job_title"))\(item["has_record"]?.bool == true ? " · 已有记录" : "")") { choose(.session(item)) }
+                    }
+                    if !applications.isEmpty {
+                        if !sessions.isEmpty { Rectangle().fill(Color(hex: 0xF0EFEC)).frame(height: 1).padding(.vertical, 2) }
+                        group("在已有岗位下新增一轮")
+                    }
+                    ForEach(applications, id: \.self) { item in
+                        MockPopRow(on: target == .application(item), title: "\(item.text("company_name")) · \(item.text("job_title"))", sub: item.text("stage_hint").nonEmptyValue) { choose(.application(item)) }
+                    }
+                    Button { close(); router?.jump(.section(.jobs)) } label: {
+                        Text("没有找到？去投递看板添加岗位 ›").font(V3.sans(14)).foregroundStyle(MockPalette.blue).padding(.horizontal, 15).padding(.top, 10).padding(.bottom, 8)
+                            .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                    }.buttonStyle(.plain)
+                }
+            }
+            .frame(maxHeight: 320)
+        }
+    }
+    private func group(_ title: String) -> some View {
+        Text(verbatim: title).font(V3.sans(12)).foregroundStyle(MockPalette.mute).padding(.horizontal, 15).padding(.top, 8).padding(.bottom, 4)
+    }
+
+    private func choose(_ next: MockRecords.Target) {
+        target = next
+        if case .application(let application) = next { round = MockRecords.defaultRound(application) }
+        menu = false
+    }
+
+    private func loadTargets() async {
+        let value = (try? await request("/api/mock-interviews/import-targets")) ?? .object(["sessions": .array([]), "applications": .array([])])
+        targets = value
+        if let picked = MockRecords.defaultTarget(value, sessionID: sessionID) { choose(picked) }
     }
 
     private static func allowed(_ url: URL) -> Bool { (media + documents).contains(url.pathExtension.lowercased()) }
@@ -103,7 +197,8 @@ struct MockImportDialog: View {
         if panel.runModal() == .OK, let url = panel.url { file = url; upload?.discard(); upload = nil; failed = nil }
     }
 
-    private var day: String {
+    private var day: String { Self.day(date) }
+    private static func day(_ date: Date) -> String {
         let parts = Beijing.calendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
     }
@@ -112,13 +207,17 @@ struct MockImportDialog: View {
         try await session.api.careerRequest(path: path, method: method, query: [:], body: body)
     }
 
-    private func run() async {
+    private func run(replace: Bool = false) async {
+        guard let target else { return }
+        if case .session(let picked) = target, picked["has_record"]?.bool == true, !replace { confirmReplace = true; return }
+        confirmReplace = false
         busy = true; failed = nil
         do {
-            let name = company.trimmingCharacters(in: .whitespaces)
-            let key = "\(name)|\(day)"
+            let body = MockRecords.importBody(target, replace: replace, round: round, day: day)
+            let key = String(describing: body)
             if created?.key != key {
-                let record = try await request("/api/mock-interviews/imports", "POST", .object(["company_name": .string(name), "occurred_on": .string(day)]))
+                upload?.discard(); upload = nil
+                let record = try await request("/api/mock-interviews/imports", "POST", body)
                 created = (key, record.display("session_id"), record.display("application_id"))
             }
             guard let created else { return }
@@ -146,10 +245,10 @@ struct MockImportDialog: View {
                                   .object(["request_id": .string(UUID().uuidString.lowercased()), "base_lock_version": saved["session"]?["lock_version"] ?? .number(1)]))
             done()
         } catch ImportFailure.unreadable {
-            failed = "这个文件读不出文字，换一份试试。"; busy = false
+            failed = "这个文件读不出文字，换一份再导入。"; busy = false
         } catch {
             if case APIError.server(let status, _) = error, (400..<500).contains(status), status != 409 { upload?.discard(); upload = nil }
-            failed = { if case APIError.server(_, let code) = error, code == "INTERVIEW_QUESTIONS_NOT_FOUND" { return "没找到面试问题，换一份文字稿试试。" }; return "导入没有完成：" + MockInterviewText.error(error) }()
+            failed = { if case APIError.server(_, let code) = error, code == "INTERVIEW_QUESTIONS_NOT_FOUND" { return "没找到面试问题，换一份文字稿再导入。" }; return MockInterviewText.error(error) }()
             busy = false
         }
     }

@@ -5,8 +5,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// 工作区首页（macOS 设计稿 02A 页，Web `assistant/home/HomeMemory.tsx`）：
-/// 没有简历 → 01 新用户（左边欢迎、右边一张能点能拖的简历纸）；有简历、第一份报告看完之前 → 03 / 06（练一场模拟面试）；
-/// 有结论 → 07（最近进展 + 知识图谱 + 六个入口）。
+/// 没有简历 → 01 新用户（左边欢迎、右边一张能点能拖的简历纸）；有简历、第一份报告看完之前 → 03 / 06（练一场模拟面试，跟新手引导开关走）；
+/// 之后一律是 07（最近进展 + 知识图谱 + 六个入口），缺图谱节点或缺进展时只换那一块。
 struct HomeMemoryView: View {
     @Environment(SessionStore.self) private var session
     let editResume: (String) -> Void
@@ -34,8 +34,8 @@ struct HomeMemoryView: View {
                     Text("首页信息暂时无法读取").font(V3.sans(17, weight: .medium)).foregroundStyle(V3.txt)
                     Button("重试") { Task { await load() } }.buttonStyle(V3ButtonStyle())
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let graph, loaded {
-                switch HomeStage.pick(graph: graph, mocks: mocks, reportSeen: UserDefaults.standard.bool(forKey: reportSeenKey)) {
+            } else if let graph, loaded, graph.resumeID == nil || CoachGuide.shared.ready {
+                switch HomeStage.pick(graph: graph, mocks: mocks, reportSeen: UserDefaults.standard.bool(forKey: reportSeenKey), guideOn: CoachGuide.shared.enabled) {
                 case .newUser:
                     HomeCanvas { NewUserHome(reload: { Task { await load() } }, editResume: { id in HomePaperHandoff.armed = true; editResume(id) }) }
                 case .firstSteps(let mode):
@@ -45,11 +45,6 @@ struct HomeMemoryView: View {
                                            if mode == .report { UserDefaults.standard.set(true, forKey: reportSeenKey) }
                                            if let id { openMock(id, mode == .report) } else { practice(nil) }
                                        },
-                                       jobs: { navigate(.opportunities) }, changed: { Task { await load() } })
-                    }
-                case .resumeOnly:
-                    HomeCanvas {
-                        FirstStepsHome(graph: graph, mode: .start, mockID: nil, open: { _ in practice(nil) },
                                        jobs: { navigate(.opportunities) }, changed: { Task { await load() } })
                     }
                 case .feedback:
@@ -70,7 +65,8 @@ struct HomeMemoryView: View {
         failed = false
         async let graphJSON = try? session.api.careerRequest(path: "/api/memory/home/graph", method: "GET", query: [:], body: nil)
         async let mockJSON = try? session.api.careerRequest(path: "/api/mock-interviews", method: "GET", query: [:], body: nil)
-        let (g, m) = await (graphJSON, mockJSON)
+        async let guide: Void = CoachGuide.shared.refresh(api: session.api)
+        let (g, m, _) = await (graphJSON, mockJSON, guide)
         guard own == request else { return }
         if let g { graph = HomeGraph(json: g) } else { failed = true }
         mocks = m.map(HomeMockProgress.init(json:))
@@ -689,7 +685,7 @@ private struct Wave: View {
 }
 
 /// 首页右边那页真实简历（与编辑器同一页的第一页）。
-private struct HomeResumePaper: View {
+struct HomeResumePaper: View {
     @Environment(SessionStore.self) private var session
     let resumeID: String
     @State private var paper: ResumeRenderRequest?
@@ -720,7 +716,7 @@ private struct HomeResumePaper: View {
     }
 }
 
-// MARK: 07 有记忆（Figma 02A·07，Web FeedbackHome）
+// MARK: 07 日常首页（Figma 02A·07、5:7·01.04–01.07，Web FeedbackHome）
 
 private struct FeedbackHome: View {
     @Environment(SessionStore.self) private var session
@@ -735,14 +731,19 @@ private struct FeedbackHome: View {
     var chatsChanged: (() -> Void)? = nil
     @State private var picked = 0
     @State private var expanded = false
+    /// 小图和展开大图的坐标：节点多时排布要算一会儿，放到后台
+    @State private var stage: HomeGraphStage?
     /// 展开的图谱右边正在聊的节点（Figma 02A·10 ②）
     @State private var chat: HomeChatTopic?
     /// 同一个知识点再点「聊一聊」接着上次那段聊（只在这次打开页面期间记得）
     @State private var chatSessions: [String: String] = [:]
 
+    /// 有节点就画图谱，不等掌握结论；一个节点都没有时右边换成一句话
+    private var graphReady: Bool { !graph.nodes.isEmpty }
+    private var hasTimeline: Bool { !graph.timeline.isEmpty }
     /// K4（Figma 02A·06 61:3081）：第一次进记忆首页（只练过一场）时压暗，只亮知识图谱，浮层解释长期记忆
     private var coach: CoachSlot { CoachSlot(id: "memory-home-first", user: session.coachUser) }
-    private var showCoach: Bool { coach.open && !expanded && graph.hasConclusions && graph.sources.mocks <= 1 }
+    private var showCoach: Bool { coach.open && !expanded && graphReady && graph.sources.mocks <= 1 }
 
     var body: some View {
         GeometryReader { geometry in
@@ -752,20 +753,33 @@ private struct FeedbackHome: View {
             let graphWidth = min(529, max(320, (geometry.size.width - padX * 2 - 40) * 0.51))
             VStack(spacing: 0) {
                 HStack(alignment: .top, spacing: 40) {
-                    timeline.padding(.top, 70).frame(maxWidth: .infinity, alignment: .topLeading)
+                    // 最近进展为空或图谱没有节点时，左栏不再跟图谱上沿对齐，竖直居中
+                    Group {
+                        if hasTimeline { timeline.fixedSize(horizontal: false, vertical: true).padding(.top, graphReady ? 70 : 0) } else { summary }
+                    }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: hasTimeline && graphReady ? .topLeading : .leading)
                     VStack(spacing: 0) {
                         HStack(spacing: 22) {
                             Spacer()
-                            (Text("知识图谱").foregroundStyle(V3.txt).fontWeight(.medium) + Text("   ") +
-                             Text(graph.weakPoints > 0 ? "\(graph.points) 个知识点，\(graph.weakPoints) 个还不牢" : "\(graph.points) 个知识点").foregroundStyle(V3.fnt))
+                            (Text("知识图谱").foregroundStyle(V3.txt).fontWeight(.medium) +
+                             Text(graphReady ? (graph.weakPoints > 0 ? "   \(graph.points) 个知识点，\(graph.weakPoints) 个还不牢" : "   \(graph.points) 个知识点") : "").foregroundStyle(V3.fnt))
                                 .font(V3.sans(13))
-                            Button { withAnimation(.timingCurve(0.2, 0.9, 0.25, 1, duration: 0.6)) { expanded = true } } label: {
-                                HStack(spacing: 6) { Text("展开"); Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 11, weight: .medium)) }
-                            }.buttonStyle(.plain).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
+                            if graphReady {
+                                Button { withAnimation(.timingCurve(0.2, 0.9, 0.25, 1, duration: 0.6)) { expanded = true } } label: {
+                                    HStack(spacing: 6) { Text("展开"); Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 11, weight: .medium)) }
+                                }.buttonStyle(.plain).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
+                            }
                         }.frame(height: 28)
-                        HomeGraphCanvas(nodes: graph.nodes.filter(\.onHome), edges: graph.edges, large: false)
-                            .padding(.top, 31).frame(minHeight: 240, maxHeight: 535, alignment: .top)
-                            .onTapGesture(count: 2) { withAnimation(.timingCurve(0.2, 0.9, 0.25, 1, duration: 0.6)) { expanded = true } }
+                        if graphReady {
+                            HomeGraphCanvas(graph: graph, stage: stage)
+                                .padding(.top, 31).frame(minHeight: 240, maxHeight: 535, alignment: .top)
+                                .onTapGesture(count: 2) { withAnimation(.timingCurve(0.2, 0.9, 0.25, 1, duration: 0.6)) { expanded = true } }
+                        } else {
+                            // 一个节点都没有（记忆还没读到简历，或刚清空过）
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("图谱里还没有内容").font(V3.sans(22, weight: .medium)).foregroundStyle(V3.txt)
+                                Text("简历里的经历和技术、练过的面试，都会画在这里。").font(V3.sans(14)).lineHeight(14, 24).foregroundStyle(V3.sub)
+                            }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading).padding(.horizontal, 32)
+                        }
                     }.frame(width: graphWidth)
                         .coachTarget(showCoach, label: "长期记忆引导", message: "这是你的长期记忆。简历、面试和岗位里的东西\n都连在这里，每练一场都会更新。",
                                      actions: [CoachAction(label: "知道了")], padding: 8, corner: 12) { coach.dismiss() }
@@ -781,6 +795,10 @@ private struct FeedbackHome: View {
                 }
             }
         }
+        .task(id: graph) {
+            let graph = graph
+            stage = await Task.detached(priority: .userInitiated) { HomeGraphStage(graph: graph) }.value
+        }
         .onExitCommand {
             if chat != nil { withAnimation(.easeOut(duration: 0.2)) { chat = nil } }
             else if expanded { withAnimation { expanded = false } }
@@ -790,7 +808,7 @@ private struct FeedbackHome: View {
     /// 展开：铺满整页，左边图谱卡片，右边对话栏（点「聊一聊」才出现）。
     private var expandedLayer: some View {
         HStack(spacing: 0) {
-            HomeGraphExpandedView(graph: graph, compact: chat != nil, chatKey: chat?.key,
+            HomeGraphExpandedView(graph: graph, stage: stage, compact: chat != nil, chatKey: chat?.key,
                                   collapse: { withAnimation(.timingCurve(0.2, 0.9, 0.25, 1, duration: 0.5)) { chat = nil; expanded = false } },
                                   chat: { topic in withAnimation(.timingCurve(0.2, 0.9, 0.25, 1, duration: 0.4)) { chat = topic } })
                 .padding(.leading, 24).padding(.vertical, 24).padding(.trailing, chat == nil ? 24 : 16)
@@ -806,11 +824,38 @@ private struct FeedbackHome: View {
         }.background(.white)
     }
 
+    /// R2（Figma 5:7·01.07）：最近进展为空时左边直接说结论（最稳、最该补的一处）；还没有结论时只说接着练。
+    private var summary: some View {
+        let summary = HomeSummary.of(graph)
+        let lastMock = graph.entries?.mockLastID
+        return HStack(alignment: .top, spacing: 16) {
+            Circle().fill(V3.blue).frame(width: 10, height: 10).padding(.top, 6)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(summary.eyebrow).font(V3.sans(13)).tracking(0.5).lineHeight(13, 22).foregroundStyle(V3.fnt).padding(.bottom, 14)
+                Text(summary.title.joined(separator: "\n")).font(V3.sans(40, weight: .semibold)).lineHeight(40, 52.8).foregroundStyle(V3.txt).minimumScaleFactor(0.6)
+                Text(summary.desc).font(V3.sans(16)).lineHeight(16, 28).foregroundStyle(V3.sub).frame(maxWidth: 544, alignment: .leading).padding(.top, 14).padding(.bottom, 22)
+                HStack(spacing: 22) {
+                    if graph.hasConclusions, let weakest = graph.weakest {
+                        pill("练\(weakest.name.components(separatedBy: "（").first ?? weakest.name)") { practice(PracticeFocus(kind: "topic", ref: weakest.key, label: weakest.name, origin: "assistant")) }
+                    } else {
+                        pill("再练一场") { practice(nil) }
+                    }
+                    if let lastMock {
+                        Button { openMock(lastMock, true) } label: {
+                            HStack(spacing: 2) { Text("看最近一场的报告"); Image(systemName: "chevron.right").font(.system(size: 11)) }
+                        }.buttonStyle(HomeTextLinkStyle(size: 14))
+                    }
+                }.padding(.bottom, 18)
+                Text("之后练面试、改简历、投岗位，进展会记在这里").font(V3.sans(13.5)).lineHeight(13.5, 22).foregroundStyle(Color(hex: 0x87867F)).padding(.top, 22)
+            }
+        }
+    }
+
     // 最近进展：选中的一条展开成大标题、说明和按钮，其余收成一行
     private var timeline: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(graph.timeline.enumerated()), id: \.element.id) { index, item in
-                let text = HomeProgressText.text(item, weakPoints: graph.weakPoints)
+                let text = HomeProgressText.text(item, weakPoints: graph.weakPoints, hasConclusions: graph.hasConclusions)
                 let on = index == picked
                 HStack(alignment: .top, spacing: 16) {
                     ZStack(alignment: .top) {
@@ -851,7 +896,12 @@ private struct FeedbackHome: View {
                 if item.kind == .resume, let id = graph.resumeID {
                     pill("打开简历") { editResume(id) }
                 } else if let label = item.practiceLabel ?? graph.weakest?.name {
-                    let focus = item.practiceRef.map { PracticeFocus(kind: item.practiceKind ?? "topic", ref: $0, label: label) }
+                    // 练经历且给了延伸点：带上简历和延伸点，整段从这一点问起（Web `focusPath`）
+                    let focus = item.practiceRef.map { ref in
+                        item.practiceKind == "experience" && item.practiceHook != nil
+                            ? PracticeFocus(kind: "experience", ref: ref, label: label, resumeID: item.practiceResumeID, scope: "all", hook: item.practiceHook, origin: "assistant")
+                            : PracticeFocus(kind: item.practiceKind ?? "topic", ref: ref, label: label, origin: "assistant")
+                    }
                         ?? graph.weakest.map { PracticeFocus(kind: "topic", ref: $0.key, label: $0.name) }
                     pill("练\(label.components(separatedBy: "（").first ?? label)") { practice(focus) }
                 } else {
@@ -929,35 +979,31 @@ private enum HomeStageDate {
     }
 }
 
-/// 知识图谱画布：文字节点 + 细线；经历用衬线粗体，技术中号，知识点小号灰色，还不牢橙色、刚练稳蓝色。
+/// 首页右边的小图（Web `homeSkeleton`）：只画骨架——经历、服务的业务、多段经历共用的技术和最近几场面试；
+/// 经历衬线粗体，业务前带小方块，场次前带话筒，还不牢橙色、刚练稳蓝色。只缩不放：坐标按区域大小换算，字号不变。
 private struct HomeGraphCanvas: View {
-    let nodes: [HomeGraph.Node]
-    let edges: [HomeGraph.Edge]
-    let large: Bool
-    @State private var layout: [String: (x: Double, y: Double)] = [:]
+    let graph: HomeGraph
+    let stage: HomeGraphStage?
     @State private var hover: String?
 
     var body: some View {
         GeometryReader { geometry in
             let size = geometry.size
             let point = { (id: String) -> CGPoint? in
-                layout[id].map { CGPoint(x: $0.x * size.width, y: $0.y * size.height) }
+                stage?.home[id].map { CGPoint(x: size.width / 2 + $0.x * size.width, y: size.height / 2 + $0.y * size.height) }
             }
             ZStack(alignment: .topLeading) {
                 Canvas { context, _ in
-                    for edge in edges where edge.kind != "EE" {
+                    for edge in stage?.homeLines ?? [] {
                         guard let a = point(edge.src), let b = point(edge.dst) else { continue }
                         var path = Path(); path.move(to: a); path.addLine(to: b)
                         let lit = hover != nil && (edge.src == hover || edge.dst == hover)
-                        context.stroke(path, with: .color(lit ? Color(hex: 0xA5A39B) : Color(hex: 0xE2E0D8)),
-                                       style: StrokeStyle(lineWidth: 1, dash: edge.kind == "PP" ? [3, 4] : []))
+                        context.stroke(path, with: .color(lit ? Color(hex: 0xA5A39B) : Color(hex: 0xE2E0D8)), lineWidth: 1)
                     }
                 }
-                ForEach(nodes) { node in
+                ForEach(graph.nodes.filter { stage?.home[$0.id] != nil }) { node in
                     if let at = point(node.id) {
-                        Text(node.short)
-                            .font(font(node))
-                            .foregroundStyle(color(node))
+                        HomeGraphLabel(node: node, large: false, core: false)
                             .padding(.horizontal, 6).padding(.vertical, 5)
                             .background(.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 4))
                             .fixedSize()
@@ -968,31 +1014,49 @@ private struct HomeGraphCanvas: View {
                 }
             }
         }
-        .task(id: nodes.map(\.id)) {
-            let nodes = nodes, edges = edges
-            layout = await Task.detached(priority: .userInitiated) { HomeGraphLayout.layout(nodes: nodes, edges: edges) }.value
-        }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("知识图谱，\(nodes.count) 个节点")
+        .accessibilityLabel("知识图谱，\(stage?.home.count ?? 0) 个节点")
     }
+}
 
-    private func font(_ node: HomeGraph.Node) -> Font {
-        switch node.kind {
-        case .experience: V3.serif(large ? 23 : 15).weight(.semibold)
-        case .technology, .session: V3.sans(large ? 19 : 13, weight: .medium)
-        case .highlight: V3.sans(large ? 14 : 12)
-        case .point: V3.sans(large ? 14 : 12, weight: node.tone == .plain ? .regular : .medium)
+/// 图上的一个节点名（首页小图与展开大图共用）：经历衬线、业务前小方块、场次前话筒。
+struct HomeGraphLabel: View {
+    let node: HomeGraph.Node
+    let large: Bool
+    /// 多段经历共用的技术：展开后字更大
+    let core: Bool
+    var scale: CGFloat = 1
+    var picked = false
+
+    var body: some View {
+        let color = tint
+        HStack(spacing: node.kind == .session ? 4 : 6) {
+            if node.business { Rectangle().fill(color).frame(width: 6 * scale, height: 6 * scale) }
+            if node.kind == .session { Image(systemName: "mic").font(.system(size: (large ? 11 : 10) * scale)).foregroundStyle(color) }
+            Text(node.short).font(font).foregroundStyle(color)
         }
     }
 
-    private func color(_ node: HomeGraph.Node) -> Color {
+    private var font: Font {
+        let grow: CGFloat = picked ? 1.15 : 1
+        let k = scale * grow
+        switch node.kind {
+        case .experience: return V3.serif((large ? 19 : 15) * k).weight(.semibold)
+        case .technology: return V3.sans((large ? (core ? 20 : 14) : 13) * k, weight: core && large ? .regular : .medium)
+        case .session: return V3.sans((large ? 13 : 13) * k, weight: large ? .regular : .medium)
+        case .highlight: return V3.sans((large ? 13 : 12) * k, weight: node.business ? .medium : .regular)
+        case .point: return V3.sans((large ? 13 : 12) * k, weight: node.tone == .plain ? .regular : .medium)
+        }
+    }
+
+    private var tint: Color {
         switch node.tone {
         case .hot: return V3.orange
         case .new: return V3.blue
         case .plain:
             switch node.kind {
             case .experience, .technology, .session: return V3.txt
-            case .highlight: return V3.sub
+            case .highlight: return node.business ? V3.txt : Color(hex: 0x87867F)
             case .point: return Color(hex: 0x87867F)
             }
         }

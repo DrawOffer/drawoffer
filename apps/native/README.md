@@ -2,7 +2,7 @@
 
 `apps/mac` 是 SwiftUI 客户端，`apps/windows` 是 WinUI 3 客户端。界面使用系统控件，仅简历纸面嵌入离线网页视图，复用 Web 的 `renderResumePrintDocument`；`apps/desktop` 的 Electron 壳是独立线路。
 
-正式 App 注入 desktop Bearer HTTP 客户端，支持启动恢复、续期与退出。Mac 登录不再在客户端内扫码：点击登录打开浏览器 `/desktop-login`，在网页登录并点击“授权并打开客户端”后经 `drawoffer://auth/callback` 回到客户端完成领取（见[桌面会话契约](../../docs/api/http-contracts.md#桌面-bearer-会话)），Windows 仍为微信扫码。Mac 与 Windows 均直接进入工作区首页：未登录或恢复失败时仍可浏览随包提供的 9 套精选模板与虚构示例，不请求账号资源，不显示未经查询的个人数量；后端模板接口要求登录，所以游客只能看到随包示例，不代表完整在线模板目录。Mac 登录后模板页改为读取 `GET /api/resume-templates` 的真实启用模板（过滤已退役 `blank-cn`，显示使用次数），游客“使用此模板”先登录，成功后回到模板页按模板 key 匹配真实模板并打开创建弹窗。Mac 简历管理与原生编辑器见下文“Mac 我的简历”；Windows 仍只读。退出后清理准备状态并返回游客首页。Mac 的首页、我的简历、模板、岗位看板与岗位详情、面试排期、文字与语音模拟面试、资料库、账号设置与 AI 对话均已使用原生页面接入现有接口，简历编辑覆盖文字格式、版式与模板切换；桌面端不提供注销账号、密码与微信绑定。Windows 仍以看板、排期、模拟面试与资料库为主。Mock 只用于 Core 测试。协议与权限边界见 [桌面会话契约](../../docs/api/http-contracts.md#桌面-bearer-会话)。
+正式 App 注入 desktop Bearer HTTP 客户端，支持启动恢复、续期与退出。Mac 登录不再在客户端内扫码：点击登录打开浏览器 `/desktop-login`，在网页登录并点击“授权并打开客户端”后经 `drawoffer://auth/callback` 回到客户端完成领取（见[桌面会话契约](../../docs/api/http-contracts.md#桌面-bearer-会话)），Windows 仍为微信扫码。Mac 与 Windows 均直接进入工作区首页：未登录或恢复失败时只开放首页，不请求账号资源，不显示未经查询的个人数量，点其他栏目直接弹出登录。客户端不携带任何模板副本，模板只来自登录后的 `GET /api/resume-templates`（过滤已退役 `blank-cn`，显示使用次数）。Mac 简历管理与原生编辑器见下文“Mac 我的简历”；Windows 仍只读。退出后清理准备状态并返回游客首页。Mac 的首页、我的简历、模板、岗位看板与岗位详情、面试排期、文字与语音模拟面试、资料库、账号设置与 AI 对话均已使用原生页面接入现有接口，简历编辑覆盖文字格式、版式与模板切换；桌面端不提供注销账号、密码与微信绑定。Windows 仍以看板、排期、模拟面试与资料库为主。Mock 只用于 Core 测试。协议与权限边界见 [桌面会话契约](../../docs/api/http-contracts.md#桌面-bearer-会话)。
 
 ## 界面与 Web 对齐
 
@@ -94,11 +94,11 @@ Mac 测试脚本兼容 CLT 的 Testing 框架路径，并在 CLT 残留旧 Packa
 
 原生预览为可滚动的连续纸面，不模拟 PDF 的物理分页。页面等待图片解码与字体就绪后上报高度，两端舞台使用该高度，避免固定一页遮住长正文。快速切换只上报最新请求；版本不匹配或无效 layout_plan 会显示失败提示；单张图片解码失败保留正文和实际高度，显示占位及图片不可用提示。原生网页视图只允许离线资源；内置头像随包内联，私有图片由宿主通过桌面会话先安全下载，再通过两端原生请求模型的 assets 字段注入，参见下文。
 
-共享 Mock 保留三套旧模板，另含工牌侧栏、HELLO 分栏、深蓝代码、拍立得衬线、黑色页眉及三区 Muse 样例。独立验证数据覆盖衬线、手写字体、不存在字体的回退以及超过一页的正文、私有头像 assets 注入。它们用于代表性验证，不等于全部模板或所有字体组合已经验收。
+纸面检查不在仓库里保存模板副本：`seed_templates.py` 运行时从 `upstream/apps/backend/migrations/sql` 的模板种子（0079 精选、0100 Muse 样例与定义，叠加 0085/0101–0104 的改名、压缩样例、分类与停用）读出模板，用后端自己的 `compile_layout_plan` 算出 layout_plan，输出与 `GET /api/resume-templates` 同形的 JSON；只依赖 pydantic，不安装后端全部依赖。检查默认取三套精选与工牌侧栏、春日来信、夜航代码、拾光相纸、黑幕手写、三叠姓名牌六套 Muse，另在工牌侧栏与蓝幕校招上派生衬线、手写字体、不存在字体的回退以及超过一页的正文、私有头像 assets 注入等边界用例。它们用于代表性验证，不等于全部模板或所有字体组合已经验收；管理员后台对模板的改动不在种子里。没有 uv 的机器可以先在别处运行 `seed_templates.py --validation > seeds.json`，再用 `DRAWOFFER_TEMPLATE_SEEDS=seeds.json` 指向它。Mac、Windows Core 单测只用内联的接口结构样例验证解码与渲染请求规则。
 
 ```bash
-# 更新虚构样例并同步 Mac／Windows Core 资源
-uv run --directory apps/backend python ../native/scripts/generate_fixtures.py
+# 查看种子模板（--all 输出全部启用模板，--keys 指定 key）
+uv run --no-project --with 'pydantic[email]>=2.10,<3' python apps/native/scripts/seed_templates.py --validation
 # 重新生成纸面，复制同一份 HTML 至两端；契约检查也校验两份资源没有过期
 npm run test:native-renderer
 # macOS：同一数据在 Chromium 与真实 WKWebView 中核对内容、顺序、模板与图片

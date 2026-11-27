@@ -4,14 +4,10 @@ import DrawOfferRender
 import SwiftUI
 
 /// 简历模板（Web `features/templates/ResumeTemplatesPage.tsx`）。
-/// 登录后读取 `GET /api/resume-templates` 的真实启用模板与使用次数，并可直接创建简历；
-/// 游客由外壳拦在首页、直接弹登录，这里不再展示随包示例。
+/// 读取 `GET /api/resume-templates` 的真实启用模板与使用次数，并可直接创建简历；游客由外壳拦在首页，进不来这一页。
 struct TemplatesView: View {
     @Environment(SessionStore.self) private var session
     @Environment(WorkspaceRouter.self) private var router: WorkspaceRouter?
-    /// 登录前选中的示例模板 key；进入页面后自动打开创建弹窗。
-    @Binding var pendingCreateKey: String?
-    let requireLogin: (ResumeTemplate) -> Void
     let onCreated: (ResumeSummary.ID) -> Void
 
     @State private var templates: [ResumeTemplate] = []
@@ -31,7 +27,6 @@ struct TemplatesView: View {
     static let pageSize = 20
 
     private var account: String { if case .signedIn(let user) = session.phase { return user.id }; return "" }
-    private var guest: Bool { account.isEmpty }
     private var filtered: [ResumeTemplate] {
         let items = templates.filter {
             (selectedStyles.isEmpty || !Set(selectedStyles).isDisjoint(with: $0.styleCategories))
@@ -54,7 +49,7 @@ struct TemplatesView: View {
         default: "没有符合条件的模板"
         }
     }
-    private var ready: Bool { source == (guest ? "guest" : account) }
+    private var ready: Bool { !account.isEmpty && source == account }
 
     var body: some View {
         // 05 · 简历模板 79:2093（03.1）：860 宽内容列，眉题距顶 64。
@@ -83,13 +78,12 @@ struct TemplatesView: View {
         .onChange(of: selectedStyles) { page = 1 }
         .onChange(of: selectedUses) { page = 1 }
         .onChange(of: byPopularity) { page = 1 }
-        .onChange(of: source) { _, _ in openPendingCreate() }
         .centeredSheet(item: $preview, onDismiss: {
             if let template = createAfterDismiss { createAfterDismiss = nil; use(template) }
         }) { template in
             // Web 预览只在当前这一页里切换上一套 / 下一套
             let list = pageItems
-            TemplatePreview(template: template, guest: guest, close: { preview = nil }, use: {
+            TemplatePreview(template: template, close: { preview = nil }, use: {
                 createAfterDismiss = template
                 preview = nil
             }, previous: list.firstIndex { $0.id == template.id }.flatMap { list.count > 1 ? list[($0 - 1 + list.count) % list.count] : nil },
@@ -147,7 +141,7 @@ struct TemplatesView: View {
                 // 卡片 200 宽、列距 20、行距 32：灰底缩略纸面 → 名称 → 标签与使用次数
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: 20, alignment: .top)], alignment: .leading, spacing: 32) {
                     ForEach(pageItems) { template in
-                        TemplatesCard(template: template, guest: guest) { preview = template }
+                        TemplatesCard(template: template) { preview = template }
                     }
                 }.padding(.top, 24)
                 if pageCount > 1 { V3Pagination(page: min(page, pageCount), total: filtered.count, pageSize: Self.pageSize) { page = $0 }.padding(.top, 12) }
@@ -160,13 +154,11 @@ struct TemplatesView: View {
         loading = true; loadError = nil
         defer { if owner == account { loading = false } }
         do {
-            let result: [ResumeTemplate]
-            // 游客进不来模板页（外壳只开放首页），这里只读线上模板；不再随包携带本地示例
             guard !owner.isEmpty else { return }
-            result = try await session.api.listResumeTemplates()
+            let result = try await session.api.listResumeTemplates()
             try Task.checkCancellation()
             guard owner == account else { return }
-            templates = result; source = owner.isEmpty ? "guest" : owner
+            templates = result; source = owner
         } catch is CancellationError {
         } catch {
             guard owner == account else { return }
@@ -177,16 +169,7 @@ struct TemplatesView: View {
 
     private func backToResumes() { router?.jump(.section(.resumes)) }
 
-    private func use(_ template: ResumeTemplate) {
-        if guest { requireLogin(template) } else { creating = template }
-    }
-
-    /// 登录前选的是随包示例，ID 与线上不同，按模板 key 找到对应的真实模板。
-    private func openPendingCreate() {
-        guard !guest, ready, let key = pendingCreateKey else { return }
-        pendingCreateKey = nil
-        if let template = templates.first(where: { $0.key == key }) { creating = template }
-    }
+    private func use(_ template: ResumeTemplate) { creating = template }
 
     /// Web `formatTemplateUses`：千以下写原数，千以上写成 3.2k。
     static func formatUses(_ count: Int) -> String {
@@ -196,16 +179,10 @@ struct TemplatesView: View {
     }
 }
 
-/// 线上模板经会话准备私有图片。
-private func preparePaper(_ template: ResumeTemplate, guest: Bool, api: any APIClient) async throws -> PaperPreparation {
-    try await api.preparePaper(template.previewRequest())
-}
-
 /// 缩略纸面。
 struct TemplateThumbnail: View {
     @Environment(SessionStore.self) private var session
     let template: ResumeTemplate
-    let guest: Bool
     /// 模板页灰底卡片里的纸面用小圆角（稿 2px），编辑器与弹窗沿用 6。
     var radius: CGFloat = 6
     /// 模板页卡片不描边，纸面本身就是卡片。
@@ -226,7 +203,7 @@ struct TemplateThumbnail: View {
             .overlay { if bordered { RoundedRectangle(cornerRadius: radius).stroke(Color(hex: 0xD3D3CE)) } }
             .task(id: template.id) {
                 do {
-                    let result = try await preparePaper(template, guest: guest, api: session.api)
+                    let result = try await session.api.preparePaper(template.previewRequest())
                     try Task.checkCancellation(); paper = result.request
                 }
                 catch is CancellationError { }
@@ -240,7 +217,6 @@ struct TemplateThumbnail: View {
 private struct TemplatePreview: View {
     @Environment(SessionStore.self) private var session
     let template: ResumeTemplate
-    let guest: Bool
     let close: () -> Void
     let use: () -> Void
     var previous: ResumeTemplate? = nil
@@ -310,7 +286,7 @@ private struct TemplatePreview: View {
                 if let position { Text("第 \(position.index + 1) / \(position.count) 套").font(V3.sans(11.5)).foregroundStyle(V3.fnt) }
                 Spacer()
                 Button("取消", action: close).buttonStyle(V3ButtonStyle(kind: .ghost, height: 36, width: 80))
-                Button(guest ? "使用此模板" : "创建简历", action: use).buttonStyle(V3ButtonStyle(kind: .dark, height: 36, width: 100))
+                Button("创建简历", action: use).buttonStyle(V3ButtonStyle(kind: .dark, height: 36, width: 100))
             }.padding(.horizontal, 32).frame(minHeight: 88).overlay(alignment: .top) { Rectangle().fill(V3.line).frame(height: 1) }
         }
         // Web：760×900，窗口放不下时减去上下各 24 的遮罩留白
@@ -320,7 +296,7 @@ private struct TemplatePreview: View {
         .task(id: template.id) {
             paper = nil; error = nil; height = 1123
             do {
-                let result = try await preparePaper(template, guest: guest, api: session.api)
+                let result = try await session.api.preparePaper(template.previewRequest())
                 try Task.checkCancellation(); paper = result.request
             }
             catch is CancellationError { }
@@ -480,13 +456,12 @@ enum TemplatesStyle {
 /// 名称 13 中粗距纸面 14；标签（10px、20 高、圆角 5）与「N 使用」一行，距名称 4。只靠很淡的投影和页面分开，悬停时投影加深。
 struct TemplatesCard: View {
     let template: ResumeTemplate
-    let guest: Bool
     let open: () -> Void
     @State private var hover = false
     var body: some View {
         Button(action: open) {
             VStack(alignment: .leading, spacing: 0) {
-                TemplateThumbnail(template: template, guest: guest, radius: 10, bordered: false)
+                TemplateThumbnail(template: template, radius: 10, bordered: false)
                     .shadow(color: .black.opacity(hover ? 0.14 : 0.07), radius: hover ? 10 : 6, y: hover ? 4 : 2)
                 Text(template.name).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1).truncationMode(.tail)
                     .frame(height: 16).padding(.top, 14)

@@ -9,9 +9,4 @@ public class BeijingTests {
         Assert.Equal("2026-06-11 00:30",instant.ToString("yyyy-MM-dd HH:mm"));
         Assert.Equal(TimeSpan.FromHours(8),Beijing.Now.Offset);
     }
-    [Fact] public void ScheduleDatesAreBeijingWallClock() {
-        var start=ScheduleCalendar.LocalDate(new DateOnly(2026,6,11),TimeSpan.FromHours(9));
-        Assert.Equal(new DateTimeOffset(2026,6,11,1,0,0,TimeSpan.Zero),start.ToUniversalTime());
-        Assert.Equal(start,Beijing.At(new DateOnly(2026,6,11),TimeSpan.FromHours(9)));
-    }
 }

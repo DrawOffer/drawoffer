@@ -60,10 +60,6 @@ public sealed class V3Button : BorderControl
 
     /// <summary>按钮文字（如“正在删除…”）。</summary>
     public string Title { get => _label.Text; set => _label.Text = value; }
-    public double TextSize { get => _label.FontSize; set => _label.FontSize = value; }
-
-    /// <summary>程序触发（快捷键）。</summary>
-    public void Invoke() { if (_enabled) _action(); }
 
     /// <summary>文字按钮的着色（如红色“移除头像”）；不设时按种类取色。</summary>
     public Color? Tint { get => _tint; set { _tint = value; Paint(); } }
@@ -89,12 +85,6 @@ public sealed class V3Button : BorderControl
         Opacity = _enabled ? 1 : 0.38;
         ProtectedCursor = InputSystemCursor.Create(_enabled ? InputSystemCursorShape.Hand : InputSystemCursorShape.Arrow);
     }
-}
-
-/// <summary>整行宽的墨黑提交按钮（32 高胶囊）。</summary>
-public static class V3PrimaryBlock
-{
-    public static V3Button Make(string title, Action action) => new(title, action, V3Button.Kind.Dark, fill: true);
 }
 
 /// <summary>
@@ -125,14 +115,6 @@ public sealed class V3IconButton : BorderControl
         KeyDown += (_, e) => { if (_enabled && e.Key is Windows.System.VirtualKey.Enter or Windows.System.VirtualKey.Space) { e.Handled = true; _action(); } };
         ProtectedCursor = InputSystemCursor.Create(InputSystemCursorShape.Hand);
     }
-
-    public bool Enabled
-    {
-        get => _enabled;
-        set { _enabled = value; _icon.Foreground = Brush(value ? _color : Fnt2); if (!value) Background = Brush(Clear); }
-    }
-
-    public string Glyph { set => _icon.Glyph = Icons.Glyph(value); }
 }
 
 /// <summary>
@@ -205,8 +187,6 @@ public sealed class V3Segmented<T> : BorderControl where T : notnull
         HorizontalAlignment = HorizontalAlignment.Left;
         Paint();
     }
-
-    public T Selection => _selection;
 
     public void Select(T value)
     {
@@ -634,13 +614,6 @@ public sealed class V3Loading : StackPanel
     /// <summary>蓝色文字链（「重新加载」等），悬停手形光标。</summary>
     public static TextBlock TextLink(string label, Action action, double size = 13) =>
         Sans(label, size, Blue, Medium).OnTap(action, label);
-}
-
-/// <summary>加载失败（稿 15 页 01 · D）：一行灰字 + 蓝色「重新加载」，不弹窗、不放插图。</summary>
-public static class V3LoadFailed
-{
-    public static StackPanel Make(Action retry, string message = "没有加载出来。") =>
-        HStack(6, Sans(message, 13, Fnt), V3Loading.TextLink("重新加载", retry)).Align(HorizontalAlignment.Center, VerticalAlignment.Center);
 }
 
 /// <summary>骨架占位块（Web `.v3-sk`）：#ECECEA 底、圆角 4；150ms 后淡入，快的请求不闪骨架。</summary>

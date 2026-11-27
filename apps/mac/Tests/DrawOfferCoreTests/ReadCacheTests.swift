@@ -68,6 +68,11 @@ private actor CountingTransport: DesktopRequesting {
     #expect(ReadCache.lifetime(path: "/api/job-applications", query: ["scope": "all"]) == 60)
     #expect(ReadCache.lifetime(path: "/api/job-descriptions/7/logo", query: ["v": String(repeating: "a", count: 64)]) == ReadCache.forever)
     #expect(ReadCache.lifetime(path: "/api/job-descriptions/7/logo", query: ["v": "short"]) == nil)
+    for pool in ["/api/job-pool", "/api/job-pool/count", "/api/job-pool/by-company", "/api/job-pool/filters", "/api/job-pool/companies/page"] {
+        #expect(ReadCache.lifetime(path: pool, query: [:]) == 120)
+    }
+    // 单个岗位带「已加入」状态，不缓存。
+    #expect(ReadCache.lifetime(path: "/api/job-pool/12", query: [:]) == nil)
     for live in ["/api/mock-interviews/3", "/api/datasets", "/api/billing/summary", "/api/notifications", "/api/interview-sessions/4", "/api/resume-overview"] {
         #expect(ReadCache.lifetime(path: live, query: [:]) == nil)
     }

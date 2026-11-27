@@ -61,11 +61,6 @@ public static class JobPool
         return $"{day} {CareerDeckFormat.Clock(date, tz)}";
     }
 
-    /// <summary>列表行的元信息：城市、招聘类型、方向、薪资、发布时间。</summary>
-    public static List<string> Meta(JsonNode job, DateTimeOffset? now = null, TimeZoneInfo? zone = null) =>
-        new[] { string.Join("、", Cities(job)).NonEmpty() ?? "地点未标明", Recruitment(job), job.Text("category"), job.Text("salary_text"), Relative(job.Text("published_at"), now, zone) }
-            .Where(x => x.Length > 0).ToList();
-
     /// <summary>`URL(string:)?.host() ?? url`：能解析为带主机的绝对地址时取主机名，否则原样返回。</summary>
     public static string Host(string url) =>
         Uri.TryCreate(url, UriKind.Absolute, out var uri) && !uri.IsFile && uri.HostNameType != UriHostNameType.Unknown && uri.Host.Length > 0

@@ -111,5 +111,4 @@ public enum InterviewRecord {
         }
     }
 
-    public static func answered(_ questions: [RecordQuestion]) -> Int { questions.filter { !$0.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count }
 }

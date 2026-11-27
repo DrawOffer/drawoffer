@@ -7,6 +7,7 @@ public enum CareerRequest {
         if ResumeRequest.allowed(path: path, method: method) { return true }
         if AccountRequest.allowed(path: path, method: method) { return true }
         if ParityRequest.allowed(path: path, method: method) { return true }
+        if FeedbackRequest.allowed(path: path, method: method) { return true }
         if AgentRequest.allowed(path: path, method: method), !AgentRequest.streams(path: path, method: method) { return true }
         guard path.hasPrefix("/api/"), !path.contains("//"), !path.hasSuffix("/"), !path.contains("?"), !path.contains("#"), !path.contains("..") else { return false }
         let reads = ["/api/resumes", "/api/job-applications", "/api/interview-overview", "/api/interview-sessions", "/api/job-descriptions"]
@@ -181,7 +182,6 @@ public enum CareerNotes {
     public static func value(_ field: String, in notes: String) -> String {
         notes.components(separatedBy: "\n").first(where: { $0.hasPrefix(field + "：") }).map { String($0.dropFirst(field.count + 1)) } ?? ""
     }
-    public static func freeText(_ notes: String) -> String { notes.components(separatedBy: "\n").filter { line in !fields.contains(where: { line.hasPrefix($0 + "：") }) }.joined(separator: "\n") }
     public static func merging(_ values: [String: String], into notes: String) -> String {
         let keys = Set(values.keys.filter { fields.contains($0) })
         var lines = notes.components(separatedBy: "\n").filter { line in !keys.contains(where: { line.hasPrefix($0 + "：") }) }

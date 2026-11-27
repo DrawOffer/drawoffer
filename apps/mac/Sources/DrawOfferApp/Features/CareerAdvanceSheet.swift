@@ -8,15 +8,32 @@ import SwiftUI
 struct CareerAdvanceSheet: View {
     enum Kind: String, CaseIterable { case written, interview, oc, offer, rejected, withdraw }
 
-    let application: JSONValue
+    private let seed: JSONValue
     let api: any APIClient
-    var initialKind: Kind? = nil
+    let initialKind: Kind?
     /// 看板拖到测评 / 笔试列时预选的类型。
-    var initialWrittenType = "written_test"
+    let initialWrittenType: String
     /// 看板拖到某一轮面试列时预填的面试名称。
-    var initialInterviewLabel = ""
+    let initialInterviewLabel: String
+    /// 从面试日程新建：面包屑第一段在这些岗位里选（只出现笔试 / 测评与面试两种进展）。
+    let applicationOptions: [JSONValue]?
+    /// 面试日程里选中的时间段，带入时间胶囊。
+    let initialStart: Date?
+    let initialEnd: Date?
     let close: () -> Void
     let completed: (String?) -> Void
+
+    init(application: JSONValue, api: any APIClient, initialKind: Kind? = nil, initialWrittenType: String = "written_test", initialInterviewLabel: String = "",
+         applicationOptions: [JSONValue]? = nil, initialStart: Date? = nil, initialEnd: Date? = nil,
+         close: @escaping () -> Void, completed: @escaping (String?) -> Void) {
+        seed = application; self.api = api; self.initialKind = initialKind; self.initialWrittenType = initialWrittenType
+        self.initialInterviewLabel = initialInterviewLabel; self.applicationOptions = applicationOptions
+        self.initialStart = initialStart; self.initialEnd = initialEnd; self.close = close; self.completed = completed
+    }
+
+    @State private var pickedID: String?
+    private var fromSchedule: Bool { applicationOptions != nil }
+    private var application: JSONValue { applicationOptions?.first { $0.text("id") == pickedID } ?? seed }
 
     private static let choices: [Kind: (icon: String, title: String)] = [
         .written: ("pencil", "收到笔试 / 测评通知"), .interview: ("person", "收到面试通知"), .oc: ("phone", "拿到 OC"),
@@ -72,18 +89,21 @@ struct CareerAdvanceSheet: View {
 
     private var currentStageType: String { application["current_stage"]?.text("stage_type").nonEmptyValue ?? application.text("current_stage_type") }
     private var currentLabel: String { application["current_stage"]?.text("stage_label").nonEmptyValue ?? application.text("current_stage_label") }
-    private var taken: [(round: Int?, label: String)] {
+    private var taken: [(round: Int?, label: String)] { Self.taken(application) }
+    private var nextRound: Int { Self.nextRound(application) }
+    private static func taken(_ application: JSONValue) -> [(round: Int?, label: String)] {
         var seen = Set<String>()
         return ((application["stages"]?.items ?? []) + [application["current_stage"] ?? .null]).compactMap { stage in
             guard stage.text("stage_type") == "interview", seen.insert(stage.text("id")).inserted else { return nil }
             return (stage["interview_round_no"]?.numberValue.map { Int($0) }, stage.text("stage_label").trimmingCharacters(in: .whitespaces).lowercased())
         }
     }
-    private var nextRound: Int {
-        max(0, taken.compactMap(\.round).max() ?? 0, currentStageType == "interview" ? application["current_round_no"]?.integer ?? 0 : 0) + 1
+    private static func nextRound(_ application: JSONValue) -> Int {
+        let type = application["current_stage"]?.text("stage_type").nonEmptyValue ?? application.text("current_stage_type")
+        return max(0, taken(application).compactMap(\.round).max() ?? 0, type == "interview" ? application["current_round_no"]?.integer ?? 0 : 0) + 1
     }
-    private var nextKinds: [Kind] { currentStageType == "oc" ? [.offer] : [.written, .interview, .oc, .offer] }
-    private var endKinds: [Kind] { application.text("offer_status") == "none" || application.text("offer_status").isEmpty ? [.rejected, .withdraw] : [.rejected] }
+    private var nextKinds: [Kind] { fromSchedule ? [.written, .interview] : currentStageType == "oc" ? [.offer] : [.written, .interview, .oc, .offer] }
+    private var endKinds: [Kind] { fromSchedule ? [] : application.text("offer_status") == "none" || application.text("offer_status").isEmpty ? [.rejected, .withdraw] : [.rejected] }
     private var suggested: Kind { currentStageType == "oc" ? .offer : currentStageType == "screening" ? .written : .interview }
     private var roundNo: Int { round == "custom" ? Self.inferRound(customName) ?? nextRound : Int(round) ?? nextRound }
     private var interviewLabel: String {
@@ -135,6 +155,26 @@ struct CareerAdvanceSheet: View {
         let tag = [currentLabel.nonEmptyValue, state].compactMap { $0 }.joined(separator: " · ")
         let choice = Self.choices[kind]!
         return HStack(spacing: 8) {
+            if let options = applicationOptions {
+                Menu {
+                    ForEach(options, id: \.self) { option in
+                        Button { pick(option) } label: {
+                            let text = [option.text("company_name_snapshot"), option.text("job_title_snapshot"), option.text("current_stage_label")].filter { !$0.isEmpty }.joined(separator: " · ")
+                            if option.text("id") == application.text("id") { Label(text, systemImage: "checkmark") } else { Text(text) }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(String(application.text("company_name_snapshot").prefix(1)).nonEmptyValue ?? "企").font(V3.sans(9.5, weight: .medium)).foregroundStyle(.white)
+                            .frame(width: 16, height: 16).background(V3.txt, in: RoundedRectangle(cornerRadius: 4))
+                        Text(job).font(V3.sans(12.5)).foregroundStyle(V3.txt).lineLimit(1).truncationMode(.tail)
+                        if !tag.isEmpty { Text(tag).font(V3.sans(11.5)).foregroundStyle(V3.fnt).lineLimit(1).fixedSize() }
+                        Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(V3.fnt)
+                    }
+                    .padding(.horizontal, 8).frame(height: 28).frame(maxWidth: 360, alignment: .leading)
+                    .background(CareerAdvanceStyle.crumb, in: RoundedRectangle(cornerRadius: 6)).contentShape(RoundedRectangle(cornerRadius: 6))
+                }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().disabled(savedStage != nil || busy).accessibilityLabel("选择岗位").help(job)
+            } else {
             HStack(spacing: 6) {
                 Text(String(application.text("company_name_snapshot").prefix(1)).nonEmptyValue ?? "企").font(V3.sans(9.5, weight: .medium)).foregroundStyle(.white)
                     .frame(width: 16, height: 16).background(V3.txt, in: RoundedRectangle(cornerRadius: 4))
@@ -143,12 +183,13 @@ struct CareerAdvanceSheet: View {
             }
             .padding(.horizontal, 8).frame(height: 28).frame(maxWidth: 320, alignment: .leading)
             .background(CareerAdvanceStyle.crumb, in: RoundedRectangle(cornerRadius: 6)).help(job)
+            }
             Text("›").font(V3.sans(14)).foregroundStyle(CareerAdvanceStyle.placeholder)
             Menu {
                 ForEach(nextKinds, id: \.self) { item in
                     Button { choose(item) } label: { Label(Self.choices[item]!.title + (item == suggested ? " · 按进度推荐" : ""), systemImage: kind == item ? "checkmark" : Self.choices[item]!.icon) }
                 }
-                Divider()
+                if !endKinds.isEmpty { Divider() }
                 ForEach(endKinds, id: \.self) { item in
                     Button(role: item == .rejected ? .destructive : nil) { choose(item) } label: { Label(Self.choices[item]!.title, systemImage: kind == item ? "checkmark" : Self.choices[item]!.icon) }
                 }
@@ -259,7 +300,7 @@ struct CareerAdvanceSheet: View {
                             CareerAdvanceDateRow(label: "截止", value: $deadline, time: false, placeholder: "选择日期", endOfDay: true)
                         } else {
                             CareerAdvanceDateRow(label: "开始", value: $startAt, time: true)
-                            minutesRow("时长", $minutes)
+                            endRow(start: startAt, $minutes)
                         }
                     }
                 }
@@ -267,7 +308,7 @@ struct CareerAdvanceSheet: View {
                     CareerAdvanceProp(icon: "clock", width: 156, value: planAt.map { CareerAdvanceFormat.dateText($0, time: true) + " · \(planMinutes) 分钟" }, placeholder: "作答计划", disabled: undecided) {
                         VStack(alignment: .leading, spacing: 10) {
                             CareerAdvanceDateRow(label: "开始", value: $planAt, time: true, clearable: true)
-                            minutesRow("用时", $planMinutes)
+                            endRow(start: planAt, $planMinutes)
                             Text("只是给自己排的时间，不改官方截止").font(V3.sans(11.5)).foregroundStyle(V3.fnt)
                         }
                     }
@@ -280,7 +321,7 @@ struct CareerAdvanceSheet: View {
                                   aside: undecided ? nil : (minutes + " 分钟", false), disabled: undecided) {
                     VStack(alignment: .leading, spacing: 10) {
                         CareerAdvanceDateRow(label: "开始", value: $startAt, time: true)
-                        minutesRow("时长", $minutes)
+                        endRow(start: startAt, $minutes)
                     }
                 }
                 Menu {
@@ -334,12 +375,12 @@ struct CareerAdvanceSheet: View {
         }
     }
 
-    private func minutesRow(_ label: String, _ value: Binding<String>) -> some View {
+    /// 结束时刻（Web `EndClockInput`）：从开始往后每 15 分钟一档，选了换算回时长。
+    private func endRow(start: Date?, _ value: Binding<String>) -> some View {
         HStack(spacing: 10) {
-            Text(label).font(V3.sans(12.5)).foregroundStyle(V3.sub).frame(width: 40, alignment: .leading)
-            TextField("", text: value).textFieldStyle(.roundedBorder).frame(width: 64)
-                .onChange(of: value.wrappedValue) { _, new in let digits = new.filter(\.isNumber); if digits != new { value.wrappedValue = digits } }
-            Text("分钟").font(V3.sans(12.5)).foregroundStyle(V3.sub)
+            Text("结束").font(V3.sans(12.5)).foregroundStyle(V3.sub).frame(width: 56, alignment: .leading)
+            CareerEndClockMenu(start: start, minutes: value)
+            if let minutes = Int(value.wrappedValue), minutes > 0 { Text(CareerTimeSpan.label(minutes)).font(V3.sans(12.5)).foregroundStyle(V3.fnt) }
         }
     }
 
@@ -372,7 +413,15 @@ struct CareerAdvanceSheet: View {
         prepared = true
         let preset = initialInterviewLabel.trimmingCharacters(in: .whitespaces)
         kind = initialKind ?? suggested
+        if fromSchedule && kind != .written { kind = .interview }
         if !nextKinds.contains(kind) && !endKinds.contains(kind) { kind = suggested }
+        if fromSchedule {
+            windowed = initialStart == nil
+            openAt = initialEnd != nil ? initialStart : nil
+            deadline = initialEnd
+            startAt = initialStart
+            if let initialStart, let initialEnd, initialEnd > initialStart { minutes = String(Int((initialEnd.timeIntervalSince(initialStart) / 60).rounded())) }
+        }
         writtenType = Self.writtenLabels.contains { $0.0 == initialWrittenType } ? initialWrittenType : "written_test"
         let presetRound = (Self.rounds.firstIndex(of: preset) ?? -1) + 1
         interviewType = preset == "HR 面" ? "hr" : "interview"
@@ -381,6 +430,17 @@ struct CareerAdvanceSheet: View {
     }
 
     private func choose(_ item: Kind) { kind = item; undecided = false; error = nil }
+
+    /// 换岗位：轮次按新岗位重排；还没保存过阶段时换一个请求号，避免把上一个岗位的重试合到这个岗位上。
+    private func pick(_ option: JSONValue) {
+        guard option.text("id") != application.text("id") else { return }
+        pickedID = option.text("id")
+        if savedStage == nil { ids.stage = UUID().uuidString.lowercased(); ids.session = UUID().uuidString.lowercased() }
+        let next = Self.nextRound(option)
+        round = next <= 3 ? String(next) : "custom"
+        customName = "第 \(next) 面"
+        error = nil
+    }
 
     // MARK: 保存
 
@@ -602,7 +662,7 @@ struct CareerAdvancePropLabel: View {
     @Environment(\.careerPropFixedWidth) private var fixedWidth
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: icon).font(.system(size: 11)).foregroundStyle(V3.fnt)
+            if !icon.isEmpty { Image(systemName: icon).font(.system(size: 11)).foregroundStyle(V3.fnt) }
             if !empty, let lead { Text(lead).font(V3.sans(13)).foregroundStyle(CareerAdvanceStyle.hint).lineLimit(1).fixedSize() }
             Text(empty ? "+ " + text : text).font(V3.sans(13)).foregroundStyle(empty ? CareerAdvanceStyle.hint : V3.txt).lineLimit(1).truncationMode(.tail)
             if let aside { Text(aside.0).font(V3.sans(12, weight: .medium)).foregroundStyle(aside.1 ? V3.red : aside.0.hasPrefix("还剩") || aside.0.hasPrefix("今天") ? CareerAdvanceStyle.blueText : CareerAdvanceStyle.hint).lineLimit(1).fixedSize() }

@@ -1,66 +1,79 @@
 import DrawOfferCore
 import SwiftUI
 
-/// 展开的知识图谱（Figma 02A·10 ①–④，Web `FeedbackHome` 展开态）：
-/// 一张浅底圆角卡片，中间「长期记忆」，技术围成一圈，知识点挂在各自的技术外侧；
-/// 点节点放大并画一条线，右上角出「聊一聊」；点空白收回；节点可以拖动、松手弹回，空白处拖动平移图谱。
+/// 展开的知识图谱（Figma 5:7·01.01–01.03、02A·10，Web `FeedbackHome` 展开态）：一张浅底圆角卡片，
+/// 多段经历共用的技术在中间，经历和场次围成外圈，经历往里是业务、做成的事，只这段用到的技术挂在外侧；知识点都收着，右上角标 +N。
+/// 点节点选中它：技术在原地展开考点，相连的亮、其余压淡，右上角出「聊一聊」；点空白收回。节点可以拖动、松手弹回，空白处拖动平移。
 struct HomeGraphExpandedView: View {
     let graph: HomeGraph
+    let stage: HomeGraphStage?
     /// 右边开着对话栏：图缩小一档
     let compact: Bool
     /// 对话栏正在聊的节点
     let chatKey: String?
     let collapse: () -> Void
-    let chat: (HomeChatTopic) -> Void
+    /// 在别的页面里单独打开（Web `KnowledgeGraphLayer`，没有对话栏）时传 nil：节点上不出「聊一聊」
+    let chat: ((HomeChatTopic) -> Void)?
 
     @State private var selected: String?
     @State private var drags: [String: CGSize] = [:]
     @State private var pan: CGSize = .zero
     @State private var panBase: CGSize = .zero
 
-    private var shown: [HomeGraph.Node] { graph.nodes.filter { $0.kind == .technology || $0.kind == .point } }
     private var scale: CGFloat { compact ? 0.82 : 1 }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: 16).fill(Color(hex: 0xFAFAF8))
-            canvas.clipShape(RoundedRectangle(cornerRadius: 16))
+            if let stage { canvas(stage).clipShape(RoundedRectangle(cornerRadius: 16)) } else { V3Loading("正在摆图谱…").frame(maxWidth: .infinity, maxHeight: .infinity) }
             VStack(alignment: .leading, spacing: 4) {
                 Text("你的知识图谱").font(V3.serif(20)).fontWeight(.semibold).foregroundStyle(V3.txt)
                 Text("\(graph.points) 个知识点 · 来自 \(graph.sources.resumes) 份简历、\(graph.sources.mocks) 场练习、\(graph.sources.interviews) 场面试")
                     .font(V3.sans(12)).foregroundStyle(V3.fnt)
             }.padding(.leading, 32).padding(.top, 34).allowsHitTesting(false)
             Button(action: collapse) {
-                HStack(spacing: 6) { Text("收起"); Image(systemName: "arrow.down.right.and.arrow.up.left").font(.system(size: 11, weight: .medium)) }
+                HStack(spacing: 4) { Text("收起"); Image(systemName: "xmark").font(.system(size: 11, weight: .regular)) }
                     .contentShape(Rectangle())
-            }.buttonStyle(.plain).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
+            }.buttonStyle(.plain).font(V3.sans(13)).foregroundStyle(V3.txt)
                 .frame(maxWidth: .infinity, alignment: .trailing).padding(.trailing, 32).padding(.top, 40)
                 .keyboardShortcut(.cancelAction)
-            Text(legend).font(V3.sans(12)).foregroundStyle(V3.fnt).lineLimit(1)
+            legend.font(V3.sans(12)).foregroundStyle(V3.fnt).lineLimit(1)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading).padding(.leading, 32).padding(.bottom, 18)
                 .allowsHitTesting(false)
         }
         .onChange(of: chatKey) { _, key in if let key { selected = key } }
     }
 
-    private var legend: AttributedString {
-        var text = AttributedString("橙色还不牢 · 蓝色刚练稳 · " + (compact ? "左右拖动图谱看别处，点别的节点可以换成那一处的对话" : "节点可以拖动，松手弹回"))
-        if let orange = text.range(of: "橙色") { text[orange].foregroundColor = V3.orange }
-        if let blue = text.range(of: "蓝色") { text[blue].foregroundColor = V3.blue }
-        return text
+    private var legend: some View {
+        HStack(spacing: 0) {
+            Text("橙色").foregroundStyle(V3.orange) + Text("还不牢 · ") + Text("蓝色").foregroundStyle(V3.blue) + Text("刚练稳 · ")
+            Rectangle().fill(V3.txt).frame(width: 6, height: 6).padding(.trailing, 5)
+            Text(compact ? "业务 · 左右拖动图谱看别处，点别的节点可以换成那一处的对话" : "业务 · 中间是多段经历共用的技术 · 点技术展开考点")
+        }
     }
 
     // MARK: 画布
 
-    private var canvas: some View {
+    private func canvas(_ stage: HomeGraphStage) -> some View {
         GeometryReader { geometry in
-            let placed = HomeRadial.place(nodes: shown, edges: graph.edges, size: geometry.size, compact: compact)
+            // 上面留给标题和收起，下面留给图例；坐标横竖各自铺满这块，字号不随窗口放大
+            let area = CGRect(x: 90 * scale, y: 112, width: max(200, geometry.size.width - 180 * scale), height: max(160, geometry.size.height - 112 - 70))
+            let shown = stage.shown(selected: selected)
+            let lit = selected.map(stage.lit)
+            // 排布只知道圆点，不知道字多宽：按字宽把叠着的推开、避开标题和收起（窄的时候知识点才不会压在技术名上）
+            let size = geometry.size
+            let placed = HomeGraphStage.untangle(graph.nodes.filter { shown.contains($0.id) }.compactMap { node in
+                guard let spot = stage.full[node.id] else { return nil }
+                let half = HomeGraphStage.footprintSize(node, core: stage.core.contains(node.id), scale: scale, picked: selected == node.id)
+                return HomeGraphStage.Footprint(key: node.id, kind: node.kind, x: area.midX + spot.x * area.width, y: area.midY + spot.y * area.height,
+                                                halfWidth: half.halfWidth, halfHeight: half.halfHeight)
+            }, bounds: .init(left: 16, top: 16, right: size.width - 16, bottom: size.height - 48),
+               blocks: [.init(left: 0, top: 0, right: 360, bottom: 96), .init(left: size.width - 130, top: 0, right: size.width, bottom: 64)])
             let at = { (id: String) -> CGPoint? in
-                guard let point = placed.at[id] else { return nil }
+                guard let point = placed[id] else { return nil }
                 let drag = drags[id] ?? .zero
                 return CGPoint(x: point.x + pan.width + drag.width, y: point.y + pan.height + drag.height)
             }
-            let center = CGPoint(x: placed.center.x + pan.width, y: placed.center.y + pan.height)
             ZStack(alignment: .topLeading) {
                 Color.clear.contentShape(Rectangle())
                     .onTapGesture { selected = chatKey }
@@ -68,123 +81,67 @@ struct HomeGraphExpandedView: View {
                         .onChanged { pan = CGSize(width: max(-420, min(420, panBase.width + $0.translation.width)), height: max(-260, min(260, panBase.height + $0.translation.height))) }
                         .onEnded { _ in panBase = pan })
                 Canvas { context, _ in
-                    for line in placed.lines {
-                        let from = line.from == nil ? center : at(line.from!)
-                        guard let from, let to = at(line.to) else { continue }
-                        var path = Path(); path.move(to: from); path.addLine(to: to)
-                        let lit = selected != nil && (line.to == selected || line.from == selected)
-                        context.stroke(path, with: .color(lit ? Color(hex: 0xA5A39B) : Color(hex: 0xE2E0D8)), lineWidth: 1)
+                    for line in stage.visibleLines(shown: shown, selected: selected) {
+                        guard let a = at(line.a), let b = at(line.b) else { continue }
+                        var path = Path(); path.move(to: a); path.addLine(to: b)
+                        let touching = selected != nil && (line.a == selected || line.b == selected)
+                        let color = touching ? Color(hex: 0x87867F) : Color(hex: 0xE2E0D8).opacity(selected == nil ? 1 : 0.5)
+                        context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: touching ? 1.2 : 1, dash: line.dashed ? [3, 4] : []))
                     }
                 }.allowsHitTesting(false)
-                Text("长期记忆").font(V3.serif(26 * scale)).fontWeight(.semibold).foregroundStyle(V3.txt).fixedSize()
-                    .position(center).allowsHitTesting(false)
-                ForEach(shown) { node in
+                ForEach(graph.nodes.filter { shown.contains($0.id) }) { node in
                     if let point = at(node.id) {
-                        nodeView(node).position(point)
+                        nodeView(node, stage: stage, shown: shown, dim: lit.map { !$0.contains(node.id) } ?? false)
+                            .position(point)
                     }
                 }
             }
+            .animation(.timingCurve(0.22, 1, 0.36, 1, duration: 0.45), value: selected)
         }
     }
 
-    private func nodeView(_ node: HomeGraph.Node) -> some View {
+    private func nodeView(_ node: HomeGraph.Node, stage: HomeGraphStage, shown: Set<String>, dim: Bool) -> some View {
         let on = selected == node.id
-        let big = node.kind == .technology
-        let color = tint(node)
-        let size = (big ? 17.0 : 13.0) * scale * (on ? 1.22 : 1)
-        return Text(node.short).font(V3.sans(size, weight: big || node.tone != .plain || on ? .medium : .regular)).foregroundStyle(color).fixedSize()
+        let more = stage.hidden(node.id, shown: shown, selected: selected)
+        let color: Color = node.tone == .hot ? V3.orange : node.tone == .new ? V3.blue : V3.txt
+        // 名字单独成一个读屏元素，右上角的「聊一聊」才能单独点到
+        return HomeGraphLabel(node: node, large: true, core: stage.core.contains(node.id), scale: scale, picked: on)
+            .fixedSize()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(node.label)
+            .accessibilityHint(node.kind == .technology ? "点一下展开考点" : "点一下选中")
+            .accessibilityAddTraits(.isButton)
             .padding(.horizontal, 4).padding(.vertical, 3)
+            .background(Color(hex: 0xFAFAF8).opacity(0.9), in: RoundedRectangle(cornerRadius: 4))
             .overlay(alignment: .bottom) {
-                if on { Rectangle().fill(node.tone == .plain ? V3.txt : color).frame(height: 2).padding(.horizontal, 4).offset(y: 1) }
+                if on { Rectangle().fill(color).frame(height: 1.5).padding(.horizontal, 4).offset(y: 1) }
+            }
+            // 收着的下级个数（+N）挂在右上角，不占节点的位置
+            .overlay(alignment: .topTrailing) {
+                if more > 0 {
+                    // 零宽的框钉在右上角，字从框的左上角往右下溢出：挂在节点外侧，不挤动节点
+                    Text("+\(more)").font(V3.sans(10 * scale)).foregroundStyle(Color(hex: 0xA5A39B)).fixedSize()
+                        .frame(width: 0, height: 0, alignment: .topLeading).offset(x: -1, y: 1)
+                        .allowsHitTesting(false)
+                }
             }
             .overlay(alignment: .topTrailing) {
-                if on, chatKey != node.id {
-                    Button { chat(HomeChatTopic(key: node.id, name: node.label, state: state(node), tone: node.tone)) } label: {
+                if on, chatKey != node.id, let chat {
+                    Button { chat(HomeChatTopic(key: node.id, name: node.label, state: node.chatState, tone: node.tone)) } label: {
                         HStack(spacing: 3) {
                             Image(systemName: "bubble.left").font(.system(size: 10))
                             Text("聊一聊").font(V3.sans(11))
                         }.foregroundStyle(V3.fnt).fixedSize().contentShape(Rectangle())
                     }.buttonStyle(.plain)
-                        .alignmentGuide(.trailing) { $0[.leading] - 2 }
-                        .alignmentGuide(.top) { $0[.bottom] - 6 }
+                        .frame(width: 0, height: 0, alignment: .bottomLeading).offset(x: 2, y: 4)
                 }
             }
+            .opacity(dim ? 0.3 : 1)
             .contentShape(Rectangle())
-            .onTapGesture { selected = node.id }
+            .onTapGesture { selected = selected == node.id ? chatKey : node.id }
             .gesture(DragGesture(minimumDistance: 6)
                 .onChanged { drags[node.id] = $0.translation }
                 .onEnded { _ in withAnimation(.spring(response: 0.45, dampingFraction: 0.6)) { drags[node.id] = nil } })
             .animation(.easeOut(duration: 0.16), value: on)
-            .accessibilityLabel(node.label)
-            .accessibilityHint("点一下选中，再点聊一聊")
-    }
-
-    private func tint(_ node: HomeGraph.Node) -> Color {
-        switch node.tone {
-        case .hot: V3.orange
-        case .new: V3.blue
-        case .plain: node.kind == .technology ? V3.txt : Color(hex: 0x87867F)
-        }
-    }
-
-    private func state(_ node: HomeGraph.Node) -> String {
-        switch node.tone {
-        case .hot: node.overstated ? "写高了" : "还不牢"
-        case .new: "刚练稳"
-        case .plain: ""
-        }
-    }
-}
-
-/// 展开图谱的摆放：中心「长期记忆」，技术按椭圆等分一圈，知识点在各自技术外侧扇形散开。
-enum HomeRadial {
-    struct Line { let from: String?; let to: String }
-    struct Placed { var center: CGPoint; var at: [String: CGPoint]; var lines: [Line] }
-
-    static func place(nodes: [HomeGraph.Node], edges: [HomeGraph.Edge], size: CGSize, compact: Bool) -> Placed {
-        let center = CGPoint(x: size.width * 0.5, y: size.height * 0.53)
-        let techs = nodes.filter { $0.kind == .technology }
-            .sorted { ($0.size, $1.name) > ($1.size, $0.name) }.prefix(8).map { $0 }
-        let ids = Set(nodes.map(\.id))
-        var parent: [String: String] = [:]
-        for edge in edges where edge.kind == "TP" && ids.contains(edge.dst) && techs.contains(where: { $0.id == edge.src }) {
-            if parent[edge.dst] == nil { parent[edge.dst] = edge.src }
-        }
-        let k: CGFloat = compact ? 0.8 : 1
-        let rx = min(size.width * 0.27, 300 * k), ry = min(size.height * 0.28, 215 * k)
-        var at: [String: CGPoint] = [:]
-        var lines: [Line] = []
-        for (index, tech) in techs.enumerated() {
-            let angle = -Double.pi / 2 + (Double(index) + 0.35) * 2 * .pi / Double(max(techs.count, 1)) + jitter(tech.id, 0.12)
-            let point = CGPoint(x: center.x + cos(angle) * rx, y: center.y + sin(angle) * ry)
-            at[tech.id] = point
-            lines.append(Line(from: nil, to: tech.id))
-            let kids = nodes.filter { $0.kind == .point && parent[$0.id] == tech.id }
-            for (j, kid) in kids.enumerated() {
-                let spread = (Double(j) - Double(kids.count - 1) / 2) * (kids.count > 3 ? 0.55 : 0.7)
-                let theta = angle + spread + jitter(kid.id, 0.1)
-                let radius = (118 + Double(j % 2) * 34) * Double(k)
-                at[kid.id] = clamp(CGPoint(x: point.x + cos(theta) * radius * 1.15, y: point.y + sin(theta) * radius * 0.85), size)
-                lines.append(Line(from: tech.id, to: kid.id))
-            }
-        }
-        // 没挂在任何技术下的知识点：沿外圈均匀放
-        let loose = nodes.filter { $0.kind == .point && parent[$0.id] == nil }
-        for (index, node) in loose.enumerated() {
-            let angle = -Double.pi / 2 + (Double(index) + 0.5) * 2 * .pi / Double(max(loose.count, 1))
-            at[node.id] = clamp(CGPoint(x: center.x + cos(angle) * rx * 1.3, y: center.y + sin(angle) * ry * 1.3), size)
-            lines.append(Line(from: nil, to: node.id))
-        }
-        return Placed(center: center, at: at, lines: lines)
-    }
-
-    private static func clamp(_ point: CGPoint, _ size: CGSize) -> CGPoint {
-        CGPoint(x: min(max(point.x, 60), max(60, size.width - 60)), y: min(max(point.y, 90), max(90, size.height - 56)))
-    }
-
-    private static func jitter(_ key: String, _ span: Double) -> Double {
-        var value: UInt32 = 2166136261
-        for unit in key.utf16 { value = (value ^ UInt32(unit)) &* 16777619 }
-        return (Double(value % 1000) / 1000 - 0.5) * 2 * span
     }
 }

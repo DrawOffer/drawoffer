@@ -11,7 +11,7 @@ public enum MockInterviewRequest {
         if path == "/api/datasets" { return method == "GET" }
         if path == "/api/mock-interviews/speech-capability" { return method == "GET" }
         // 首页 / 全部记录的概览、导入面试记录、复盘页的上下文（Figma 09 · 01、08、09、10）
-        if path == "/api/mock-interviews/overview" || path == "/api/mock-interviews/review-context" { return method == "GET" }
+        if ["/api/mock-interviews/overview", "/api/mock-interviews/review-context", "/api/mock-interviews/import-targets"].contains(path) { return method == "GET" }
         if path == "/api/mock-interviews/imports" { return method == "POST" }
         let parts = path.split(separator: "/", omittingEmptySubsequences: false)
         guard (4...7).contains(parts.count), parts[0].isEmpty, parts[1] == "api", parts[2] == "mock-interviews",
@@ -53,19 +53,4 @@ public enum MockInterviewRequest {
         guard !events.isEmpty else { throw APIError.invalidResponse }
         return .object(["events": .array(events)])
     }
-}
-public struct MockInterview: Identifiable, Sendable {
-    public let raw: JSONValue
-    public init(_ raw: JSONValue) { self.raw = raw }
-    public var id: String { raw.text("id") }
-    public var status: String { raw.text("status") }
-    public var active: Bool { ["preparing", "in_progress", "evaluating"].contains(status) }
-    public var title: String { let title = raw.text("company_name") + " · " + raw.text("job_title"); return raw.text("company_name").isEmpty ? raw.text("resume_title") + " · 通用面试" : title }
-    public var questions: [JSONValue] { raw["questions"]?.items ?? [] }
-    public var current: JSONValue? { questions.first { $0.text("id") == raw.text("current_question_id") && $0.text("answer_status") == "pending" } }
-    public var label: String { Self.statusLabels[status] ?? status }
-    public var type: String { Self.types[raw.text("interview_type")] ?? "综合面" }
-    public static let types = ["technical": "技术面", "project_deep_dive": "项目深挖", "comprehensive": "综合面", "hr": "HR 面"]
-    public static let dimensions = ["professional_depth": "专业深度", "structure": "表达结构", "job_fit": "岗位匹配", "resume_consistency": "简历一致性", "communication": "沟通表现", "knowledge": "知识与原理", "problem_solving": "方案与权衡", "ownership": "项目主导与成果", "motivation": "动机与稳定性"]
-    public static let statusLabels = ["preparing": "准备中", "preparation_failed": "准备失败", "in_progress": "面试中", "evaluating": "评估中", "evaluation_failed": "评估失败", "completed": "已完成", "abandoned": "已放弃"]
 }

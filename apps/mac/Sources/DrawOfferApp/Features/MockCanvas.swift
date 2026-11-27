@@ -5,14 +5,6 @@ import SwiftUI
 /// 模拟面试的画布（Web `v2/DesignStage.tsx`）：面试设置、面试中各页按设计稿坐标排版，外层 `MockStage` 整体等比缩放。
 enum MI {
     static let ink = Color(hex: 0x1D1D1B)
-    static let blue = Color(hex: 0x3F6FD8)
-    static let orange = Color(hex: 0xD9822B)
-    static let mute = Color(hex: 0x9B978C)
-    static let sub = Color(hex: 0x5F5D57)
-    static let gry = Color(hex: 0xA9A59A)
-    static let line = Color(hex: 0xD9D6CD)
-    static let soft = Color(hex: 0xEFEDE7)
-    static let paper = Color.white
 }
 
 /// 按设计尺寸排版、整体等比缩放并居中（Web `DesignStage`）。

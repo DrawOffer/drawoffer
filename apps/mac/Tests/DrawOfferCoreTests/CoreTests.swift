@@ -7,28 +7,39 @@ import Testing
     await #expect(throws: APIError.unauthorized) { try await api.listResumeTemplates() }
 }
 
-/// 客户端不再随包携带模板；测试直接读仓库里的共享样例。
-private func fixtureTemplates() throws -> [ResumeTemplate] {
-    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        .appendingPathComponent("../../../native/shared/fixtures/resume-templates.json").standardizedFileURL
-    struct Envelope: Decodable { let templates: [ResumeTemplate] }
-    return try JSONDecoder().decode(Envelope.self, from: Data(contentsOf: url)).templates
+@Test func mockTemplatesAreEmptyAfterSignIn() async throws {
+    // 客户端不携带模板，真实目录只来自后端
+    #expect(try await MockAPIClient(signedIn: true).listResumeTemplates().isEmpty)
 }
 
-@Test func fixtureTemplatesCarryLayoutPlans() throws {
-    let templates = try fixtureTemplates()
-    #expect(templates.count == 9)
-    #expect(templates.allSatisfy { $0.layoutPlan != nil })
+/// 只是 `GET /api/resume-templates` 的结构样例（字段照后端 ResumeTemplateRecord），不是可见模板。
+private func shapeTemplate(key: String, avatar: String) throws -> ResumeTemplate {
+    let json = """
+    {"id":"7","key":"\(key)","name":"结构样例","description":null,"style_categories":["现代"],"use_cases":["校招"],
+     "data":{"schema_version":"canonical-resume.v1","identity":{"name":{"value":"张三"},"avatar":null},"sections":[]},
+     "style":{"schema_version":"template-definition.v1","template_key":"\(key)",
+              "avatar":{"visibility":"\(avatar)","fallback_asset":"system-default"}},
+     "layout_plan":{"schema_version":"layout-plan.v1"},"switchable":true,"incompatibility_reason":null,"use_count":3}
+    """
+    return try JSONDecoder().decode(ResumeTemplate.self, from: Data(json.utf8))
+}
+
+@Test func templateRecordDecodesBackendShape() throws {
+    let template = try shapeTemplate(key: "shape-sample-cn", avatar: "show")
+    #expect(template.useCount == 3)
+    #expect(template.styleCategories == ["现代"] && template.useCases == ["校招"])
+    #expect(template.layoutPlan != nil)
 }
 
 @Test func renderRequestMatchesWebPresentationRule() async throws {
-    let template = try #require(try fixtureTemplates().first)
+    let template = try shapeTemplate(key: "shape-sample-cn", avatar: "show")
     let encoded = try JSONEncoder().encode(template.renderRequest())
     let request = try JSONDecoder().decode(JSONValue.self, from: encoded)
     #expect(request["protocol_version"] == .number(1))
     #expect(request["style"]?["schema_version"]?.stringValue == "resume-presentation.v1")
     #expect(request["style"]?["template_scoped"]?[template.key] == .object([:]))
     #expect(request["style"]?["template_snapshot"] == template.style)
+    #expect(request["layout_plan"] == template.layoutPlan)
 }
 
 @MainActor
@@ -101,17 +112,18 @@ private actor DelayedIdentityAPI: APIClient {
     #expect(CareerRequest.allowed(path: "/api/job-pool/34/join", method: "POST"))
     #expect(!CareerRequest.allowed(path: "/api/admin/job-pool/sources", method: "GET"))
     #expect(!CareerRequest.allowed(path: "/api/job-pool/abc", method: "GET"))
+    #expect(CareerRequest.allowed(path: "/api/job-pool/count", method: "GET"))
+    #expect(CareerRequest.allowed(path: "/api/job-pool/by-company", method: "GET"))
 }
 
 /// 模板卡片与预览：没有头像、显示系统默认头像的模板换成示例证件照，散列与 Web `templateSamplePhoto` 一致；隐藏头像的模板不动。
 @Test func templatePreviewUsesWebSamplePhoto() throws {
     #expect(ResumeTemplate.samplePhoto("classic-tech") == "/templates/sample-photo-male.jpg")
     #expect(ResumeTemplate.samplePhoto("swiss-orange") == "/templates/sample-photo-female.jpg")
-    let templates = try fixtureTemplates()
-    let campus = try #require(templates.first { $0.key == "featured-campus-cn" })
-    let avatar = campus.previewRequest().data["identity"]?["avatar"]
+    let shown = try shapeTemplate(key: "featured-campus-cn", avatar: "show")
+    let avatar = shown.previewRequest().data["identity"]?["avatar"]
     #expect(avatar?["src"]?.stringValue == ResumeTemplate.samplePhoto("featured-campus-cn"))
     #expect(avatar?["system_fallback"] == .bool(false))
-    let hidden = try #require(templates.first { $0.key == "muse-code-cn" })
+    let hidden = try shapeTemplate(key: "muse-code-cn", avatar: "hide")
     #expect(hidden.previewRequest().data["identity"]?["avatar"] == hidden.renderRequest().data["identity"]?["avatar"])
 }

@@ -13,7 +13,7 @@ public enum DatasetRequest {
         guard id(p[3]) else { return false }
         if p.count == 4 { return ["GET", "PATCH", "DELETE"].contains(method) }
         guard p.count == 5 else { return false }
-        return ["content":"GET", "source":"GET", "retry":"POST", "folder":"PATCH", "file":"PUT"][p[4]] == method
+        return ["content":"GET", "source":"GET", "retry":"POST", "transcribe":"POST", "folder":"PATCH", "file":"PUT", "text":"PUT"][p[4]] == method
     }
 }
 public struct DatasetRecord: Identifiable, Sendable {

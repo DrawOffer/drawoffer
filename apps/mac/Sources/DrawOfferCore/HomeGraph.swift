@@ -13,6 +13,10 @@ public struct HomeGraph: Sendable, Equatable {
         public let status: Status
         public let overstated: Bool
         public let changedUp: Bool
+        /// 面试或练习问到过：status 为 none 时区分“问过，还说不准”和“还没问到”
+        public let asked: Bool
+        /// 经历节点（highlight）是服务的业务（business）还是做成的事（work）
+        public let facet: String?
         public let size: Double
 
         /// 图上的分类（Web `stageNodeOf`）：橙色只给还不牢或写高了的，蓝色给刚练稳的；场次一律墨色。
@@ -22,13 +26,33 @@ public struct HomeGraph: Sendable, Equatable {
             if status == .weak || overstated { return .hot }
             return changedUp ? .new : .plain
         }
-        public var label: String {
-            let base = name.components(separatedBy: "（").first ?? name
-            return kind == .highlight ? "“\(base)”" : base
+        public var label: String { name.components(separatedBy: "（").first ?? name }
+        /// 服务的业务：名字前带一个小方块
+        public var business: Bool { kind == .highlight && facet == "business" }
+        /// 掌握情况的一句话（Web `describe` 的 held）
+        public var held: String {
+            switch status {
+            case .top: "答得很稳"
+            case .good: "答得不错"
+            case .ok: "答到了基础"
+            case .weak: "还不牢"
+            case .none: asked ? "问过，还说不准" : "还没问到"
+            }
         }
-        /// 首页右栏只画经历、技术和问到过的知识点；展开后全画。
-        public var onHome: Bool { kind == .experience || kind == .technology || (kind == .point && status != .none) }
-        /// 图上的短名：汉字算 2、字母数字算 1，经历放宽到 20，其余 16；经历放不下就只留公司。
+        /// 「聊一聊」对话里挂着的状态（Web `describe` 的 state）
+        public var chatState: String {
+            switch kind {
+            case .experience: return ""
+            case .session: return "这一场"
+            case .highlight: return business ? "服务的业务" : "做成的事"
+            case .technology, .point:
+                if overstated { return "写高了" }
+                if kind == .technology { return status == .none ? "" : held }
+                if changedUp && status != .weak { return "刚练稳" }
+                return held
+            }
+        }
+        /// 图上的短名：汉字算 2、字母数字算 1，经历和场次放宽到 20，其余 16；经历放不下就只留公司。
         public var short: String {
             func units(_ c: Character) -> Int { c.unicodeScalars.allSatisfy { $0.value < 0x250 } ? 1 : 2 }
             func width(_ s: String) -> Int { s.reduce(0) { $0 + units($1) } }
@@ -39,7 +63,6 @@ public struct HomeGraph: Sendable, Equatable {
             }
             let base = name.components(separatedBy: "（").first ?? name
             switch kind {
-            case .highlight: return "“\(clip(base, 16))”"
             case .experience: return width(base) <= 20 ? base : clip(base.components(separatedBy: " · ").first ?? base, 16)
             case .session: return clip(base, 20)
             default: return clip(base, 16)
@@ -67,12 +90,15 @@ public struct HomeGraph: Sendable, Equatable {
         public let practiceLabel: String?
         public let practiceRef: String?
         public let practiceKind: String?
+        /// 练经历时从哪个延伸点开始、经历在哪份简历（Web `HomeGraphFocus.hook / resume_id`）
+        public var practiceHook: String? = nil
+        public var practiceResumeID: String? = nil
         public var id: String { "\(kind.rawValue):\(sourceID)" }
     }
 
     public struct Entries: Sendable, Equatable {
         public var interviewCount = 0, interviewCompany: String?, interviewStage: String?, interviewStart: String?
-        public var mockCount = 0, mockLastScore: Double?
+        public var mockCount = 0, mockLastScore: Double?, mockLastID: String?
         public var applicationsOpen = 0, applicationsAwaiting = 0
         public var jobsSaved = 0
         public var datasets = 0
@@ -86,6 +112,7 @@ public struct HomeGraph: Sendable, Equatable {
     public let hasConclusions: Bool
     public let points: Int
     public let weakPoints: Int
+    public let strongest: Pick?
     public let weakest: Pick?
     public let timeline: [Progress]
     public let today: String
@@ -111,22 +138,28 @@ public struct HomeGraph: Sendable, Equatable {
         nodes = (json["graph"]?["nodes"]?.items ?? []).compactMap { item in
             guard let kind = Kind(rawValue: item.text("kind")), !item.text("key").isEmpty else { return nil }
             return Node(id: item.text("key"), kind: kind, name: item.text("name"), status: Status(rawValue: item.text("status")) ?? .none,
-                        overstated: item.text("flag") == "overstated", changedUp: item.text("changed") == "up", size: item["size"]?.numberValue ?? 1)
+                        overstated: item.text("flag") == "overstated", changedUp: item.text("changed") == "up",
+                        asked: item["asked"]?.bool == true, facet: opt(item["facet"]), size: item["size"]?.numberValue ?? 0)
         }
         edges = (json["graph"]?["edges"]?.items ?? []).map { Edge(src: $0.text("src"), dst: $0.text("dst"), kind: $0.text("kind")) }
         hasConclusions = json["has_conclusions"]?.bool == true
         points = int(json["points"])
         weakPoints = int(json["weak_points"])
-        weakest = json["weakest"].flatMap { value in
-            value.text("key").isEmpty ? nil : Pick(key: value.text("key"), name: value.text("name"), experiences: int(value["experiences"]))
+        func pick(_ value: JSONValue?) -> Pick? {
+            value.flatMap { $0.text("key").isEmpty ? nil : Pick(key: $0.text("key"), name: $0.text("name"), experiences: int($0["experiences"])) }
         }
+        strongest = pick(json["strongest"])
+        weakest = pick(json["weakest"])
         timeline = (json["timeline"]?.items ?? []).compactMap { item in
             guard let kind = Progress.Source(rawValue: item.text("kind")) else { return nil }
             let practice = item["practice"]
-            return Progress(kind: kind, date: item.text("date"), source: item.text("source"), sourceID: item.text("source_id"),
+            var progress = Progress(kind: kind, date: item.text("date"), source: item.text("source"), sourceID: item.text("source_id"),
                             tone: Progress.Tone(rawValue: item.text("tone")) ?? .info, name: opt(item["name"]), before: opt(item["before"]), after: opt(item["after"]),
                             asked: int(item["asked"]), missed: int(item["missed"]),
                             practiceLabel: practice.flatMap { opt($0["label"]) }, practiceRef: practice.flatMap { opt($0["ref"]) }, practiceKind: practice.flatMap { opt($0["kind"]) })
+            progress.practiceHook = practice.flatMap { opt($0["hook"]) }
+            progress.practiceResumeID = practice.flatMap { opt($0["resume_id"]) }
+            return progress
         }
         today = json.text("today")
         entries = json["entries"].map { value in
@@ -137,6 +170,7 @@ public struct HomeGraph: Sendable, Equatable {
             entries.interviewStart = value["interview"].flatMap { opt($0["start_at"]) }
             entries.mockCount = int(value["mock"]?["count"])
             entries.mockLastScore = value["mock"]?["last_score"]?.numberValue
+            entries.mockLastID = value["mock"].flatMap { opt($0["last_id"]) }
             entries.applicationsOpen = int(value["applications"]?["open"])
             entries.applicationsAwaiting = int(value["applications"]?["awaiting_result"])
             entries.jobsSaved = int(value["jobs"]?["saved"])
@@ -166,26 +200,23 @@ public struct HomeMockProgress: Sendable, Equatable {
     }
 }
 
-/// 首页选哪一屏（Web `HomeMemory` + `pickFirstSteps`）。
+/// 首页选哪一屏（Web `HomeMemory` + `pickFirstSteps`）：新手阶段（03 / 06）属于新手引导，跟管理端开关走，关着时有简历一律是日常首页。
 public enum HomeStage: Equatable, Sendable {
     public enum FirstSteps: String, Sendable { case start, ongoing, evaluating, failed, report }
     /// 01：没有简历
     case newUser
     /// 03 / 06：有简历、第一份报告看完之前
     case firstSteps(FirstSteps)
-    /// 07：有结论、有最近进展
+    /// 07：日常首页；缺图谱节点或最近进展时只换对应那一块
     case feedback
-    /// 有简历但还没有可展示的进展：仍按“练一场”引导
-    case resumeOnly
 
     /// 只给这套首页上线之后才练完第一场的人看“第一份报告好了”。
     static let firstReportSince = parseDate("2026-11-14T00:00:00+08:00")!
 
-    public static func pick(graph: HomeGraph, mocks: HomeMockProgress?, reportSeen: Bool) -> HomeStage {
+    public static func pick(graph: HomeGraph, mocks: HomeMockProgress?, reportSeen: Bool, guideOn: Bool) -> HomeStage {
         guard graph.resumeID != nil else { return .newUser }
-        if let mocks, let steps = firstSteps(mocks, hasConclusions: graph.hasConclusions, reportSeen: reportSeen) { return .firstSteps(steps) }
-        if graph.hasConclusions, !graph.nodes.isEmpty, !graph.timeline.isEmpty { return .feedback }
-        return .resumeOnly
+        if guideOn, let mocks, let steps = firstSteps(mocks, hasConclusions: graph.hasConclusions, reportSeen: reportSeen) { return .firstSteps(steps) }
+        return .feedback
     }
 
     static func firstSteps(_ mocks: HomeMockProgress, hasConclusions: Bool, reportSeen: Bool) -> FirstSteps? {
@@ -226,8 +257,8 @@ public enum HomeProgressText {
         }
     }
 
-    public static func text(_ item: HomeGraph.Progress, weakPoints: Int) -> Text {
-        let left = weakPoints > 0 ? "还有 \(weakPoints) 个不牢。" : "图上没有还不牢的了。"
+    public static func text(_ item: HomeGraph.Progress, weakPoints: Int, hasConclusions: Bool) -> Text {
+        let left = !hasConclusions ? "多练几场，这里会说得更准。" : weakPoints > 0 ? "还有 \(weakPoints) 个不牢。" : "图上没有还不牢的了。"
         if item.kind == .resume {
             return Text(lines: [("简历有更新", "", ""), ("", "图谱跟着重读了", "")], weak: false,
                         short: "更新了《\(item.name ?? "")》", desc: "简历里写的技术和经历都已经记进图谱。" + left)
@@ -262,63 +293,32 @@ public enum HomeProgressText {
     }
 }
 
-// MARK: 图谱摆放
+// MARK: 最近进展为空时的结论（Web `summaryOf`，00 分区 R2）
 
-/// 知识图谱的摆放：确定性的力导向（同一份数据每次摆得一样），坐标归一到 0…1，界面按区域大小换算。
-/// Web 画布每帧都在动；桌面端首页只要静态摆好、点开放大，不做逐帧漂浮。
-public enum HomeGraphLayout {
-    public static func layout(nodes: [HomeGraph.Node], edges: [HomeGraph.Edge], iterations: Int = 320) -> [String: (x: Double, y: Double)] {
-        guard !nodes.isEmpty else { return [:] }
-        let index = Dictionary(uniqueKeysWithValues: nodes.enumerated().map { ($1.id, $0) })
-        let links = edges.compactMap { edge -> (Int, Int)? in
-            guard edge.kind != "EE", let a = index[edge.src], let b = index[edge.dst], a != b else { return nil }
-            return (a, b)
+public struct HomeSummary: Equatable, Sendable {
+    public let eyebrow: String
+    public let title: [String]
+    public let desc: String
+
+    /// 夹在一句话里的名字太长时截断，免得一行字超出左栏
+    static func clip(_ name: String, _ limit: Int) -> String { name.count > limit ? String(name.prefix(limit - 1)) + "…" : name }
+
+    /// 最稳、最该补的一处；还没有结论时只说接着练。两行之间不加标点。
+    public static func of(_ graph: HomeGraph) -> HomeSummary {
+        let mocks = graph.sources.mocks
+        guard graph.hasConclusions else {
+            return HomeSummary(eyebrow: mocks > 0 ? "练过 \(mocks) 场模拟面试" : "长期记忆",
+                               title: mocks > 0 ? ["练过的都记在这里", "接着练下一处"] : ["练一场模拟面试", "记忆从这里开始"],
+                               desc: "每练一场，答得好和卡住的地方都会记进图谱。")
         }
-        let count = nodes.count
-        // 起点：按序号放在螺旋上，确定且不重叠
-        var position = (0..<count).map { i -> (Double, Double) in
-            let angle = Double(i) * 2.399963
-            let radius = 0.08 + 0.42 * sqrt(Double(i + 1) / Double(count + 1))
-            return (0.5 + radius * cos(angle), 0.5 + radius * sin(angle))
-        }
-        let k = 0.9 * sqrt(1.0 / Double(count))
-        var temperature = 0.1
-        for _ in 0..<iterations {
-            var move = Array(repeating: (0.0, 0.0), count: count)
-            for i in 0..<count {
-                for j in (i + 1)..<count {
-                    var dx = position[i].0 - position[j].0, dy = position[i].1 - position[j].1
-                    var distance = sqrt(dx * dx + dy * dy)
-                    if distance < 1e-4 { dx = 0.001 * Double(i - j); dy = 0.001; distance = 0.0015 }
-                    let force = k * k / distance
-                    move[i].0 += dx / distance * force; move[i].1 += dy / distance * force
-                    move[j].0 -= dx / distance * force; move[j].1 -= dy / distance * force
-                }
-            }
-            for (a, b) in links {
-                let dx = position[a].0 - position[b].0, dy = position[a].1 - position[b].1
-                let distance = max(sqrt(dx * dx + dy * dy), 1e-4)
-                let force = distance * distance / k
-                move[a].0 -= dx / distance * force; move[a].1 -= dy / distance * force
-                move[b].0 += dx / distance * force; move[b].1 += dy / distance * force
-            }
-            for i in 0..<count {
-                // 轻微拉向中心，孤立节点不飞出去
-                move[i].0 += (0.5 - position[i].0) * 0.02; move[i].1 += (0.5 - position[i].1) * 0.02
-                let length = max(sqrt(move[i].0 * move[i].0 + move[i].1 * move[i].1), 1e-9)
-                position[i].0 += move[i].0 / length * min(length, temperature)
-                position[i].1 += move[i].1 / length * min(length, temperature)
-            }
-            temperature = max(0.002, temperature * 0.985)
-        }
-        // 归一到 0…1，留 6% 边距
-        let xs = position.map(\.0), ys = position.map(\.1)
-        let minX = xs.min()!, maxX = xs.max()!, minY = ys.min()!, maxY = ys.max()!
-        let spanX = max(maxX - minX, 1e-6), spanY = max(maxY - minY, 1e-6)
-        var result: [String: (x: Double, y: Double)] = [:]
-        for (i, node) in nodes.enumerated() {
-            result[node.id] = (0.06 + 0.88 * (position[i].0 - minX) / spanX, 0.06 + 0.88 * (position[i].1 - minY) / spanY)
-        }
-        return result
+        let strong = graph.strongest.map { clip(KnowledgeGraph.shortName($0.name), 12) } ?? ""
+        let weak = graph.weakest.map { clip(KnowledgeGraph.shortName($0.name), 12) } ?? ""
+        let title = !strong.isEmpty && !weak.isEmpty ? ["\(strong) 答得很稳", "\(weak) 还要再练"]
+            : !weak.isEmpty ? ["\(weak) 还要再练", "先把它补上"]
+            : !strong.isEmpty ? ["\(strong) 答得很稳", "接着练下一处"]
+            : ["练过的都记在这里", "接着练下一处"]
+        let uses = graph.weakest?.experiences ?? 0
+        let desc = weak.isEmpty ? "再练一场，这里会记得更清楚。" : uses > 1 ? "\(uses) 段经历都用到 \(weak)，先补它最划算。" : "\(weak) 最该补，先练它最划算。"
+        return HomeSummary(eyebrow: mocks > 0 ? "最近 \(mocks) 场模拟面试的结论" : "长期记忆的结论", title: title, desc: desc)
     }
 }

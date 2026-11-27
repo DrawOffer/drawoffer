@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import Foundation
+import PDFKit
 import WebKit
 
 /// 本地对照用的窗口快照：仅当设置 `DRAWOFFER_SNAPSHOT_DIR` 时启用。
@@ -150,6 +151,26 @@ enum DebugSnapshot {
                 sub.draw(in: frame, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: false, hints: nil)
             }
         }
+        // PDFKit 的页面画在分块图层里，cacheDisplay 拍不到（资料预览页只剩白纸）：逐页按位置补画。
+        if let context = NSGraphicsContext(bitmapImageRep: rep) {
+            for pdf in pdfViews(in: view) {
+                var clip = pdf.convert(pdf.bounds, to: view)
+                if view.isFlipped { clip.origin.y = bounds.height - clip.maxY }
+                for page in pdf.visiblePages {
+                    let box = page.bounds(for: .cropBox)
+                    var rect = pdf.convert(pdf.convert(box, from: page), to: view)
+                    if view.isFlipped { rect.origin.y = bounds.height - rect.maxY }
+                    let cg = context.cgContext
+                    cg.saveGState()
+                    cg.clip(to: clip)
+                    cg.translateBy(x: rect.minX, y: rect.minY)
+                    cg.scaleBy(x: rect.width / max(1, box.width), y: rect.height / max(1, box.height))
+                    cg.setFillColor(.white); cg.fill(CGRect(origin: .zero, size: box.size))
+                    page.draw(with: .cropBox, to: cg)
+                    cg.restoreGState()
+                }
+            }
+        }
         // WKWebView（简历纸面）不走 cacheDisplay：逐个 takeSnapshot 再按位置画回去，全部回来后才写文件。
         let webs = webViews(in: view)
         let group = DispatchGroup()
@@ -194,6 +215,12 @@ enum DebugSnapshot {
             if distance < 8 { pixels[index] = 0; pixels[index + 1] = 0; pixels[index + 2] = 0; pixels[index + 3] = 0 }
         }
         return context.makeImage()
+    }
+
+    private static func pdfViews(in view: NSView) -> [PDFView] {
+        guard !view.isHiddenOrHasHiddenAncestor else { return [] }
+        if let pdf = view as? PDFView { return [pdf] }
+        return view.subviews.flatMap(pdfViews)
     }
 
     private static func webViews(in view: NSView) -> [WKWebView] {

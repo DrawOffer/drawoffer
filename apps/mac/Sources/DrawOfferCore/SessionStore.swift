@@ -100,8 +100,6 @@ public final class SessionStore {
         return challenge.authorizeURL
     }
 
-    public func cancelBrowserLogin() { browserLoginPending = false }
-
     public func completeBrowserLogin(callback: URL) async {
         // 没有进行中的浏览器登录时忽略回调（例如重复点击了旧页面的“打开 DrawOffer”）。
         guard browserLoginPending, let client = api as? HTTPAPIClient else { return }

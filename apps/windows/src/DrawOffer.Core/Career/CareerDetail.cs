@@ -19,39 +19,13 @@ public abstract record CareerDetailTile
 
 public enum CareerDetailAction { RecordApplied, Advance, Schedule, RecordReview, AnswerPlan, Reschedule, CancelSession, RecordOffer, AcceptOffer, EditOffer, DeclineOffer, ViewReview }
 
-public static class CareerDetailActionExtensions
-{
-    /// <summary>Swift 枚举的 rawValue。</summary>
-    public static string RawValue(this CareerDetailAction action) => action switch
-    {
-        CareerDetailAction.RecordApplied => "record-applied", CareerDetailAction.Advance => "advance", CareerDetailAction.Schedule => "schedule",
-        CareerDetailAction.RecordReview => "record-review", CareerDetailAction.AnswerPlan => "answer-plan", CareerDetailAction.Reschedule => "reschedule",
-        CareerDetailAction.CancelSession => "cancel-session", CareerDetailAction.RecordOffer => "record-offer", CareerDetailAction.AcceptOffer => "accept-offer",
-        CareerDetailAction.EditOffer => "edit-offer", CareerDetailAction.DeclineOffer => "decline-offer", _ => "view-review",
-    };
-}
-
 public sealed record CareerDetailButton(CareerDetailAction Action, string Label, bool Danger = false, bool Dark = true);
 
-public sealed record CareerDetailNext(string Lead, CareerDetailTile Tile, IReadOnlyList<CareerChip> Chips, string Title, string Detail, string? Hint, CareerDetailButton? Primary, IReadOnlyList<CareerDetailButton> Secondary)
-{
-    /// <summary>强调条跟随状态标签；有阶段名标签时它排在第一个。</summary>
-    public CareerTone Accent
-    {
-        get
-        {
-            CareerChip? chip = Chips.Count > 1 ? Chips[1] : Chips.Count > 0 ? Chips[0] : null;
-            return chip is { } value && value.Tone != CareerTone.Dark ? value.Tone : CareerTone.Gray;
-        }
-    }
-}
+public sealed record CareerDetailNext(string Lead, CareerDetailTile Tile, IReadOnlyList<CareerChip> Chips, string Title, string Detail, string? Hint, CareerDetailButton? Primary, IReadOnlyList<CareerDetailButton> Secondary);
 
 public sealed record CareerHistoryItem(string Id, string Date, string Title, CareerChip Chip, string Detail, CareerTone? Dot, CareerTone? Highlight, string? SessionId);
 
-public sealed record CareerInfoRow(string Label, string Value, CareerTone? Tone = null)
-{
-    public string Id => Label;
-}
+public sealed record CareerInfoRow(string Label, string Value, CareerTone? Tone = null);
 
 public sealed record CareerOfferCard(string Title, string Action, IReadOnlyList<CareerInfoRow> Rows);
 

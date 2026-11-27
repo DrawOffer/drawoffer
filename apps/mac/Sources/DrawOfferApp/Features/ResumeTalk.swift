@@ -14,8 +14,6 @@ enum ResumeTalk {
     static let note = Color(hex: 0x87867F)
     static let userFill = Color(hex: 0xEDECE7)
     static let oldFill = Color(hex: 0xEFEFEC)
-    /// 纸上补出来、要核实的说法（橙）。
-    static let verify = Color(hex: 0xC8721C)
 }
 
 /// 职绘头像：品牌花（找不到资源时退回应用图标）。
@@ -167,32 +165,5 @@ struct ResumeTalkFlow: Layout {
             view.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
             x += size.width + spacing; row = max(row, size.height)
         }
-    }
-}
-
-/// 改好的那一句：设计稿里直接显示在纸上（浅蓝底=还没换上，橙色=要核实）；原生纸面还不能临时高亮，
-/// 先放在对话里，用同样的浅蓝底和橙色标出。
-struct ResumeTalkProposal: View {
-    let text: String
-    var risky: [String] = []
-    var body: some View {
-        Text(Self.marked(text, risky: risky)).font(V3.sans(13)).foregroundStyle(V3.txt).lineSpacing(5)
-            .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-            .padding(.horizontal, 10).padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(V3.blueSoft, in: RoundedRectangle(cornerRadius: 6))
-            .padding(.top, 10)
-    }
-
-    static func marked(_ text: String, risky: [String]) -> AttributedString {
-        var result = AttributedString(text)
-        for term in risky where !term.isEmpty {
-            var start = result.startIndex
-            while let range = result[start...].range(of: term) {
-                result[range].foregroundColor = ResumeTalk.verify
-                start = range.upperBound
-            }
-        }
-        return result
     }
 }

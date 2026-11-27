@@ -19,3 +19,4 @@ apps/mac/Sources/DrawOfferRender/Resources/templates/
 apps/windows/src/DrawOffer.App/Assets/Renderer/paper.html
 apps/windows/src/DrawOffer.App/Assets/Renderer/editor.html
 apps/windows/src/DrawOffer.App/Assets/Renderer/templates/
+__pycache__/

@@ -1,8 +1,14 @@
 import DrawOfferCore
 import SwiftUI
 
-/// 单题详情（Figma 09 · 10.05 没答好、10.06 答到位；Web `interviews/report/ReviewQuestion.tsx`）：
-/// 左边完整问答（原话里出问题的地方划线），右边面试官想听到什么、可以这样说 / 亮点、这道题的几次；可以回放录音、修改识别稿、判得不对。
+/// 单题复盘和完整记录的配色（Web `reviewQuestion.css` 的 `.rq`）。
+enum RQC {
+    static let ink = Color(hex: 0x1C1917), text = Color(hex: 0x37332F), sub = Color(hex: 0x57534E), mute = Color(hex: 0x8C8680), faint = Color(hex: 0xA8A29E)
+    static let rule = Color(hex: 0xECEBE9), mark = Color(hex: 0xFCEFCB), markOn = Color(hex: 0xF7DC92), bar = Color(hex: 0xE8C66E)
+}
+
+/// 单题复盘（Figma 09 · 06.01；Web `interviews/report/ReviewQuestion.tsx`）：左边是一份连续的只读文档（问答回放 + 整题回顾），
+/// 右边像文档批注，挂在被标黄的原话那一轮旁边；点一条展开全文并加深那句原话。窄时批注收进每一轮下面。
 struct MockQuestionDetail<Crumb: View>: View {
     let question: MockRV.Question
     let total: Int
@@ -16,131 +22,165 @@ struct MockQuestionDetail<Crumb: View>: View {
     var play: ((MockRV.Question) -> Void)?
     var playing = false
     @ViewBuilder var crumb: () -> Crumb
+    @State private var active: String?
 
 
     var body: some View {
-        let level = question.level ?? 0
-        let tag = question.recovered ? "上次没过，这次答到了" : MockRV.repeatTag(question)
-        let meta = ["第 \(question.no) 题", MockRV.outcomeText(question), question.score.map { "\($0) 分" }, tag].compactMap { $0 }.joined(separator: " · ")
-        let history = question.history ?? []
-        V3Page(top: 46) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .top, spacing: 24) {
-                    crumb().padding(.top, 6)
-                    Spacer(minLength: 0)
-                    HStack(spacing: 12) {
-                        Button("‹ 上一题") { if let prev { open(prev.id) } }.buttonStyle(MockLinkStyle()).disabled(prev == nil)
-                        Text(verbatim: "\(question.no) / \(total)").font(V3.sans(13)).foregroundStyle(RRC.sub)
-                        Button("下一题 ›") { if let next { open(next.id) } }.buttonStyle(MockLinkStyle()).disabled(next == nil)
-                    }.frame(height: 40)
-                    if question.weak { Button("练这一处") { practice(question) }.buttonStyle(MockPillStyle(height: 40, padding: 20)) }
-                }
-                Text(verbatim: question.title).font(V3.serif(28)).foregroundStyle(RRC.ink).lineHeight(28, 36, .serif).padding(.top, 6)
-                Text(verbatim: meta).font(V3.sans(14)).foregroundStyle(RRC.text).frame(height: 22).padding(.top, 4)
-                Text(verbatim: MockRV.depthSentence(question)).font(V3.sans(13, weight: .medium)).foregroundStyle(RRC.ink).frame(height: 20).padding(.top, 22)
-                depth(level)
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: 40) {
-                        talk.frame(minWidth: 480, maxWidth: .infinity, alignment: .leading).layoutPriority(620)
-                        side(history).frame(minWidth: 300, maxWidth: .infinity, alignment: .leading).layoutPriority(395)
+        let comments = MockRV.comments(question)
+        let meta = ["第 \(question.no) 题", question.follows > 0 ? "主问题 + 追问 \(question.follows) 次" : "主问题",
+                    question.previousScore.map { "上次 \($0) 分" }, question.score.map { _ in "达标 \(MockRV.passScore) 分" }].compactMap { $0 }
+        GeometryReader { geometry in
+            let page = min(968, geometry.size.width - 48)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 24) {
+                        crumb()
+                        Spacer(minLength: 0)
+                        HStack(spacing: 14) {
+                            Button("‹ 上一题") { if let prev { open(prev.id) } }.disabled(prev == nil)
+                            Text(verbatim: "\(question.no) / \(total)").font(V3.number(12.5, weight: .regular)).foregroundStyle(RQC.faint)
+                            Button("下一题 ›") { if let next { open(next.id) } }.disabled(next == nil)
+                        }.buttonStyle(MockLinkStyle(size: 13, color: RQC.sub)).fontWeight(.medium)
                     }
-                    VStack(alignment: .leading, spacing: 32) { talk; side(history) }
+                    .frame(height: 20)
+                    head(meta).padding(.top, 38)
+                    let narrow = page < 900
+                    VStack(alignment: .leading, spacing: 0) {
+                        heading("问答回放", meta[1])
+                        ForEach(Array(question.turns.enumerated()), id: \.element.id) { index, turn in
+                            let notes = comments.filter { $0.turnID == turn.id }
+                            if narrow {
+                                VStack(alignment: .leading, spacing: 8) { self.turn(turn, index, notes); ForEach(notes) { note($0) } }.padding(.top, index > 0 ? 26 : 0)
+                            } else {
+                                HStack(alignment: .top, spacing: 48) {
+                                    self.turn(turn, index, notes).frame(maxWidth: 640, alignment: .leading)
+                                    VStack(alignment: .leading, spacing: 0) { ForEach(notes) { note($0) } }
+                                        .frame(width: 280, alignment: .leading).padding(.top, 34)
+                                }
+                                .padding(.top, index > 0 ? 26 : 0)
+                            }
+                        }
+                        review.frame(maxWidth: 640, alignment: .leading)
+                        HStack(spacing: 20) {
+                            if let play { Button(playing ? "停止播放" : "播放录音") { play(question) } }
+                            if let judge { Button("判得不对？") { judge(question) } }
+                            if let edit { Button("修改识别稿") { edit(question) } }
+                            Button("在完整面试记录中查看") { record(question) }
+                        }
+                        .buttonStyle(MockLinkStyle(size: 12.5, color: RQC.mute)).padding(.top, 24)
+                    }
+                    .padding(.top, 24)
                 }
-                .padding(.top, 20)
+                .frame(width: page, alignment: .leading).frame(maxWidth: .infinity).padding(.top, 38).padding(.bottom, 60)
             }
         }
         .background(.white)
+        .onChange(of: question.id) { _, _ in active = nil }
     }
 
-    /// 五层深度：答到的几层深色，当前层加粗，目标层一根竖线。
-    private func depth(_ level: Int) -> some View {
-        GeometryReader { geometry in
-            let cell = (geometry.size.width - 32) / 5
-            ZStack(alignment: .topLeading) {
-                HStack(spacing: 8) {
-                    ForEach(Array(MockRV.levels.enumerated()), id: \.offset) { index, name in
-                        VStack(alignment: .leading, spacing: 7) {
-                            RoundedRectangle(cornerRadius: 2.5).fill(index < level ? RRC.text : RRC.thin).frame(height: 5)
-                            Text(verbatim: name).font(V3.sans(12, weight: index + 1 == level ? .medium : .regular)).foregroundStyle(index + 1 == level ? RRC.ink : RRC.faint)
-                        }.frame(width: cell)
-                    }
-                }
-                Rectangle().fill(RRC.ink).frame(width: 2, height: 13).offset(x: (cell + 8) * CGFloat(max(1, min(5, question.expected))) - 5, y: -4)
-            }
-        }
-        .frame(height: 30).padding(.top, 10).padding(.bottom, 16)
-        .overlay(alignment: .bottom) { Rectangle().fill(RRC.thin).frame(height: 1) }
-    }
-
-    private var talk: some View {
+    private func head(_ meta: [String]) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("完整问答").font(V3.sans(12)).foregroundStyle(RRC.sub).frame(height: 18).padding(.bottom, 10)
-            ForEach(question.turns) { turn in
-                let marks = MockRV.marks(question, turn.answer)
-                say("面试官") { Text(verbatim: turn.ask).fontWeight(.medium).foregroundStyle(RRC.ink) }
-                say("你") {
-                    if let answer = turn.answer { rrMarked(answer, marks, base: RRC.text) } else { Text(verbatim: turn.missing).foregroundStyle(RRC.faint) }
+            HStack(alignment: .top, spacing: 14) {
+                Text(verbatim: question.title).font(V3.serif(30)).fontWeight(.semibold).foregroundStyle(RQC.ink).lineHeight(30, 40, .serif)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let score = question.score {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text(verbatim: "\(score)").font(V3.number(26)).foregroundStyle(RQC.ink)
+                        Text("分").font(V3.sans(13)).foregroundStyle(RQC.mute)
+                    }.padding(.top, 4)
                 }
-                ForEach(marks, id: \.quote) { mark in
-                    Text(verbatim: "问题在这：\(MockRV.markText(mark))").font(V3.sans(12)).foregroundStyle(RRC.orange).lineHeight(12, 18).padding(.leading, 64).padding(.top, -8).padding(.bottom, 14)
-                }
+                Spacer(minLength: 0)
+                Button("练这一处") { practice(question) }.buttonStyle(MockPillStyle(kind: .ghost, height: 38, padding: 19)).padding(.top, 2)
             }
-            HStack(spacing: 24) {
-                if let play { Button(playing ? "暂停播放" : "播放这段录音") { play(question) }.buttonStyle(MockLinkStyle(blue: true)) }
-                if let edit { Button("修改识别稿") { edit(question) }.buttonStyle(MockLinkStyle(blue: true)) }
-                Button("在面试记录里打开") { record(question) }.buttonStyle(MockLinkStyle(blue: true))
-            }.padding(.leading, 64).padding(.top, 6)
+            Text(verbatim: meta.joined(separator: " · ")).font(V3.sans(12.5)).foregroundStyle(RQC.faint).lineHeight(12.5, 20).padding(.top, 6)
+            if let line = question.line {
+                Text(verbatim: line).font(V3.sans(15)).foregroundStyle(RQC.text).lineHeight(15, 28).frame(maxWidth: 640, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true).padding(.top, 20)
+            }
+            Rectangle().fill(RQC.rule).frame(height: 1).padding(.top, 20)
         }
     }
 
-    private func say<Content: View>(_ who: String, @ViewBuilder content: () -> Content) -> some View {
-        HStack(alignment: .top, spacing: 0) {
-            Text(verbatim: who).font(V3.sans(13)).foregroundStyle(RRC.sub).frame(width: 64, height: 22, alignment: .leading)
-            content().font(V3.sans(14)).lineHeight(14, 24).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
-        }.padding(.bottom, 14)
+    private func heading(_ title: String, _ note: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(verbatim: title).font(V3.serif(23)).fontWeight(.semibold).foregroundStyle(RQC.ink)
+            Text(verbatim: note).font(V3.sans(12.5)).foregroundStyle(RQC.faint)
+        }
+        .padding(.leading, 15)
+        .overlay(alignment: .leading) { RoundedRectangle(cornerRadius: 1.5).fill(RQC.ink).frame(width: 3, height: 20) }
+        .frame(height: 34).padding(.bottom, 18)
     }
 
-    private func side(_ history: [MockRV.History]) -> some View {
-        VStack(alignment: .leading, spacing: 24) {
-            if !question.signals.isEmpty {
-                section("面试官想听到什么") {
-                    ForEach(Array(question.signals.enumerated()), id: \.offset) { _, signal in
-                        HStack(alignment: .firstTextBaseline, spacing: 16) {
-                            Text(verbatim: signal.label).foregroundStyle(signal.state == "miss" ? RRC.ink : RRC.text).fixedSize(horizontal: false, vertical: true)
-                            Spacer(minLength: 0)
-                            Text(verbatim: ["hit": "说到了", "partial": "说了一半", "miss": "没说到"][signal.state] ?? "").font(V3.sans(12, weight: signal.state == "miss" ? .medium : .regular))
-                                .foregroundStyle(signal.state == "miss" ? RRC.orange : RRC.sub).fixedSize()
-                        }.font(V3.sans(13)).frame(height: 22).padding(.bottom, 10)
-                    }
-                }
+    private func turn(_ turn: MockRV.Turn, _ index: Int, _ notes: [MockRV.Comment]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            (Text(verbatim: MockRV.turnLabel(index)).font(V3.sans(13)).foregroundStyle(RQC.faint) + Text(verbatim: "　" + turn.ask).font(V3.sans(16, weight: .bold)).foregroundStyle(RQC.ink))
+                .lineHeight(16, 28).fixedSize(horizontal: false, vertical: true)
+            Group {
+                if let answer = turn.answer { Text(marked(answer, notes)) } else { Text(verbatim: turn.missing).foregroundStyle(RQC.faint) }
             }
-            if question.weak, let better = question.better {
-                section("可以这样说") { Text(verbatim: better).font(V3.sans(13)).foregroundStyle(RRC.text).lineHeight(13, 22).fixedSize(horizontal: false, vertical: true) }
-            } else if !question.weak, let highlight = question.highlight {
-                section("亮点") { Text(verbatim: highlight).font(V3.sans(13)).foregroundStyle(RRC.text).lineHeight(13, 22).fixedSize(horizontal: false, vertical: true) }
-            }
-            if history.count > 1 {
-                section("这道题的 \(history.count) 次") {
-                    ForEach(Array(history.enumerated()), id: \.offset) { _, item in
-                        HStack(spacing: 8) {
-                            Text(verbatim: item.date).fontWeight(item.current ? .medium : .regular).frame(width: 60, alignment: .leading)
-                            Text(verbatim: item.title).lineLimit(1)
-                            Spacer(minLength: 0)
-                            Text(verbatim: item.result)
-                        }
-                        .font(V3.sans(13)).foregroundStyle(item.current ? RRC.ink : RRC.sub).frame(height: 22).padding(.bottom, 8)
-                    }
-                }
-            }
-            if let judge { Button("判得不对？") { judge(question) }.buttonStyle(MockLinkStyle(blue: true)) }
+            .font(V3.sans(15)).foregroundStyle(RQC.text).lineHeight(15, 28).fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(verbatim: title).font(V3.sans(12)).foregroundStyle(RRC.sub).frame(height: 18).padding(.bottom, 10)
-            content()
-        }.frame(maxWidth: .infinity, alignment: .leading)
+    /// 批注的原话标黄，点开的那条加深。
+    private func marked(_ answer: String, _ notes: [MockRV.Comment]) -> AttributedString {
+        var text = AttributedString(answer)
+        for note in notes {
+            guard let range = text.range(of: note.quote) else { continue }
+            if text[range].backgroundColor != nil && note.id != active { continue }
+            text[range].backgroundColor = note.id == active ? RQC.markOn : RQC.mark
+        }
+        return text
+    }
+
+    @ViewBuilder private func note(_ note: MockRV.Comment) -> some View {
+        let open = note.id == active
+        Button { withAnimation(.easeOut(duration: 0.16)) { active = open ? nil : note.id } } label: {
+            if open {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(verbatim: "“\(note.quote.count > 24 ? String(note.quote.prefix(24)) + "…" : note.quote)”").font(V3.sans(12.5)).foregroundStyle(RQC.faint)
+                        .lineHeight(12.5, 18).padding(.leading, 10)
+                        .overlay(alignment: .topLeading) { RoundedRectangle(cornerRadius: 1).fill(RQC.bar).frame(width: 2, height: 14).padding(.top, 2) }
+                    Text(verbatim: note.title).font(V3.sans(14.5, weight: .bold)).foregroundStyle(RQC.ink).lineHeight(14.5, 22).fixedSize(horizontal: false, vertical: true)
+                    if let body = note.body { Text(verbatim: body).font(V3.sans(13.5)).foregroundStyle(RQC.sub).lineHeight(13.5, 22).fixedSize(horizontal: false, vertical: true) }
+                }
+                .padding(EdgeInsets(top: 15, leading: 17, bottom: 17, trailing: 15)).frame(maxWidth: .infinity, alignment: .leading)
+                .background(.white, in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color(hex: 0xECEAE6)))
+                .shadow(color: Color(hex: 0x1C1917).opacity(0.07), radius: 10, y: 6).padding(.vertical, 8)
+            } else {
+                Text(verbatim: note.title).font(V3.sans(13.5)).foregroundStyle(RQC.sub).lineLimit(1).truncationMode(.tail)
+                    .padding(.leading, 14).frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+                    .overlay(alignment: .leading) { RoundedRectangle(cornerRadius: 1).fill(RQC.bar).frame(width: 2, height: 14).padding(.leading, 2) }
+            }
+        }
+        .buttonStyle(.plain).contentShape(Rectangle())
+    }
+
+    /// 整题回顾：这道题考什么、表现与表达、整题参考答案。
+    @ViewBuilder private var review: some View {
+        let names = question.signals.map { $0.name ?? $0.label }.filter { !$0.isEmpty }
+        let intent = question.intent ?? (names.isEmpty ? nil : "面试官想听到：\(names.joined(separator: "、"))。")
+        let delivery = question.delivery ?? question.highlight.map { $0 + "。" }
+        let reference = (question.better ?? "").split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        if intent != nil || delivery != nil || !reference.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                Rectangle().fill(RQC.rule).frame(height: 1).padding(.top, 26).padding(.bottom, 28)
+                heading("整题回顾", "考点、表达和参考答案")
+                if let intent { section("这道题考什么", [intent], first: true) }
+                if let delivery { section("表现与表达", [delivery], first: intent == nil) }
+                if !reference.isEmpty { section("整题参考答案", reference, first: intent == nil && delivery == nil) }
+            }
+        }
+    }
+
+    private func section(_ title: String, _ paragraphs: [String], first: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(verbatim: title).font(V3.sans(15, weight: .bold)).foregroundStyle(RQC.ink).lineHeight(15, 26).padding(.bottom, -4)
+            ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, item in
+                Text(verbatim: item).font(V3.sans(15)).foregroundStyle(RQC.text).lineHeight(15, 28).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.top, first ? 0 : 18)
     }
 }
 

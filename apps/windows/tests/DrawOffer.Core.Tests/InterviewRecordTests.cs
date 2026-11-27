@@ -35,9 +35,5 @@ public class InterviewRecordTests {
         Assert.Equal(new[]{"投递","筛选"},deck.Stations.Select(x=>x.Short));
         Assert.Equal("简历筛选",deck.Current?.Title);
         Assert.True(deck.Days==3&&deck.DaysLabel=="已投递");
-        var line=deck.Line(now);
-        Assert.Equal("下一站",line.Next);
-        var wait=Assert.IsType<CareerLineRow.Wait>(line.Stations[1].Rows[1]);
-        Assert.Equal("等筛选 · 第 3 天",wait.Label);
     }
 }

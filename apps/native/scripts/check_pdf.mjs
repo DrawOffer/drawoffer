@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadSeedTemplates } from './seed_templates.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
-const { templates } = JSON.parse(readFileSync(resolve(root, 'apps/native/shared/fixtures/resume-templates.json'), 'utf8'));
-const validation = JSON.parse(readFileSync(resolve(root, 'apps/native/shared/fixtures/paper-validation.json'), 'utf8'));
+const { templates, validation } = loadSeedTemplates(root);
 const directory = process.env.DRAWOFFER_PDF_ARTIFACTS || mkdtempSync(resolve(tmpdir(), 'drawoffer-paper-pdf-'));
 mkdirSync(directory, { recursive: true });
 try {

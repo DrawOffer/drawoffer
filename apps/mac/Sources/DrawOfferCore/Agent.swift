@@ -28,8 +28,8 @@ public enum AgentRequest {
             return false
         case 4:
             if parts[0] == "sessions", id(parts[1]), parts[2] == "submissions" { return id(parts[3]) && method == "GET" }
-            // 编辑最后一条消息（02B·08 E）：`messages/{seq}:edit`，流式
-            if parts[0] == "sessions", id(parts[1]), parts[2] == "messages" { return seqAction(parts[3], "edit") && method == "POST" }
+            // 改任意一条提问（新版本，流式）：`messages/{seq}:edit`；切到提问的另一个版本：`messages/{seq}:switch`
+            if parts[0] == "sessions", id(parts[1]), parts[2] == "messages" { return (seqAction(parts[3], "edit") || seqAction(parts[3], "switch")) && method == "POST" }
             if parts[0] == "sessions", id(parts[1]), parts[2] == "attachments" { return id(parts[3]) && method == "DELETE" }
             if parts[0] == "sessions", id(parts[1]), parts[2] == "memory" { return parts[3] == "recorded" && method == "GET" }
             if parts[0] == "runs", id(parts[1]), parts[2] == "steer" { return id(parts[3]) && method == "GET" }
@@ -38,6 +38,8 @@ public enum AgentRequest {
             if parts[0] == "sessions", id(parts[1]), parts[2] == "attachments", id(parts[3]) {
                 return parts[4] == "retry" && method == "POST" || parts[4] == "file" && method == "GET"
             }
+            // 回复的有用 / 没用：`messages/{seq}/rating`
+            if parts[0] == "sessions", id(parts[1]), parts[2] == "messages", seq(parts[3]) { return parts[4] == "rating" && method == "PUT" }
             return false
         case 6:
             // 确认卡处理结果（02B·08 B）：`messages/{seq}/cards/{card}:resolve`
@@ -73,6 +75,9 @@ public enum AgentRequest {
             "AGENT_PROPOSAL_CONFLICT": "简历已变化，这条修改建议无法直接应用。",
             "AGENT_PROPOSAL_EXPIRED": "修改建议已过期，请重新生成。",
             "AGENT_MESSAGE_NOT_EDITABLE": "这条消息现在不能编辑，可能已有新的回复。",
+            "AGENT_MESSAGE_VERSION_UNAVAILABLE": "这个版本现在切换不了，请等回答结束后再试。",
+            "AGENT_STEER_TARGET_FINISHED": "这次回答已经结束，消息会作为下一条发送。",
+            "AGENT_STEER_BUSY": "上一条插入的消息还没接上，请稍后再插入。",
             "DESKTOP_ROUTE_FORBIDDEN": "当前服务尚未开放桌面端 AI 助手，请在 Web 使用。",
         ][code] ?? (status >= 500 ? "AI 助手暂时不可用，请稍后重试。" : "操作没有完成（\(code)）。")
     }
@@ -86,7 +91,7 @@ public struct AgentEvent: Sendable {
     public static let known: Set<String> = [
         "user.message.accepted", "user.message.applied", "user.message.rejected", "assistant.message.completed",
         "run.started", "run.phase", "assistant.activity.delta", "assistant.activity.status", "assistant.activity.clear", "assistant.delta",
-        "clarification.requested", "tool.started", "tool.completed", "proposal.created", "run.completed", "run.failed", "run.cancelled",
+        "assistant.delta.reset", "clarification.requested", "tool.started", "tool.completed", "proposal.created", "run.completed", "run.failed", "run.cancelled",
     ]
 
     /// 解析一个以空行结尾的 SSE 帧；缺少字段、未知事件或 JSON 损坏时返回 nil（忽略单条，不中断整条流）。

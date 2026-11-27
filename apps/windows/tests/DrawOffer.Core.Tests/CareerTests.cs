@@ -65,23 +65,12 @@ public class CareerTests {
             Assert.Null(new CareerApplication(new JsonObject{["company_logo_url"]=value}).LogoRequest);
     }
 
-    [Fact] public void v4NextActionSeparatesOralFormalAndTerminalOffer() {
-        var oc=Application("""{"id":"1","current_stage_type":"offer","offer_status":"none","status":"active"}""");
-        Assert.Equal("offer",new CareerFlow(oc).Kind);
-        var formal=Application("""{"id":"2","current_stage_type":"offer","offer_status":"received","status":"active"}""");
-        Assert.Equal("accept",new CareerFlow(formal).Kind);
+    [Fact] public void v4TerminalOfferIsEndedAndCommandsArePostOnly() {
         foreach(var decision in new[]{"accepted","declined"}){
             var ended=new CareerApplication(new JsonObject{["status"]="closed",["current_stage_type"]="offer",["offer_status"]=decision});
             Assert.Equal("ended",ended.Stage);
             Assert.False(ended.Movable);
-            Assert.Equal("history",new CareerFlow(ended).Kind);
         }
-        var waiting=Application("""{"current_stage_type":"interview","stage_state":"awaiting_schedule"}""");
-        Assert.Equal("schedule-current",new CareerFlow(waiting).Kind);
-        var scheduled=Application("""{"current_stage_type":"interview","stage_state":"scheduled"}""");
-        Assert.Equal("records",new CareerFlow(scheduled).Kind);
-        var done=new CareerApplication(scheduled.Raw,DateTimeOffset.Now);
-        Assert.Equal("stage",new CareerFlow(done).Kind);
         foreach(var command in new[]{"close","archive","restore"}){
             Assert.True(CareerRequest.Allowed("/api/job-applications/12/"+command,"POST"));
             Assert.False(CareerRequest.Allowed("/api/job-applications/12/"+command,"PUT"));
@@ -95,14 +84,5 @@ public class CareerTests {
         Assert.Contains("未识别字段：保留",merged);
         Assert.DoesNotContain("官网",merged);
         Assert.Equal("内推",CareerNotes.Value("投递渠道",merged));
-    }
-
-    [Fact] public void v4ProgressPreservesMultipleRoundsAndOralBeforeFormalWithoutInventingStages() {
-        var item=Application("""{"id":"1","status":"active","current_stage_type":"offer","offer_status":"received","current_stage":{"id":"5","stage_type":"offer","stage_label":"OC"},"notes":"收到日期：2030-10-24T09:00:00Z","stages":[{"id":"2","stage_type":"interview","stage_label":"一面"},{"id":"3","stage_type":"interview","stage_label":"二面"},{"id":"4","stage_type":"interview","stage_label":"HR 面"},{"id":"5","stage_type":"offer","stage_label":"OC"}]}""");
-        var steps=CareerProgress.Steps(item);
-        Assert.Equal(new[]{"已投递","一面","二面","HR 面","OC","Offer"},steps.Select(x=>x.Label));
-        Assert.Equal("current",steps.Last().State);
-        Assert.Equal("2030-10-24T09:00:00Z",steps.Last().Date);
-        Assert.DoesNotContain(steps,x=>x.Label.Contains("笔试"));
     }
 }

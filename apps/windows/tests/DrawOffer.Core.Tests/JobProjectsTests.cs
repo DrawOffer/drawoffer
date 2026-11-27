@@ -23,7 +23,7 @@ public class JobProjectsTests {
         Assert.Equal("虚构甲公司 · 后端开发",project.Name);
         Assert.Equal("虚",project.Monogram);
         Assert.Equal("已获 Offer",project.StatusLabel);
-        Assert.Equal(new[]{"投递|done","一面|done","二面|current","Offer|offer"},project.Nodes.Select(x=>$"{x.Label}|{x.State.RawValue()}"));
+        Assert.Equal(new[]{"投递|Done","一面|Done","二面|Current","Offer|Offer"},project.Nodes.Select(x=>$"{x.Label}|{x.State}"));
         Assert.Equal(new[]{"d1","d2"},project.Nodes[1].Datasets.Select(x=>x.Id));
         Assert.Equal(new[]{"d3"},project.Nodes[3].Datasets.Select(x=>x.Id));
         Assert.Equal(3,project.DatasetCount);

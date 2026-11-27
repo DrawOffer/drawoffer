@@ -23,11 +23,6 @@ import Testing
 @Test func careerProfileRules() {
     let profile = try! JSONDecoder().decode(JSONValue.self, from: Data(#"{"personal":{"name":"虚构","email":"a@example.com"},"has_id_number":false,"catalog":{"fields":{"a":{"scope":"personal","key":"height","label":"身高"},"b":{"scope":"personal","key":"name","label":"姓名"},"c":{"scope":"personal","key":"x","label":"站点","site":"alibaba"}}}}"#.utf8))
     #expect(CareerProfileRules.missing(profile) == ["gender", "birth_date", "phone", "ethnicity", "political_status", "native_place", "id_number"])
-    #expect(CareerProfileRules.moreRows(profile).map(\.key) == ["height"])
     let experience = try! JSONDecoder().decode(JSONValue.self, from: Data(#"{"sections":[{"kind":"work","entries":[{"id":"1","fields":{"单位":"虚构公司"},"intern":true}]},{"kind":"skills","lines":["编程：Swift、Python；工具: Git"],"entries":[]}]}"#.utf8))
-    #expect(CareerProfileRules.groups(experience).map(\.key) == ["internship"])
-    #expect(CareerProfileRules.entryTitle(CareerProfileRules.groups(experience)[0].items[0].entry) == "虚构公司")
     #expect(CareerProfileRules.skills(experience).map(\.name) == ["Swift", "Python", "Git"])
-    let intent = try! JSONDecoder().decode(JSONValue.self, from: Data(#"{"salary_min":15000,"salary_max":25000,"salary_period":"month"}"#.utf8))
-    #expect(CareerProfileRules.salaryText(intent) == "15K–25K / 月")
 }

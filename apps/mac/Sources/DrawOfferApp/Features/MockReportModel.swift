@@ -17,8 +17,13 @@ enum MockRV {
         var editable: Bool
     }
 
-    struct Signal: Equatable { var label: String; var state: String; var quote: String? }
-    struct History: Equatable { var date: String; var title: String; var result: String; var current = false }
+    struct Signal: Equatable {
+        var label: String; var state: String; var quote: String?
+        /// 要点的短名、为什么要说、差在哪（新报告才有）
+        var name: String? = nil; var explain: String? = nil; var gap: String? = nil
+    }
+    struct Slip: Equatable { var quote: String?; var description: String; var correction: String? }
+    struct Expression: Equatable { var state: String; var quote: String?; var note: String? }
 
     struct Question: Equatable, Identifiable {
         var id: String
@@ -38,15 +43,25 @@ enum MockRV {
         var better: String?
         var highlight: String?
         var advice: String?
-        var history: [History]?
-        var stops: Int
-        var recovered = false
         var reEvaluated: Int
+        /// 重练同一道题时，上次那题的分
+        var previousScore: Int? = nil
+        /// 这道题考什么
+        var intent: String? = nil
+        /// 「表现与表达」一段：亮点、表达和语速
+        var delivery: String? = nil
+        var slips: [Slip] = []
+        var expression: Expression? = nil
         var weak: Bool { outcome == .missed || outcome == .oneShort }
     }
 
     struct Ability: Equatable { var key: String; var label: String; var score: Int; var past: Double? }
-    struct Voice: Equatable { var speed: String; var pauses: String; var fillers: String }
+    struct Voice: Equatable {
+        var speed: String; var pauses: String; var fillers: String
+        /// 偏快 / 偏慢，在参考范围内为空
+        var pace: String? = nil
+        var longPauses = 0
+    }
 
     struct View {
         var title: String
@@ -55,7 +70,12 @@ enum MockRV {
         var recordMeta = ""
         var score: Int?
         var conclusion: String
+        /// 分数下面加粗的一句话和一段说明
+        var headline: String? = nil
+        var summary: String? = nil
         var compare: String
+        /// 上一场的总分，没有可比的为空
+        var previous: Int? = nil
         var questions: [Question]
         var target: Int
         var abilities: [Ability]
@@ -86,41 +106,20 @@ enum MockRV {
         return q.outcome == .reached || asReached ? at : "\(at) · 要到「\(levelLabel(q.expected))」"
     }
 
-    /// 单题详情深度上面的一句。
-    static func depthSentence(_ q: Question) -> String {
-        let wanted = levelLabel(q.expected)
-        guard let level = q.level else { return "没记下回答，面试官想听到「\(wanted)」" }
-        if level <= 0 { return "没到「了解」，面试官想听到「\(wanted)」" }
-        return "答到「\(levelLabel(level))」，面试官想听到「\(wanted)」"
-    }
-
-    static func repeatTag(_ q: Question) -> String? {
-        guard q.weak, let history = q.history else { return nil }
-        if q.stops >= 2 { return "第 \(q.stops) 次停在这" }
-        return history.isEmpty ? "第一次问到" : nil
-    }
-
-    static func stopTag(_ q: Question) -> String? {
-        guard let history = q.history else { return nil }
-        if q.stops >= 2 { return "停过 \(q.stops) 次" }
-        return history.isEmpty ? "第一次问到" : nil
-    }
-
     static func gaps(_ q: Question) -> [String] { q.signals.filter { $0.state != "hit" }.map(\.label) }
 
+    /// 建议先补的几处：分低的在前，同分按题号。
     static func suggestions(_ questions: [Question], limit: Int = 3) -> [Question] {
         Array(questions.filter(\.weak).sorted { a, b in
-            if a.stops != b.stops { return a.stops > b.stops }
             if (a.score ?? 0) != (b.score ?? 0) { return (a.score ?? 0) < (b.score ?? 0) }
             return a.no < b.no
         }.prefix(limit))
     }
 
-    static func advice(_ q: Question) -> String {
-        if let advice = q.advice { return advice }
-        if q.stops >= 2 { return "这里已经停过 \(q.stops) 次，先把这一段补上。" }
-        return q.line ?? "先把这一段补上，再练一次。"
-    }
+    static func advice(_ q: Question) -> String { q.advice ?? q.line ?? "先把这一段补上，再练一次。" }
+
+    /// 单题「达标」线：单题 60 分以上（和后端 interview_scoring.REACHED_SCORE 同一条线）。
+    static let passScore = 60
 
     static func monthDay(_ value: String) -> String {
         guard let date = CareerApplication.date(value) else { return "" }
@@ -145,17 +144,56 @@ enum MockRV {
         return String(chars[kept[start]...kept[start + wanted.count - 1]])
     }
 
-    struct Mark: Equatable { var quote: String; var label: String; var state: String }
+    static func turnLabel(_ position: Int) -> String { position == 0 ? "主问题" : "追问 \(position)" }
 
-    static func marks(_ q: Question, _ answer: String?) -> [Mark] {
-        guard let answer else { return [] }
-        return q.signals.compactMap { signal in
-            guard signal.state != "hit", let quote = quoteIn(answer, signal.quote) else { return nil }
-            return Mark(quote: quote, label: signal.label, state: signal.state)
-        }
+    /// 单题复盘右边的一条批注，挂在某一轮回答里的一句原话上（Web `commentsOf`）。
+    struct Comment: Equatable, Identifiable { var id: String; var turnID: String; var quote: String; var title: String; var body: String?; var add: Bool }
+
+    private static func trimEnd(_ text: String) -> String {
+        var value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        while let last = value.last, "。；;，,. ".contains(last) { value.removeLast() }
+        return value
     }
 
-    static func markText(_ mark: Mark) -> String { mark.state == "miss" ? "没说到\(mark.label)" : "只说了一半：\(mark.label)" }
+    private static func lastSentence(_ answer: String) -> String? {
+        var parts: [String] = [], current = ""
+        for char in answer.trimmingCharacters(in: .whitespacesAndNewlines) {
+            current.append(char)
+            if "。！？!?；;".contains(char) { parts.append(current); current = "" }
+        }
+        parts.append(current)
+        return parts.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.last
+    }
+
+    /// 说了一半的要点、说错的地方、表达问题挂在原话上；没说到的要点没有原话，挂在主回答最后一句，提醒收尾补上。按在回答里的先后排。
+    static func comments(_ q: Question) -> [Comment] {
+        let answered = q.turns.filter { $0.answer != nil }
+        var found: [(Comment, Double)] = []
+        var taken = Set<String>()
+        func add(_ key: String, _ quote: String?, _ title: String, _ body: String?, add: Bool = false) {
+            for (position, turn) in answered.enumerated() {
+                guard let answer = turn.answer, let at = quoteIn(answer, quote), !taken.contains("\(turn.id):\(at)") else { continue }
+                taken.insert("\(turn.id):\(at)")
+                let offset = answer.range(of: at).map { answer.distance(from: answer.startIndex, to: $0.lowerBound) } ?? 0
+                found.append((Comment(id: key, turnID: turn.id, quote: at, title: title, body: body?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyValue, add: add), Double(position * 100_000 + offset)))
+                return
+            }
+        }
+        for (index, signal) in q.signals.enumerated() where signal.state == "partial" {
+            add("s\(index)", signal.quote, signal.gap.map(trimEnd) ?? "只说了一半：\(signal.name ?? signal.label)", signal.explain)
+        }
+        for (index, slip) in q.slips.enumerated() {
+            add("e\(index)", slip.quote, trimEnd(slip.description), slip.correction.map { "正确的说法：\($0)" })
+        }
+        if let expression = q.expression, expression.state != "hit", let note = expression.note { add("x", expression.quote, trimEnd(note), nil) }
+        if let main = answered.first, let answer = main.answer, let tail = lastSentence(answer) {
+            let at = answer.range(of: tail, options: .backwards).map { answer.distance(from: answer.startIndex, to: $0.lowerBound) } ?? 0
+            for (index, signal) in q.signals.enumerated() where signal.state == "miss" {
+                found.append((Comment(id: "m\(index)", turnID: main.id, quote: tail, title: "收尾可以补一句\(signal.name ?? signal.label)", body: signal.explain, add: true), Double(at) + 0.5))
+            }
+        }
+        return found.sorted { $0.1 < $1.1 }.map(\.0)
+    }
 
     // MARK: 模拟面试评估报告 → 统一结构
 
@@ -174,7 +212,7 @@ enum MockRV {
             }
             return question(round, evaluation, no: index + 1, target: target, report: report)
         }
-        questions = questions.map { withContext($0, date: date, context: context) }
+        questions = questions.map { withPrevious($0, context: context) }
         let type = MockMap.typeName(detail)
         let stage = detail.text("stage_label").nonEmptyValue ?? type
         let title = "\(detail.text("company_name").nonEmptyValue ?? "通用练习") \(stage)"
@@ -192,14 +230,23 @@ enum MockRV {
                 .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "),
             score: score,
             conclusion: verdict.flatMap { verdictName[$0] } ?? report.text("headline"),
+            headline: report.text("headline").nonEmptyValue, summary: report.text("summary").nonEmptyValue,
             compare: compareLine(score, context?["previous"]?["score"]?.numberValue.map { Int($0.rounded()) }, questions),
+            previous: context?["previous"]?["score"]?.numberValue.map { Int($0.rounded()) },
             questions: questions, target: target,
             abilities: abilities(report, context),
             voice: detail.text("answer_mode") == "voice" ? metrics.map { m in
                 Voice(speed: "\(Int((m["chars_per_minute"]?.numberValue ?? 0).rounded())) 字/分", pauses: "\(m["long_pauses"]?.integer ?? 0) 次",
-                      fillers: String(format: "%.1f%%", (m["filler_ratio"]?.numberValue ?? 0) * 100))
+                      fillers: String(format: "%.1f%%", (m["filler_ratio"]?.numberValue ?? 0) * 100),
+                      pace: pace(m["chars_per_minute"]?.numberValue ?? 0, m["reference"]?["chars_per_minute"]?.items.compactMap(\.numberValue)),
+                      longPauses: m["long_pauses"]?.integer ?? 0)
             } : nil,
             pastCount: context?["past_count"]?.integer ?? 0)
+    }
+
+    private static func pace(_ speed: Double, _ range: [Double]?) -> String? {
+        guard let range, range.count == 2 else { return nil }
+        return speed > range[1] ? "偏快" : speed < range[0] ? "偏慢" : nil
     }
 
     private static func question(_ round: MockMap.Round, _ evaluation: JSONValue?, no: Int, target: Int, report: JSONValue) -> Question {
@@ -220,6 +267,7 @@ enum MockRV {
         let highlight = evaluation?["highlights"]?.items.first?.stringValue
         let weak = outcome == .missed || outcome == .oneShort
         let sequence = round.main["sequence_no"]?.integer ?? 0
+        let expression = evaluation?["expression"].flatMap { $0 == .null ? nil : $0 }
         return Question(
             id: round.main.display("id"), no: no, ref: "\(sequence)", title: round.topic, outcome: outcome,
             level: userDepth ?? aiLevel, aiLevel: aiLevel, expected: expected,
@@ -234,32 +282,43 @@ enum MockRV {
                      editable: turn.text("answer_source") == "voice" && turn.text("answer_status") == "answered")
             },
             signals: (evaluation?["signals"]?.items ?? []).compactMap { item in
-                item.text("verdict") == "not_probed" ? nil : Signal(label: item.text("signal"), state: item.text("verdict"), quote: item.text("evidence").nonEmptyValue)
+                item.text("verdict") == "not_probed" ? nil : Signal(label: item.text("signal"), state: item.text("verdict"), quote: item.text("evidence").nonEmptyValue,
+                                                                   name: item.text("name").nonEmptyValue, explain: item.text("explain").nonEmptyValue, gap: item.text("gap").nonEmptyValue)
             },
             better: evaluation?.text("reference_answer").nonEmptyValue ?? weakness,
             highlight: highlight,
             advice: (report["actions"]?.items ?? []).first { $0.text("kind") == "practice" && ($0["question_refs"]?.items ?? []).contains { $0.integer == sequence } }?.text("detail").nonEmptyValue,
-            history: nil, stops: weak ? 1 : 0, reEvaluated: round.main["re_evaluate_count"]?.integer ?? 3)
+            reEvaluated: round.main["re_evaluate_count"]?.integer ?? 3,
+            intent: evaluation?.text("intent").nonEmptyValue,
+            delivery: [sentence(highlight), expression?.text("verdict") != "hit" ? sentence(expression?.text("note")) : nil, speed(round, report)].compactMap { $0 }.joined().nonEmptyValue,
+            slips: (evaluation?["error_details"]?.items ?? []).map { Slip(quote: $0.text("evidence").nonEmptyValue, description: $0.text("description"), correction: $0.text("correction").nonEmptyValue) },
+            expression: expression.map { Expression(state: $0.text("verdict"), quote: $0.text("evidence").nonEmptyValue, note: $0.text("note").nonEmptyValue) })
     }
 
-    private static func levelResult(_ level: Int?, _ outcome: String, layered: Bool) -> String {
-        if layered, let level { return level <= 0 ? "没到「了解」" : levelLabel(level) }
-        var q = Question(id: "", no: 0, ref: "", title: "", outcome: Outcome(rawValue: outcome) ?? .unrecorded, level: nil, expected: 0, follows: 0, turns: [], signals: [], stops: 0, reEvaluated: 0)
-        q.layered = layered
-        return outcomeText(q)
+    /// 重练同一道题时接上那题上次的分（复盘的「较练习前」、单题的「上次」）。
+    private static func sentence(_ text: String?) -> String? {
+        guard let value = text?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        return "。！？!?".contains(value.last!) ? value : value + "。"
     }
 
-    /// 把「和以往比」接到一道题上：history 第一行是这一场。
-    private static func withContext(_ q: Question, date: String, context: JSONValue?) -> Question {
-        guard let context, context != .null else { return q }
-        let found = (context["questions"]?.items ?? []).first { $0.display("ref") == q.ref }
+    /// 这一题语音回答的语速：字数 ÷ 录音时长；参考区间来自整场的 voice_metrics。
+    private static func speed(_ round: MockMap.Round, _ report: JSONValue) -> String? {
+        let voiced = round.turns.filter { $0.text("answer_source") == "voice" && ($0["audio_duration_ms"]?.numberValue ?? 0) > 0 && !$0.text("answer_text").isEmpty }
+        let ms = voiced.reduce(0.0) { $0 + ($1["audio_duration_ms"]?.numberValue ?? 0) }
+        guard !voiced.isEmpty, ms >= 5000 else { return nil }
+        let chars = voiced.reduce(0) { $0 + $1.text("answer_text").filter { !$0.isWhitespace }.count }
+        let speed = Int((Double(chars) / (ms / 60_000)).rounded())
+        let range = report["voice_metrics"]?["reference"]?["chars_per_minute"]?.items.compactMap(\.numberValue) ?? []
+        guard range.count == 2 else { return "语速 \(speed) 字/分。" }
+        let pace = Double(speed) > range[1] ? "偏快，讲流程时可以放慢一点" : Double(speed) < range[0] ? "偏慢，可以说得更连贯一些" : "在合适的范围内"
+        return "语速 \(speed) 字/分，\(pace)。"
+    }
+
+    private static func withPrevious(_ q: Question, context: JSONValue?) -> Question {
+        guard let found = (context?["questions"]?.items ?? []).first(where: { $0.display("ref") == q.ref }),
+              let previous = found["previous_score"]?.numberValue else { return q }
         var next = q
-        let here = History(date: monthDay(date), title: "这场", result: levelResult(q.level, q.outcome.rawValue, layered: q.layered), current: true)
-        let past = (found?["history"]?.items ?? []).map { History(date: monthDay($0.text("at")), title: $0.text("title"), result: levelResult($0["level"].flatMap { $0 == .null ? nil : $0.integer }, $0.text("outcome"), layered: q.layered)) }
-        next.history = past.isEmpty ? [] : [here] + past
-        next.stops = found?["stops"]?.integer ?? (q.weak ? 1 : 0)
-        next.recovered = found?["recovered"]?.bool == true
-        if next.recovered { next.line = "上次没过，这次答到了。" }
+        next.previousScore = Int(previous.rounded())
         return next
     }
 
@@ -283,23 +342,33 @@ enum MockRV {
         }
     }
 
-    /// 通用能力只看怎么说，不含知识和岗位匹配；能评的太少时才把它们放回来。最多 6 项。
+    /// 2026-11-24 起每道答过的题都判这五项（有 adaptability 的报告），图上固定按这个顺序画满五个方向。
+    private static let five = [("knowledge", "专业深度"), ("problem_solving", "分析与方案"), ("ownership", "实践与成果"), ("adaptability", "应变与学习"), ("communication", "表达与条理")]
+
+    /// 通用能力：新报告固定五项；更早的报告只看怎么说，不含知识和岗位匹配，能评的太少时才把它们放回来，最多 6 项。
     static func generalAbilities(_ abilities: [Ability]) -> [Ability] {
+        if abilities.contains(where: { $0.key == "adaptability" }) {
+            return five.compactMap { key, label in abilities.first { $0.key == key }.map { var item = $0; item.label = label; return item } }
+        }
         let general = abilities.filter { !outside.contains($0.key) }
         let shown = general.count >= 3 ? general : abilities
         return shown.prefix(6).map { item in var item = item; if item.key == "communication" { item.label = "表达水平" }; return item }
     }
 
     /// 复盘里「练这几题」「练这一处」带到配置页的内容（Web `practicePlan.ts`）。
-    static func practiceItem(_ q: Question) -> MockPracticeItem {
+    static func practiceItem(_ q: Question) -> MockPracticeItem { practiceItem(q, origin: nil) }
+
+    /// origin 是这些题来自哪一场（mock|real:场次），带上后配置页按它比“上次”的分。
+    static func practiceItem(_ q: Question, origin: String?) -> MockPracticeItem {
         let gaps = gaps(q)
         return MockPracticeItem(
             label: String(q.title.prefix(120)),
             question: String((q.turns.last?.ask ?? q.title).prefix(500)),
             signals: gaps.prefix(5).map { String($0.prefix(300)) },
-            note: q.line, tag: repeatTag(q),
+            note: q.line, tag: nil,
             last: [depthLine(q, asReached: true), q.line].compactMap { $0 }.joined(separator: "，"),
-            goal: ["答到「\(levelLabel(q.expected))」", gaps.isEmpty ? nil : "把\(gaps.prefix(2).joined(separator: "和"))讲清楚"].compactMap { $0 }.joined(separator: "，"))
+            goal: ["答到「\(levelLabel(q.expected))」", gaps.isEmpty ? nil : "把\(gaps.prefix(2).joined(separator: "和"))讲清楚"].compactMap { $0 }.joined(separator: "，"),
+            source: origin.flatMap { q.ref.isEmpty ? nil : "\($0):\(q.ref)" })
     }
 }
 

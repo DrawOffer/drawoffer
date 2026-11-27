@@ -19,7 +19,7 @@ public enum ParityRequest {
         (["GET"], #"/api/memory/(home|home/graph|atlas|outline|overview|brief|match-evidence|checkins|constraints|review-links|review-repeats|review-comparison|feedback)"#),
         (["POST"], #"/api/memory/(home/disclosures|checkins|constraints)"#),
         (["DELETE"], #"/api/memory/constraints/[A-Za-z0-9_-]{1,64}"#),
-        (["GET"], #"/api/job-pool(/filters|/companies|/companies/page|/companies/[1-9][0-9]{0,19}|/[1-9][0-9]{0,19})?"#),
+        (["GET"], #"/api/job-pool(/count|/by-company|/filters|/companies|/companies/page|/companies/[1-9][0-9]{0,19}|/[1-9][0-9]{0,19})?"#),
         (["POST"], #"/api/job-pool/[1-9][0-9]{0,19}/join"#),
     ].map { ($0.0, try! NSRegularExpression(pattern: "^" + $0.1 + "$")) }
 
@@ -58,13 +58,8 @@ public struct Announcement: Identifiable, Equatable, Sendable {
         }
     }
 
-    public var categorySymbol: String {
-        switch category {
-        case "service_notice": "megaphone"
-        case "promotion": "gift"
-        default: "paperplane"
-        }
-    }
+    /// 详情页头的一行灰字（Web `.ann-card-meta`）：「产品更新 · 11 月 13 日」，没有日期只写分类。
+    public var metaText: String { dateText.isEmpty ? categoryLabel : "\(categoryLabel) · \(dateText)" }
 
     /// 与 Web `announcementDate` 相同：“10 月 19 日”。
     public var dateText: String {

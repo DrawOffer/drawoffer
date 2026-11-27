@@ -20,7 +20,7 @@ namespace DrawOffer.App.Views;
 
 /// <summary>
 /// 简历模板（Windows 稿 05 页 03.1，Web `ResumeTemplatesPage.tsx`，Mac `TemplatesView`）：登录后读取 `GET /api/resume-templates` 的真实启用模板与使用次数，
-/// 默认按热度排序、四列卡片、每页 20 套；点卡片打开预览（03.1a），确认后创建简历。游客由外壳拦在首页，这里不再展示随包示例。
+/// 默认按热度排序、四列卡片、每页 20 套；点卡片打开预览（03.1a），确认后创建简历。游客由外壳拦在首页，进不来这一页。
 /// </summary>
 public sealed class TemplatesPage : Page
 {

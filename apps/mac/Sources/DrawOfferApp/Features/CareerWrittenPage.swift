@@ -475,4 +475,25 @@ enum CareerDrop {
             }
         }
     }
+
+    /// 一次拖进来的几个文件取齐后一起交给 `handle`：要按整批决定去哪一页、要不要提示。
+    static func batch(_ providers: [NSItemProvider], _ handle: @escaping @MainActor @Sendable ([URL]) -> Void) {
+        let group = DispatchGroup()
+        let found = Collected()
+        for provider in providers {
+            group.enter()
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                if let url, url.isFileURL { found.add(url) }
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) { let urls = found.urls; Task { @MainActor in handle(urls) } }
+    }
+
+    private final class Collected: @unchecked Sendable {
+        private let lock = NSLock()
+        private var items: [URL] = []
+        func add(_ url: URL) { lock.lock(); items.append(url); lock.unlock() }
+        var urls: [URL] { lock.lock(); defer { lock.unlock() }; return items }
+    }
 }

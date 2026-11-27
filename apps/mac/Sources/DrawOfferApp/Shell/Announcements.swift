@@ -2,55 +2,11 @@ import AppKit
 import DrawOfferCore
 import SwiftUI
 
-/// 站内消息（`GET /api/notifications`，Web `UserNotification`）：面试提醒、复盘、记忆提示、后台任务结果。
-/// 服务端关闭 `MEMORY_NUDGES_ENABLED` 时整组接口 404，客户端当作没有消息。
-struct InboxMessage: Identifiable, Equatable {
-    let id: String
-    let category: String
-    let title: String
-    let body: String
-    let link: String
-    var read: Bool
-    let createdAt: Date?
-
-    init(json: JSONValue) {
-        id = json.text("id"); category = json.text("category"); title = json.text("title")
-        body = json.text("body"); link = json.text("link"); read = json["read"]?.bool ?? false
-        createdAt = Self.date(json.text("createdAt"))
-    }
-
-    /// 与 Web `notificationCategoryLabel` 一致。
-    var categoryLabel: String {
-        switch category {
-        case "interview": "面试提醒"
-        case "review": "面试复盘"
-        case "peak", "insight": "长期记忆"
-        case "idle": "练习提醒"
-        case "task": "处理结果"
-        default: "消息"
-        }
-    }
-
-    /// 只认站内单斜杠路径（Web `safeNotificationLink`），不接受协议或 `//host`。
-    var safeLink: String? {
-        let value = link.trimmingCharacters(in: .whitespaces)
-        guard value.hasPrefix("/"), !value.hasPrefix("//"), !value.hasPrefix("/\\") else { return nil }
-        return value
-    }
-
-    /// 从用户角度说点开去哪（Web `messageAction`）；没有可去的页面时不显示。
-    var action: String? {
-        guard let link = safeLink else { return nil }
-        switch category {
-        case "task": return link.range(of: #"/report(?:[?#]|$)"#, options: .regularExpression) != nil ? "查看报告" : "去看看"
-        case "interview": return "去准备"
-        case "review": return "去复盘"
-        default: return "去看看"
-        }
-    }
-
-    /// 站内路径对应的原生栏目；对不上的交给浏览器打开 Web 同一页面。
+/// 站内消息点开后去哪（服务端关闭 `MEMORY_NUDGES_ENABLED` 时整组接口 404，客户端当作没有消息）。
+extension InboxMessage {
+    /// 站内路径对应的原生栏目；对不上的交给浏览器打开 Web 同一页面。反馈送的积分打开额度弹窗的积分页。
     var jump: WorkspaceRouter.Jump? {
+        if opensCredits { return .credits }
         guard let link = safeLink, let parts = URLComponents(string: link) else { return nil }
         let path = parts.path.split(separator: "/").map(String.init)
         guard let head = path.first else { return .section(.home) }
@@ -62,6 +18,8 @@ struct InboxMessage: Identifiable, Equatable {
         case "assistant", "home": return .section(.home)
         case "career":
             if path.count >= 3, path[1] == "applications" { return .application(path[2]) }
+            // 面试复盘 `/career/reviews?session=…&application=…`：进这条投递的详情
+            if path.count >= 2, path[1] == "reviews", let id = parts.queryItems?.first(where: { $0.name == "application" })?.value, !id.isEmpty { return .application(id) }
             return .section(.jobs)
         case "resumes":
             if path.count >= 3, path[2] == "edit" { return .editResume(path[1]) }
@@ -69,16 +27,9 @@ struct InboxMessage: Identifiable, Equatable {
         case "templates": return .section(.templates)
         case "datasets": return .section(.datasets)
         case "account": return .section(.account)
+        case "feedback": return .feedback
         default: return nil
         }
-    }
-
-    private static func date(_ value: String) -> Date? {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: value) { return date }
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: value)
     }
 }
 
@@ -210,15 +161,17 @@ struct AnnouncementBell: View {
                 .foregroundStyle(open || hover ? V3.txt : V3.sub).frame(width: 28, height: 28)
                 .background(open || hover ? V3.cl : .clear, in: RoundedRectangle(cornerRadius: 7))
                 .overlay(alignment: .topTrailing) {
+                    // 10.02 / 06：未读时铃铛右上角橙点，外圈一道侧栏底色把它和铃铛分开
                     if center.unreadCount > 0 {
-                        Circle().fill(V3.blue).frame(width: 8, height: 8)
-                            .overlay(Circle().stroke(Color(hex: 0xF1F1EF), lineWidth: 1.5)).padding(4)
+                        Circle().fill(Color(hex: 0xE8791A)).frame(width: 8, height: 8)
+                            .overlay(Circle().stroke(WorkspaceSidebar.background, lineWidth: 1.5)).padding(3)
                     }
                 }
                 .contentShape(Rectangle())
         }.buttonStyle(.plain).onHover { hover = $0 }
-            .help("通知").accessibilityLabel(center.unreadCount > 0 ? "通知，有未读" : "通知")
-            .popover(isPresented: $open, arrowEdge: .trailing) {
+            .help("通知").accessibilityLabel(center.unreadCount > 0 ? "通知，\(center.unreadCount > 99 ? "99+" : String(center.unreadCount)) 条未读" : "通知")
+            // 10.02：通知弹层从铃铛下方展开
+            .popover(isPresented: $open, arrowEdge: .bottom) {
                 NoticeCenterList(pick: { ids, index in open = false; center.detail = (ids, index) },
                                  pickMessage: { message in open = false; openMessage(message) })
             }
@@ -305,8 +258,7 @@ private struct NoticeCenterList: View {
                             open: { let ids = center.items.map(\.id); pick(ids, ids.firstIndex(of: item.id) ?? 0) },
                             remove: { center.removeAnnouncement(item.id, api: session.api) })
         case .message(let item):
-            // 处理结果蓝、面试提醒橙，其余灰（Web `.ann-item-category[data-tone]`）
-            let tone = item.category == "task" ? V3.blue : item.category == "interview" ? Color(hex: 0xC46C26) : V3Skeleton.faint
+            let tone = item.tone == "blue" ? V3.blue : item.tone == "orange" ? Color(hex: 0xC46C26) : V3Skeleton.faint
             NoticeCenterRow(fresh: fresh, important: false, title: item.title, time: NoticeCenterRow.time(item.createdAt),
                             summary: item.body, category: item.categoryLabel, tone: tone, action: item.action, arrow: true,
                             open: { pickMessage(item) },
@@ -378,15 +330,16 @@ private struct NoticeCenterRow: View {
     }
 }
 
+/// 「重要」标签（Web `.ann-chip-important`）：浅橙底、橙字。
 private struct NoticeImportantChip: View {
     var body: some View {
-        Text("重要").font(V3.sans(11, weight: .medium)).foregroundStyle(Color(hex: 0xA13A28))
-            .padding(.horizontal, 6).frame(height: 18).background(Color(hex: 0xFAEDEA), in: RoundedRectangle(cornerRadius: 5))
+        Text("重要").font(V3.sans(12, weight: .medium)).foregroundStyle(Color(hex: 0xB86014))
+            .padding(.horizontal, 7).frame(height: 20).background(Color(hex: 0xFDECDF), in: RoundedRectangle(cornerRadius: 5))
     }
 }
 
-/// 公告详情（12 页 02 · 方向 A「信笺头图」，已选）：520 宽；顶部按分类着色的信笺带（白色 44 图标块 + 分类名 + 发布日期），
-/// 下面 22 号衬线标题与 14 号正文；底部左侧分页点（当前为 18 宽的色条），右侧 Bordered「关闭」+ 墨黑「下一条 →」/「知道了」。
+/// 公告详情（5:32 · 06.1 / 06.2，Web `AnnouncementDialogHost` 680×440）：一行灰字「分类 · 日期」（重要公告前加橙色标签）
+/// 与右上角 ×，下面 28 号粗体标题和 15 号正文，正文在弹窗里滚动；底部一道细线，左侧「1 / 3」，右侧墨黑胶囊「下一条 →」或「知道了」。
 struct AnnouncementDetailSheet: View {
     @Environment(AnnouncementCenter.self) private var center
 
@@ -396,46 +349,38 @@ struct AnnouncementDetailSheet: View {
         let currentID = center.detail.flatMap { $0.ids.indices.contains($0.index) ? $0.ids[$0.index] : nil }
         let index = currentID.flatMap { ids.firstIndex(of: $0) } ?? -1
         if let currentID, let item = byID[currentID] {
-            let tone = NoticeTone(category: item.category)
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 14) {
-                    Image(systemName: item.categorySymbol).font(.system(size: 18)).foregroundStyle(tone.fg).frame(width: 44, height: 44)
-                        .background(.white, in: RoundedRectangle(cornerRadius: 12))
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Text(item.categoryLabel).font(V3.sans(13, weight: .medium)).foregroundStyle(tone.label)
-                            if item.important { NoticeImportantChip() }
-                        }.frame(height: 20)
-                        if !item.dateText.isEmpty { Text("\(item.dateText)发布").font(V3.sans(12)).foregroundStyle(V3.sub) }
-                    }
-                    Spacer()
-                }.padding(.leading, 32).padding(.trailing, 24).padding(.vertical, 24).background(tone.soft)
-                VStack(alignment: .leading, spacing: 14) {
-                    Text(item.title).font(V3.serif(22)).foregroundStyle(V3.txt).fixedSize(horizontal: false, vertical: true)
-                    ScrollView { NativeMarkdownView(source: item.body, size: 14, line: 24).foregroundStyle(Color(hex: 0x3D3D39)).frame(maxWidth: .infinity, alignment: .leading) }
-                        .frame(maxHeight: 340).fixedSize(horizontal: false, vertical: true)
-                }.padding(.horizontal, 32).padding(.top, 28)
+                HStack(spacing: 8) {
+                    if item.important { NoticeImportantChip() }
+                    Text(item.metaText).font(V3.sans(13)).foregroundStyle(V3Skeleton.faint)
+                    Spacer(minLength: 12)
+                    Button { center.detail = nil } label: {
+                        Image(systemName: "xmark").font(.system(size: 13, weight: .regular)).frame(width: 28, height: 28).contentShape(Rectangle())
+                    }.buttonStyle(NoticeCloseStyle()).accessibilityLabel("关闭").padding(.trailing, -8)
+                }.frame(height: 20).padding(.top, 32).padding(.horizontal, 40)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text(item.title).font(V3.sans(28, weight: .bold)).foregroundStyle(V3.txt).lineSpacing(6)
+                            .fixedSize(horizontal: false, vertical: true)
+                        NativeMarkdownView(source: item.body, size: 15, line: 26).foregroundStyle(Color(hex: 0x3D3D39))
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 40).padding(.top, 10).padding(.bottom, 8)
+                }.scrollIndicators(.automatic).frame(maxHeight: .infinity)
                 HStack(spacing: 10) {
-                    HStack(spacing: 6) {
-                        if ids.count > 1 {
-                            ForEach(Array(ids.enumerated()), id: \.element) { position, _ in
-                                Button { goTo(position, ids: ids) } label: {
-                                    Capsule().fill(position == index ? tone.fg : Color(hex: 0xD6D6D1)).frame(width: position == index ? 18 : 6, height: 6)
-                                }.buttonStyle(.plain).accessibilityLabel("第 \(position + 1) 条，共 \(ids.count) 条")
-                            }
-                        }
-                    }.animation(.easeOut(duration: 0.18), value: index)
+                    if ids.count > 1 {
+                        Text("\(index + 1) / \(ids.count)").font(V3.sans(13)).foregroundStyle(V3Skeleton.faint)
+                            .accessibilityLabel("第 \(index + 1) 条，共 \(ids.count) 条")
+                    }
                     Spacer()
                     if index < ids.count - 1 {
-                        Button("关闭") { center.detail = nil }.buttonStyle(V3ButtonStyle(kind: .ghost, width: 64, small: true))
-                        Button { goTo(index + 1, ids: ids) } label: { Text("下一条"); Image(systemName: "arrow.right").font(.system(size: 11, weight: .semibold)) }
-                            .buttonStyle(V3ButtonStyle(kind: .dark, height: 36, width: 80)).keyboardShortcut(.defaultAction)
+                        Button { goTo(index + 1, ids: ids) } label: { HStack(spacing: 6) { Text("下一条"); Image(systemName: "arrow.right").font(.system(size: 11, weight: .semibold)) } }
+                            .buttonStyle(AccountPillButtonStyle(kind: .dark, width: 86, height: 35)).keyboardShortcut(.defaultAction)
                     } else {
-                        Button("知道了") { center.detail = nil }.buttonStyle(V3ButtonStyle(kind: .dark, height: 36, width: 80)).keyboardShortcut(.defaultAction)
+                        Button("知道了") { center.detail = nil }.buttonStyle(AccountPillButtonStyle(kind: .dark, width: 86, height: 35)).keyboardShortcut(.defaultAction)
                     }
-                }.padding(.leading, 32).padding(.trailing, 24).padding(.top, 30).padding(.bottom, 26)
+                }.padding(.leading, 40).padding(.trailing, 32).padding(.top, 16).padding(.bottom, 20)
+                    .overlay(alignment: .top) { Rectangle().fill(Color(hex: 0xF1F1EF)).frame(height: 1) }
             }
-            .frame(width: 520)
+            .frame(width: 680, height: min(440, max(300, (NSApp.mainWindow?.frame.height ?? 900) - 32)))
             .background { Button("") { center.detail = nil }.keyboardShortcut(.cancelAction).opacity(0).accessibilityHidden(true) }
         } else {
             Color.clear.frame(width: 1, height: 1).onAppear { center.detail = nil }
@@ -448,14 +393,12 @@ struct AnnouncementDetailSheet: View {
     }
 }
 
-/// 公告分类配色（与 Web `.ann-card[data-category]` 一致）：产品更新蓝、活动福利紫、服务通知橙。
-private struct NoticeTone {
-    let fg: Color, label: Color, soft: Color
-    init(category: String) {
-        switch category {
-        case "product_update": fg = V3.blue; label = V3.link; soft = V3.blueSoft
-        case "promotion": fg = V3.purple; label = Color(hex: 0x6F45A8); soft = V3.purpleSoft
-        default: fg = V3.orange; label = Color(hex: 0xB8681C); soft = V3.orangeSoft
-        }
+/// `.ann-dialog-close`：28 方块，悬停浅灰底、字转深。
+private struct NoticeCloseStyle: ButtonStyle {
+    @State private var hover = false
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.foregroundStyle(hover ? V3.txt : V3.fnt)
+            .background(hover || configuration.isPressed ? Color(hex: 0xF1F1EF) : .clear, in: RoundedRectangle(cornerRadius: 7))
+            .onHover { hover = $0 }
     }
 }

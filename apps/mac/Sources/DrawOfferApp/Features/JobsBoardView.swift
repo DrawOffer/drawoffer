@@ -12,15 +12,12 @@ struct JobAction: Identifiable {
     var round: Int? = nil
     var start: Date? = nil
     var end: Date? = nil
-    /// Web's 480pt apply dialog: a pending card dropped on 筛选中 only needs the date and channel.
-    var compact = false
 }
 
 /// 04.1 岗位看板: page head, four stats, board/list toolbar, stage columns and cards.
 /// Mirrors Web `InterviewCenterPage` (ApplicationsHeader / ApplicationViewControls) and `ApplicationsBoard.tsx`.
 struct JobsBoardView: View {
     @Environment(SessionStore.self) private var session
-    let requireAccount: () -> Void
     /// 其他页面（岗位广场）要求打开的求职进程；加载完成后进入详情并清空。
     var openApplication: Binding<String?> = .constant(nil)
     /// 对话预览等处按 id 打开的岗位详情（不经过某条投递卡片）。
@@ -43,7 +40,6 @@ struct JobsBoardView: View {
     @State private var order: [String] = []
     @State private var selected: CareerApplication?
     @State private var action: JobAction?
-    @State private var pendingAction: String?
     @State private var notice: NoticeToastItem?
     @State private var hoveredCard: String?
     @State private var refreshing = UUID()
@@ -129,6 +125,11 @@ struct JobsBoardView: View {
                                    initialInterviewLabel: preset && item.stage == "interview" ? item.label : preset && item.stage == "hr" ? "HR 面" : "",
                                    close: { action = nil },
                                    completed: { message in action = nil; refreshing = UUID(); if let message { notice = .partial(message) } })
+            } else if let app = item.application, item.kind == "apply" {
+                // 08.10 · 记录投递：从看板拖到测评 / 笔试 / 面试列时预选那一步
+                CareerRecordAppliedSheet(application: app.raw, api: session.api, initialStage: item.stage, initialLabel: item.label,
+                                         close: { action = nil },
+                                         completed: { message in action = nil; refreshing = UUID(); if let message { notice = .partial(message) } })
             } else if item.kind == "import" {
                 // 03A · 导入岗位：固定 640×600，创建后刷新看板并打开新求职进程
                 CareerJobImportSheet(api: session.api, close: { action = nil },
@@ -138,13 +139,11 @@ struct JobsBoardView: View {
                 CareerPluginSheet(api: session.api, close: { action = nil })
             } else {
                 CareerForm(action: item, applications: applications, api: session.api, completed: { action = nil; refreshing = UUID() }, close: { action = nil })
-                    .frame(width: item.compact ? 480 : 880, height: item.compact ? nil : 780)
+                    .frame(width: 880, height: 780)
             }
         }
-        .onChange(of: account) { _, new in
+        .onChange(of: account) { _, _ in
             applications = []; sessions = []; overview = .null; logos = [:]; pendingLogos = []; query = ""; hidden = []; order = []; action = nil; selected = nil; notice = nil
-            if new.isEmpty { pendingAction = nil }
-            else if let pendingAction { action = JobAction(kind: pendingAction, application: nil); self.pendingAction = nil }
         }
     }
 
@@ -336,8 +335,7 @@ struct JobsBoardView: View {
         if column == "ended" { action = JobAction(kind: "terminate", application: item); return true }
         action = JobAction(kind: item.stage == "pending" ? "apply" : "stage", application: item, stage: target,
             label: target == "interview" ? (applications.contains { $0.column == column } ? columnTitle(column) : "一面") : CareerStage.label(target),
-            round: applications.first { $0.column == column }?.raw["current_round_no"]?.integer,
-            compact: item.stage == "pending" && target == "screening")
+            round: applications.first { $0.column == column }?.raw["current_round_no"]?.integer)
         return true
     }
     /// `validateApplicationDrop` copy for rejected moves.
@@ -567,10 +565,7 @@ struct JobsBoardView: View {
         }
     }
 
-    private func open(_ kind: String) {
-        if account.isEmpty { pendingAction = kind; requireAccount() }
-        else { action = JobAction(kind: kind, application: nil) }
-    }
+    private func open(_ kind: String) { action = JobAction(kind: kind, application: nil) }
     private func load() async {
         guard !account.isEmpty else { loading = false; failure = nil; return }
         loading = true; failure = nil; logos = [:]; pendingLogos = []
@@ -723,20 +718,20 @@ struct CareerForm: View {
     @State private var sessionCommand = ""
     @State private var commandPayload: JSONValue?
 
-    private var heading: String { ["import": "导入岗位", "arranged": "已有面试安排", "stage": "添加求职阶段", "category": "修改求职分类", "terminate": "终止求职", "delete": "删除岗位", "detail": "求职详情", "plugin": "安装浏览器插件", "offer": "记录正式 Offer", "apply": "记录投递", "schedule-current": "安排时间", "accept": "接受 Offer", "decline": "婉拒 Offer", "archive": "归档岗位", "restore": "恢复岗位", "notes": "编辑备注", "schedule": "新建面试"][kind] ?? "岗位" }
-    private var needsStage: Bool { ["stage", "apply", "schedule-current", "arranged", "schedule"].contains(kind) }
-    private var creation: Bool { kind == "import" || (["arranged", "schedule"].contains(kind) && selectedExisting.isEmpty) }
+    private var heading: String { ["import": "导入岗位", "arranged": "已有面试安排", "stage": "添加求职阶段", "category": "修改求职分类", "terminate": "终止求职", "delete": "删除岗位", "detail": "求职详情", "plugin": "安装浏览器插件", "offer": "记录正式 Offer", "apply": "记录投递", "schedule-current": "安排时间", "accept": "接受 Offer", "decline": "婉拒 Offer", "archive": "归档岗位", "restore": "恢复岗位", "notes": "编辑备注"][kind] ?? "岗位" }
+    private var needsStage: Bool { ["stage", "apply", "schedule-current", "arranged"].contains(kind) }
+    private var creation: Bool { kind == "import" || (kind == "arranged" && selectedExisting.isEmpty) }
     private var showSchedule: Bool { ["assessment", "written_test", "ai_interview", "interview"].contains(stage) }
     private var startsPending: Bool { current?.stage == "pending" || creation }
     private var isHR: Bool { stage == "interview" && label == "HR 面" }
     private var isWindow: Bool { stage == "assessment" || (stage == "written_test" && window) }
     /// Web saves a session only when the user gave any schedule detail; schedule-only entries require one.
     private var hasScheduleDetails: Bool { slotSet || deadlineSet || ![meeting, prepNote, interviewer].allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } }
-    private var scheduleRequired: Bool { ["schedule-current", "schedule", "arranged"].contains(kind) }
+    private var scheduleRequired: Bool { ["schedule-current", "arranged"].contains(kind) }
     private var planFinish: Date { planStart.addingTimeInterval(Double(planDuration) * 60) }
 
     var body: some View {
-        Group { if action.compact { compactApply } else {
+        Group {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 5) {
                 HStack {
@@ -760,14 +755,11 @@ struct CareerForm: View {
                         Text("浏览器插件在 Chrome / Edge 中采集岗位，保存后刷新客户端即可查看。")
                         Text("在 Web 的岗位看板选择安装浏览器插件，下载并解压 ZIP；打开浏览器扩展管理，启用开发者模式后加载已解压的扩展。")
                     }
-                    if ["arranged", "schedule"].contains(kind) {
+                    if kind == "arranged" {
                         Picker("岗位", selection: $selectedExisting) {
                             Text("创建新岗位").tag("")
                             ForEach(applications.filter { $0.movable }) { item in Text(item.company + " · " + item.title).tag(item.id) }
                         }.disabled(current != nil || frozenStage != nil)
-                    }
-                    if kind == "schedule", let chosen = applications.first(where: { $0.id == selectedExisting }), !(chosen.raw["current_stage"]?.text("id") ?? "").isEmpty, chosen.raw.text("stage_state") == "awaiting_schedule", ["assessment", "written_test", "ai_interview", "interview"].contains(chosen.stage) {
-                        Toggle("为当前阶段添加排期", isOn: $reuseCurrentStage).disabled(staged)
                     }
                     if creation {
                         Text("填写岗位信息，保存到你的云端账号。").font(.system(size: 13)).foregroundStyle(Color(hex: 0x96968F))
@@ -865,18 +857,7 @@ struct CareerForm: View {
                 }
             }.padding(.horizontal, 32).frame(height: 88)
             .overlay(alignment: .top) { Rectangle().fill(V3.line).frame(height: 1) }
-        } } }.font(LibraryTypography.sans(13)).interactiveDismissDisabled(busy).onChange(of: selectedExisting) { _, id in
-            if kind == "schedule", let chosen = applications.first(where: { $0.id == id }) {
-                reuseCurrentStage = !(chosen.raw["current_stage"]?.text("id") ?? "").isEmpty && chosen.raw.text("stage_state") == "awaiting_schedule" && ["assessment", "written_test", "ai_interview", "interview"].contains(chosen.stage)
-                stage = reuseCurrentStage ? chosen.stage : "interview"; label = reuseCurrentStage ? chosen.stageLabel : "一面"
-                round = max(1, chosen.raw["current_round_no"]?.integer ?? 1)
-            } else { reuseCurrentStage = false }
-        }.onChange(of: reuseCurrentStage) { _, reuse in
-            guard kind == "schedule", let chosen = applications.first(where: { $0.id == selectedExisting }) else { return }
-            stage = reuse ? chosen.stage : "interview"
-            label = reuse ? chosen.stageLabel : "一面"
-            round = reuse ? max(1, chosen.raw["current_round_no"]?.integer ?? 1) : max(1, (chosen.raw["current_round_no"]?.integer ?? 0) + 1)
-        }.task {
+        } }.font(LibraryTypography.sans(13)).interactiveDismissDisabled(busy).task {
             kind = action.kind; current = action.application; stage = action.stage; label = action.label
             round = max(1, action.round ?? max(1, (action.application?.raw["current_round_no"]?.integer ?? 0) + 1))
             if ["stage", "apply"].contains(kind), !["interview", "ai_interview"].contains(current?.stage ?? "") { label = "一面" }
@@ -942,7 +923,6 @@ struct CareerForm: View {
                     let key = ["hr": "interview", "oc": "offer", "formal": "offer"][choice] ?? choice
                     let chosen = stage == key && (key != "offer" || offerIntent == (choice == "formal" ? "received" : "none")) && (key != "interview" || (choice == "hr") == (label == "HR 面"))
                     let allowed = kind == "offer" ? choice == "formal"
-                        : kind == "schedule" ? ["assessment", "written_test", "ai_interview", "interview", "hr"].contains(choice)
                         : startsPending || choice != "screening"
                     Button {
                         stage = key; window = key == "assessment"
@@ -967,47 +947,6 @@ struct CareerForm: View {
                 }
             }
         }
-    }
-    /// `.cd3-apply-dialog`: art on top, applied date and channel below.
-    private var compactApply: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            V3DotStage(height: 148) {
-                HStack(spacing: 14) {
-                    RoundedRectangle(cornerRadius: 6).fill(.white).frame(width: 70, height: 92).overlay(alignment: .topLeading) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            RoundedRectangle(cornerRadius: 2).fill(V3.txt).frame(width: 30, height: 5)
-                            ForEach(0..<4, id: \.self) { _ in RoundedRectangle(cornerRadius: 1).fill(V3.line).frame(width: 46, height: 3) }
-                        }.padding(10)
-                    }.shadow(color: .black.opacity(0.06), radius: 4, y: 2).rotationEffect(.degrees(-4))
-                    Path { path in path.move(to: .zero); path.addLine(to: CGPoint(x: 60, y: 0)) }
-                        .stroke(V3.fnt2, style: StrokeStyle(lineWidth: 1.4, dash: [3, 3])).frame(width: 60, height: 1)
-                    VStack(alignment: .leading, spacing: 10) {
-                        tagCard(current?.company.isEmpty == false ? current!.company : "目标公司", dot: V3.blue)
-                        tagCard("筛选中", dot: V3.orange)
-                    }
-                }
-            }.padding(.horizontal, 24).padding(.top, 24)
-            VStack(alignment: .leading, spacing: 0) {
-                Text(heading).font(V3.serif(20)).foregroundStyle(V3.txt)
-                Text([current?.company ?? "", current?.title ?? ""].filter { !$0.isEmpty }.joined(separator: " · ").nonEmptyOr("记录投递信息"))
-                    .font(V3.sans(12.5)).foregroundStyle(V3.sub).padding(.top, 5)
-                formField("投递日期（选填）") {
-                    DatePicker("", selection: $appliedAt, displayedComponents: .date).labelsHidden().datePickerStyle(.field).frame(height: 40)
-                }.padding(.top, 20)
-                formField("投递渠道", hint: "选填") { iconInput("link", "例如：同事内推、官网、招聘平台", text: $channel) }.padding(.top, 18)
-                Text("保存后岗位从「待投递」进入「筛选中」，等待公司筛选结果。").font(V3.sans(11.5)).foregroundStyle(V3.fnt).padding(.top, 12)
-                if let error { Text(error).font(V3.sans(12)).foregroundStyle(V3.red).padding(.top, 10) }
-            }.padding(.horizontal, 28).padding(.top, 22).padding(.bottom, 4)
-            HStack(spacing: 10) {
-                Spacer()
-                Button("取消", action: close).buttonStyle(V3ButtonStyle(kind: .ghost, height: 36)).disabled(busy)
-                Button(busy ? "保存中…" : "保存求职进度") { Task { await save() } }.buttonStyle(V3ButtonStyle(kind: .dark, height: 36)).disabled(busy)
-            }.padding(.horizontal, 28).padding(.vertical, 20)
-        }
-    }
-    private func tagCard(_ text: String, dot: Color) -> some View {
-        HStack(spacing: 6) { Circle().fill(dot).frame(width: 6, height: 6); Text(text).font(V3.sans(10, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1) }
-            .padding(.horizontal, 10).frame(height: 24).background(.white, in: RoundedRectangle(cornerRadius: 6)).shadow(color: .black.opacity(0.05), radius: 3, y: 1)
     }
     static func defaultRound(_ app: CareerApplication?) -> String {
         guard let app, app.raw.text("current_stage_type") == "interview" else { return "一面" }
@@ -1335,7 +1274,7 @@ struct CareerForm: View {
         busy = true
         var creating = false
         do {
-            if ["arranged", "schedule"].contains(kind) && !selectedExisting.isEmpty && current == nil {
+            if kind == "arranged" && !selectedExisting.isEmpty && current == nil {
                 let detail = try await request("/api/job-applications/\(selectedExisting)")
                 current = CareerApplication(detail["application"] ?? .null)
             }

@@ -43,13 +43,6 @@ public static class Interaction
     /// <summary>就地配置一个元素再返回它（Kotlin `also`），用于链式构建里补设少量属性。</summary>
     public static T Also<T>(this T value, Action<T> configure) { configure(value); return value; }
 
-    /// <summary>双击（`.onTapGesture(count: 2)`）。</summary>
-    public static T OnDoubleTap<T>(this T element, Action action) where T : UIElement
-    {
-        element.DoubleTapped += (_, e) => { e.Handled = true; action(); };
-        return element;
-    }
-
     static void Cursor(FrameworkElement element, bool hand)
     {
         // ProtectedCursor 只能在派生类里设置；自绘部件都继承 BorderControl，这里用反射兜底给其他元素设置手形光标

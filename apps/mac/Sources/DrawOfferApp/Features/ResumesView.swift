@@ -11,8 +11,6 @@ struct ResumesView: View {
     @Binding var focusResumeID: String?
     /// 正在编辑的简历；首页“继续编辑”也通过它直接进入编辑器。
     @Binding var editResumeID: String?
-    let browse: () -> Void
-    let login: () -> Void
     /// 首页“选择文件”：每次变化打开一次导入。
     var importRequest: UUID? = nil
 
@@ -55,7 +53,7 @@ struct ResumesView: View {
         // Figma 03 页 02.1：内容区距顶 64（眉题），标题 28 衬线，说明 13；右上「导入简历」+ 墨黑「新建简历」。
         V3Page(top: 64) {
             VStack(alignment: .leading, spacing: 0) {
-                ResumesHead(count: account.isEmpty ? "游客预览" : loaded ? "\(resumes.count) 份" : "个人工作区",
+                ResumesHead(count: loaded ? "\(resumes.count) 份" : "个人工作区",
                             subtitle: atLimit ? "已达到 \(ResumeRequest.maximumPerUser) 份上限。删除不用的简历后，才能新建、导入或复制。" : "每份简历独立编辑，需要时复制一份按岗位修改。",
                             warn: atLimit) {
                     if !account.isEmpty {
@@ -65,8 +63,7 @@ struct ResumesView: View {
                             .buttonStyle(ResumesPillStyle(dark: true))
                     }
                 }
-                if account.isEmpty { GuestResumesEmpty(browse: browse, login: login) }
-                else if loadError && !loaded { loadFailure }
+                if loadError && !loaded { loadFailure }
                 else if !loaded { skeleton }
                 else if resumes.isEmpty && imports.isEmpty { emptyList }
                 else { list }
@@ -540,37 +537,12 @@ private struct ResumePreviewSheet: View {
     }
 }
 
-/// 游客空状态：沿用 Web 新用户引导，不代表已查询到账号没有简历。
-private struct GuestResumesEmpty: View {
-    let browse: () -> Void
-    let login: () -> Void
-    var body: some View {
-        VStack(spacing: 0) {
-            Divider().padding(.top, 24)
-            VStack(spacing: 12) {
-                EmptyResumeArt().frame(width: 504, height: 236)
-                Text("从第一份简历开始").font(V3.serif(18))
-                Text("新建时选一套模板、起个名字；已有简历文件可以用「导入简历」。").font(V3.sans(13)).foregroundStyle(V3.sub)
-                HStack(spacing: 20) {
-                    Button("新建简历 →", action: browse).buttonStyle(WebActionStyle())
-                    Button("导入简历", systemImage: "square.and.arrow.up", action: login).buttonStyle(.plain)
-                }.padding(.top, 8)
-                Text("内置示例可离线预览；登录后可查看和导出你的简历。").font(V3.sans(12)).foregroundStyle(V3.fnt).padding(.top, 8)
-            }.frame(maxWidth: .infinity).padding(.top, 42)
-        }
-    }
-}
-
 /// 原生端没有的正文编辑等能力，在默认浏览器打开 Web 对应页面。网页使用自己的登录态，不传递桌面凭据。
 enum WebBridge {
     static func open(_ path: String, api: any APIClient) {
         guard let origin = (api as? HTTPAPIClient)?.origin, path.hasPrefix("/"),
               let url = URL(string: path, relativeTo: origin)?.absoluteURL, ["https", "http"].contains(url.scheme ?? "") else { return }
         NSWorkspace.shared.open(url)
-    }
-    static func openEditor(_ resumeID: String, api: any APIClient) {
-        guard resumeID.allSatisfy({ $0.isASCII && $0.isNumber }) else { return }
-        open("/resumes/\(resumeID)/edit", api: api)
     }
 }
 

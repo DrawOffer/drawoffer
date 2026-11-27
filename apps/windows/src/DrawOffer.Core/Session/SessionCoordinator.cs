@@ -73,25 +73,6 @@ public sealed class SessionCoordinator(IDesktopTransport transport, ITokenStore 
         return result;
     }
 
-    /// <summary>生成浏览器授权地址 `/desktop-login?challenge&amp;state&amp;platform&amp;client_version`；新的挑战先退出旧会话，并使之前的挑战失效。</summary>
-    public async Task<BrowserLoginChallenge> BeginBrowserLoginAsync(string clientVersion, CancellationToken ct = default)
-    {
-        var generation = Guid.NewGuid();
-        await SignOutAsync(generation);
-        lock (_gate)
-        {
-            if (_generation != generation) throw InvalidSession();
-            _disabled = false;
-            var verifier = Base64Url(RandomNumberGenerator.GetBytes(32));
-            var state = Base64Url(RandomNumberGenerator.GetBytes(24));
-            var challenge = Base64Url(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)));
-            var query = string.Join("&", new[] { ("challenge", challenge), ("state", state), ("platform", "windows"), ("client_version", clientVersion) }
-                .Select(x => x.Item1 + "=" + Uri.EscapeDataString(x.Item2)));
-            _browser = new BrowserLoginChallenge(new Uri(transport.Origin, "desktop-login?" + query), state, verifier, generation);
-            return _browser;
-        }
-    }
-
     /// <summary>处理 `drawoffer://auth/callback?code&amp;state`：state 必须与当前挑战一致，授权码只换取一次。</summary>
     public async Task<User> CompleteBrowserLoginAsync(Uri callback, CancellationToken ct = default)
     {

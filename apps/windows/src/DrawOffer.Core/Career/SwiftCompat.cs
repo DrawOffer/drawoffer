@@ -172,9 +172,6 @@ internal static class SwiftText
         return parts.ToArray();
     }
 
-    /// <summary>`drop(while:)`：去掉开头满足条件的字符。</summary>
-    public static string DropWhile(string value, Func<string, bool> predicate) => string.Concat(Elements(value).SkipWhile(predicate));
-
     /// <summary>`Int(String)`：可选正负号与 ASCII 数字，不允许空白。</summary>
     public static int? Int(string value) =>
         value.Length > 0 && int.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var number) ? number : null;

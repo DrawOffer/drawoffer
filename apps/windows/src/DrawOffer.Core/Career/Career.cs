@@ -72,8 +72,6 @@ public sealed record CareerApplication(JsonNode Raw, DateTimeOffset? CompletedSc
         return new CareerApplication(Raw, latest?.Text("status") == "completed" ? Date(latest.Text("start_at")) : null);
     }
 
-    /// <summary>`raw.text(key)` 的简写。</summary>
-    public string Text(string key) => Raw.Text(key);
     public string Id => Raw.Text("id");
     public string Company => Raw.Text("company_name_snapshot");
     public string Title => Raw.Text("job_title_snapshot");
@@ -214,56 +212,6 @@ public static class CareerStage
         }));
 }
 
-/// <summary>V4 唯一的页面级主操作；阶段历史从不改变流程。</summary>
-public sealed record CareerFlow
-{
-    public string Kind { get; }
-    public string Button { get; }
-    public string Headline { get; }
-    public string Explanation { get; }
-
-    public CareerFlow(CareerApplication item)
-    {
-        if (item.Ended)
-        {
-            Kind = "history"; Button = "查看阶段记录";
-            Headline = item.Raw.Text("offer_status") == "accepted" ? "已接受 Offer" : item.Raw.Text("offer_status") == "declined" ? "已婉拒 Offer" : "本次求职已结束";
-            Explanation = "保留每个阶段的记录，回顾这次求职经历。";
-        }
-        else if (item.Stage == "pending")
-        {
-            Kind = "apply"; Button = "记录投递"; Headline = "准备好了，就记录一次投递。";
-            Explanation = "记录投递日期、渠道和使用的简历，开始跟进这个岗位。";
-        }
-        else if (item.Stage == "offer")
-        {
-            var received = item.Raw.Text("offer_status") == "received";
-            Kind = received ? "accept" : "offer"; Button = received ? "接受 Offer" : "记录正式 Offer";
-            Headline = received ? "正式 Offer 已收到，做出你的选择。" : "口头意向已沟通，等待正式 Offer。";
-            Explanation = received ? "核对薪酬、工作地点和入职信息，再确认是否接受。" : "收到正式 Offer 后，记录条件并决定接受或婉拒。";
-        }
-        else if (item.Stage is "assessment" or "written_test" or "ai_interview" or "interview" && item.Raw.Text("stage_state") == "awaiting_schedule")
-        {
-            Kind = "schedule-current"; Button = "安排时间"; Headline = "先把时间安排好。";
-            Explanation = "记录时间、方式和链接，排期会同步到面试日程。";
-        }
-        else if (item.Raw.Text("stage_state") == "scheduled" && item.CompletedSchedule is null)
-        {
-            Kind = "records"; Button = "记录与复盘"; Headline = "已安排，准备好迎接这次机会。";
-            Explanation = "查看排期、记录面试情况；结束后标记完成。";
-        }
-        else
-        {
-            Kind = "stage"; Button = item.Stage == "screening" ? "进入下一阶段" : "通过，添加下一轮";
-            Headline = "等待结果，有进展再记录。";
-            Explanation = "收到通过通知后，添加下一阶段；多轮面试会分别保留记录。";
-        }
-    }
-
-    /// <summary>旧调用方式，等同 <c>new CareerFlow(item)</c>。</summary>
-    public static CareerFlow For(CareerApplication item) => new(item);
-}
-
 /// <summary>共享 schema 存在备注里的 V4 字段；不相关的行全部保留。</summary>
 public static class CareerNotes
 {
@@ -271,10 +219,6 @@ public static class CareerNotes
 
     public static string Value(string field, string notes) =>
         notes.Split('\n').FirstOrDefault(line => SwiftText.HasPrefix(line, field + "：")) is { } line ? line[(field.Length + 1)..] : "";
-
-    /// <summary>去掉 V4 字段行后剩下的自由文本。</summary>
-    public static string FreeText(string notes) =>
-        string.Join('\n', notes.Split('\n').Where(line => !Fields.Any(field => SwiftText.HasPrefix(line, field + "："))));
 
     /// <summary>Mac `merging(_:into:)`：只替换给出的字段，空值即删除该行。</summary>
     public static string Merge(Dictionary<string, string> values, string notes)
@@ -284,41 +228,5 @@ public static class CareerNotes
         foreach (var key in Fields.Where(keys.Contains))
             if (values[key].Length > 0) lines.Add(key + "：" + values[key].Replace("\n", " "));
         return SwiftText.TrimNewlines(string.Join('\n', lines));
-    }
-}
-
-public sealed record CareerProgressStep(string Id, string Label, string Date, string State);
-
-public static class CareerProgress
-{
-    public static CareerProgressStep[] Steps(CareerApplication item)
-    {
-        var stages = item.Raw.Items("stages");
-        if (stages.Count == 0)
-        {
-            var type = item.Ended ? item.Raw.Text("current_stage_type") : item.Stage;
-            var rank = type == "pending" ? 0 : type == "screening" ? 1 : type is "assessment" or "written_test" ? 2 : type == "offer" ? 4 : 3;
-            return new[] { "待投递", "筛选中", "笔试 / 测评", "面试", "Offer" }
-                .Select((label, index) => new CareerProgressStep(index.ToString(CultureInfo.InvariantCulture), label, index == 0 ? item.Raw.Text("created_at") : "", index == rank && !item.Ended ? "current" : "future")).ToArray();
-        }
-        var currentId = item.Raw.Get("current_stage").Text("id");
-        var result = new List<CareerProgressStep> { new("applied", "已投递", item.Raw.Text("applied_at"), "completed") };
-        var last = stages[^1];
-        foreach (var stage in stages)
-        {
-            var isCurrent = stage.Text("id") == currentId || currentId.Length == 0 && JsonNode.DeepEquals(stage, last);
-            var state = !item.Ended && isCurrent ? "current" : "completed";
-            var type = stage.Text("stage_type");
-            var oral = type == "offer" && (stage.Text("stage_label") == "OC" || item.Raw.Text("offer_status") == "none");
-            var formal = type == "offer" && item.Raw.Text("offer_status") is "received" or "accepted" or "declined";
-            result.Add(new(stage.Text("id"), oral ? "OC" : stage.Text("stage_label"), stage.Text("entered_at"), oral && formal ? "completed" : state));
-            if (oral && formal) result.Add(new("formal", "Offer", CareerNotes.Value("收到日期", item.Raw.Text("notes")), state));
-        }
-        if (!item.Ended)
-        {
-            string[] future = item.Stage == "screening" ? ["笔试 / 测评", "面试", "Offer"] : item.Stage is "assessment" or "written_test" ? ["面试", "Offer"] : item.Stage is "interview" or "ai_interview" ? ["Offer"] : [];
-            foreach (var label in future) result.Add(new("future:" + label, label, "", "future"));
-        }
-        return result.ToArray();
     }
 }

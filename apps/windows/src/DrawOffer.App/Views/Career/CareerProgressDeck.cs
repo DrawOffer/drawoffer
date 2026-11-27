@@ -23,25 +23,6 @@ public static class PD
     public static readonly Color BlueText = Hex(0x145ED6);
     public static readonly Color Tint = Hex(0xE9F1FD);
     public static readonly Color Red = Hex(0xC2412D);
-    public static readonly Color RedTint = Hex(0xFDEEEA);
-    public static readonly Color Act = Hex(0xC9D6EE);
-    public static readonly Color Done = Hex(0x96ACD6);
-    public static readonly Color Dash = Hex(0xC4C4BE);
-    public static readonly Color Edge = Hex(0xECEBE6);
-    public static readonly Color Field = Hex(0xDED7CC);
-    public const double Axis = 68;
-
-    /// <summary>把日期换到本机时区取年月日（Swift `Calendar.current.component`）。</summary>
-    internal static DateTime Local(DateTimeOffset date) => TimeZoneInfo.ConvertTime(date, Beijing.Zone).DateTime;
-
-    /// <summary>在 Canvas 上以中心对齐放一个元素（Swift `.position(x:y:)`）。</summary>
-    internal static Canvas At(FrameworkElement child, double x, double y)
-    {
-        var canvas = new Canvas { IsHitTestVisible = false };
-        canvas.Children.Add(child);
-        Draw.Place(child, new Point(x, y), 0.5, 0.5);
-        return canvas;
-    }
 
     /// <summary>`withAnimation(.easeOut(duration: 0.24))` + `.transition(.opacity)`：新内容淡入。</summary>
     internal static void FadeIn(UIElement element, double seconds = 0.24)

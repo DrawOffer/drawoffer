@@ -34,6 +34,10 @@ public enum ReadCache {
         if configPaths.contains(readPath) || lifetime(path: readPath, query: logoQuery(key)) == forever { return false }
         if path.hasPrefix("/api/mock-interviews/"), ["answers", "skip", "reply:retry"].contains(String(path.split(separator: "/").last ?? "")) { return false }
         if path.hasPrefix("/api/datasets") { return readPath.hasPrefix("/api/datasets") }
+        // 回复评价与切换提问版本只动对话本身，对话的读不进缓存
+        if path.hasPrefix("/api/agent/sessions/"), path.hasSuffix("/rating") || path.hasSuffix(":switch") { return false }
+        // 提交反馈不改任何用户数据
+        if path == "/api/feedback" { return false }
         if path.hasPrefix("/api/account/") { return readPath.hasPrefix("/api/account/") }
         return true
     }
@@ -53,7 +57,7 @@ public enum ReadCache {
              "/api/job-applications", "/api/interview-sessions", "/api/interview-overview", "/api/datasets/folders", "/api/resumes":
             return 60
         default:
-            return path == "/api/job-pool" || path.hasPrefix("/api/job-pool/companies") ? 120 : nil
+            return ["/api/job-pool", "/api/job-pool/count", "/api/job-pool/by-company", "/api/job-pool/filters"].contains(path) || path.hasPrefix("/api/job-pool/companies") ? 120 : nil
         }
     }
 

@@ -409,6 +409,10 @@ struct CareerTimePop: View {
                                range: byDay ? range : nil, pick: pick)
             Rectangle().fill(V3.line).frame(height: 1).padding(.top, 6).padding(.bottom, 10)
             VStack(alignment: .leading, spacing: 10) {
+                if !byDay, slots.count == 1, let slot = slots.first, let duration {
+                    // 按时参加只有一段时间：开始时刻 – 结束时刻，结束按 15 分钟一档换算成时长
+                    CareerSpanRow(start: slot.value, minutes: duration.1, clearable: slot.clearable)
+                } else {
                 ForEach(slots, id: \.key) { slot in row(slot) }
                 if let duration {
                     row(duration.0) {
@@ -420,6 +424,7 @@ struct CareerTimePop: View {
                         }.padding(.horizontal, 10).frame(height: 30).background(.white, in: RoundedRectangle(cornerRadius: 6))
                             .overlay(RoundedRectangle(cornerRadius: 6).stroke(V3.cl))
                     }
+                }
                 }
                 if let hint { Text(hint).font(V3.sans(11.5)).foregroundStyle(V3.fnt) }
             }
@@ -581,6 +586,55 @@ struct CareerMiniCalendar: View {
         let lead = (calendar.component(.weekday, from: first) + 5) % 7
         let total = Int(ceil(Double(lead + count) / 7)) * 7
         return (0..<total).compactMap { calendar.date(byAdding: .day, value: $0 - lead, to: first) }
+    }
+}
+
+/// 一段时间（13.02）：开始时刻框 – 结束时刻下拉，后面写时长。
+struct CareerSpanRow: View {
+    let start: Binding<Date?>
+    let minutes: Binding<String>
+    var clearable = false
+    @State private var clockValid = true
+    var body: some View {
+        HStack(spacing: 6) {
+            CareerClockField(value: start, compact: true, valid: $clockValid)
+            Text("–").font(V3.sans(13)).foregroundStyle(V3.fnt)
+            CareerEndClockMenu(start: start.wrappedValue, minutes: minutes)
+            if let value = Int(minutes.wrappedValue), value > 0 {
+                Text(CareerTimeSpan.label(value)).font(V3.sans(12.5)).foregroundStyle(V3.fnt).lineLimit(1).fixedSize()
+            }
+            Spacer(minLength: 0)
+            if clearable && start.wrappedValue != nil {
+                Button { start.wrappedValue = nil } label: { Image(systemName: "xmark").font(.system(size: 10)).foregroundStyle(V3.fnt).frame(width: 18, height: 18) }
+                    .buttonStyle(.plain).accessibilityLabel("清除开始")
+            }
+        }
+    }
+}
+
+/// 结束时刻：从开始往后每 15 分钟一档（共 8 小时），每项写时刻和时长；选了换算回时长。
+struct CareerEndClockMenu: View {
+    let start: Date?
+    @Binding var minutes: String
+    var body: some View {
+        let current = Int(minutes) ?? 0
+        let calendar = Beijing.calendar
+        let options = CareerTimeSpan.options(startMinute: start.map { calendar.component(.hour, from: $0) * 60 + calendar.component(.minute, from: $0) }, current: current)
+        let picked = options.first { $0.minutes == current }
+        Menu {
+            ForEach(options, id: \.minutes) { option in
+                Button { minutes = String(option.minutes) } label: {
+                    if option == picked { Label("\(option.clock)  \(option.span)", systemImage: "checkmark") } else { Text("\(option.clock)  \(option.span)") }
+                }
+            }
+        } label: {
+            Text(picked?.clock ?? "--:--").font(V3.number(13, weight: .regular)).foregroundStyle(picked == nil ? V3.fnt : V3.txt)
+                .frame(width: 71, height: 29)
+                .background(.white, in: RoundedRectangle(cornerRadius: 5.5))
+                .overlay(RoundedRectangle(cornerRadius: 5.5).stroke(V3.cl))
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().accessibilityLabel("结束时刻")
     }
 }
 

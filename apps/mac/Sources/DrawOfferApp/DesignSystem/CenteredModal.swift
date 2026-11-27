@@ -246,3 +246,26 @@ private struct CancelShortcut: ViewModifier {
         if active { content.keyboardShortcut(.cancelAction) } else { content }
     }
 }
+
+// MARK: 自绘外框的弹窗
+
+extension View {
+    /// 与 `centeredSheet(item:)` 相同，但宿主不套白底卡片、不裁切：弹窗自己画外框，里面的下拉可以伸出弹窗边（模拟面试开始前确认）。
+    func centeredPanel<Item: Identifiable, Content: View>(item: Binding<Item?>, @ViewBuilder content: @escaping (Item) -> Content) -> some View {
+        modifier(CenteredPanelModifier(item: item, sheet: content))
+    }
+}
+
+private struct CenteredPanelModifier<Item: Identifiable, Sheet: View>: ViewModifier {
+    @Binding var item: Item?
+    let sheet: (Item) -> Sheet
+
+    func body(content: Content) -> some View {
+        let binding = $item
+        let entry = item.map { value in
+            ModalEntry(id: "panel-\(value.id)", framed: false,
+                       view: AnyView(sheet(value).environment(\.closeModal, ModalCloseAction { binding.wrappedValue = nil })))
+        }
+        return content.modifier(ModalPresenter(entry: entry, presented: item != nil, onDismiss: nil))
+    }
+}

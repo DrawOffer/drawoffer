@@ -1,8 +1,8 @@
 import DrawOfferCore
 import SwiftUI
 
-// 面试复盘第一屏的三张图（Figma 09 · 10.01 总览；Web `interviews/report/ReviewCharts.tsx`）：环形图、每道题得分、通用能力，
-// 都按设计稿坐标画，随卡片等比缩放；以及「这场之后，记忆里变了什么」（Figma 09 · 11 记忆变化状态 11.01–11.04，Web `ReviewMemory.tsx`）。
+// 复盘总览的两张图（Figma 09 · 08.03；Web `interviews/report/ReviewCharts.tsx`）：通用能力小雷达、本场知识点掌握度曲线，
+// 都按 Web 的 viewBox 坐标画，随宽度等比缩放；以及「这场之后，记忆里变了什么」（Figma 09 · 11 记忆变化状态 11.01–11.04，Web `ReviewMemory.tsx`）。
 
 enum RRC {
     static let blue = Color(hex: 0x3F6FD8)
@@ -13,7 +13,6 @@ enum RRC {
     static let faint = Color(hex: 0xA9A9A3)
     static let line = Color(hex: 0xE4E4E0)
     static let thin = Color(hex: 0xECECEA)
-    static let targetLine = Color(hex: 0xCFDCF5)
 }
 
 /// 设计稿坐标里的一张图：按宽度等比缩放，`viewBox` 的左上角是 (x, y)。
@@ -38,150 +37,140 @@ private func label(_ context: inout GraphicsContext, _ text: String, _ x: CGFloa
     context.draw(Text(verbatim: text).font(font).foregroundColor(color), at: CGPoint(x: x, y: y - size * 0.35), anchor: anchor)
 }
 
-/// 环形图：每层一圈（了解在最外），每道题一根线落在它答到的那一层，没到目标打叉；中间总分。
-struct RRScoreRing: View {
-    let questions: [MockRV.Question]
-    let target: Int
-    let score: Int?
-    private static let cx: CGFloat = 260, cy: CGFloat = 272
-    private static let bands: [CGFloat] = [164, 144.5, 125, 105, 85.5], stops: [CGFloat] = [154, 134.6, 115, 95, 76]
-
-    var body: some View {
-        RRChart(box: CGRect(x: 0, y: 88, width: 520, height: 420)) { context in
-            let total = questions.count
-            let step = total > 0 ? 360.0 / Double(total) : 0
-            let targetRadius = Self.bands[max(0, min(4, target - 1))]
-            func polar(_ r: CGFloat, _ degree: Double) -> CGPoint {
-                let a = degree * .pi / 180
-                return CGPoint(x: Self.cx + r * CGFloat(sin(a)), y: Self.cy - r * CGFloat(cos(a)))
-            }
-            func circle(_ r: CGFloat) -> Path { Path(ellipseIn: CGRect(x: Self.cx - r, y: Self.cy - r, width: r * 2, height: r * 2)) }
-            for r in Self.bands { context.stroke(circle(r), with: .color(r <= targetRadius ? RRC.targetLine : RRC.thin)) }
-            context.fill(circle(targetRadius), with: .color(Color(hex: 0xEAF0FB).opacity(0.55)))
-            context.stroke(circle(targetRadius), with: .color(RRC.blue), style: StrokeStyle(lineWidth: 1.25, dash: [5, 4]))
-            for r in Self.bands where r < targetRadius { context.stroke(circle(r), with: .color(RRC.targetLine)) }
-            for (index, name) in MockRV.levels.enumerated() {
-                label(&context, name, Self.cx, Self.cy - Self.stops[index] + 3.5, size: 10, color: Self.bands[index] <= targetRadius ? Color(hex: 0x8EA6DC) : RRC.faint)
-            }
-            let placed = questions.enumerated().map { index, q -> (MockRV.Question, Double, CGPoint) in
-                let degree = step / 2 + Double(index) * step
-                let r = (q.level ?? 0) <= 0 ? Self.bands[0] : Self.stops[min(5, q.level ?? 1) - 1]
-                return (q, degree, polar(r, degree))
-            }
-            if placed.count >= 3 {
-                var curve = Path()
-                let points = placed.map(\.2)
-                let at = { (i: Int) in points[(i + points.count) % points.count] }
-                curve.move(to: points[0])
-                for i in 0..<points.count {
-                    let p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2)
-                    curve.addCurve(to: p2, control1: CGPoint(x: p1.x + (p2.x - p0.x) / 6, y: p1.y + (p2.y - p0.y) / 6),
-                                   control2: CGPoint(x: p2.x - (p3.x - p1.x) / 6, y: p2.y - (p3.y - p1.y) / 6))
-                }
-                context.stroke(curve, with: .color(Color(hex: 0xC9C9C3)))
-            }
-            for (q, degree, stop) in placed {
-                let color = q.outcome == .unrecorded ? RRC.faint : q.weak ? RRC.orange : RRC.blue
-                let start = polar(168, degree), badge = polar(179, degree)
-                context.stroke(Path { $0.move(to: start); $0.addLine(to: stop) }, with: .color(color), lineWidth: 2)
-                if q.weak {
-                    context.stroke(Path { p in
-                        p.move(to: CGPoint(x: stop.x - 4, y: stop.y - 4)); p.addLine(to: CGPoint(x: stop.x + 4, y: stop.y + 4))
-                        p.move(to: CGPoint(x: stop.x + 4, y: stop.y - 4)); p.addLine(to: CGPoint(x: stop.x - 4, y: stop.y + 4))
-                    }, with: .color(color), lineWidth: 2)
-                } else {
-                    context.fill(Path(ellipseIn: CGRect(x: stop.x - 4.5, y: stop.y - 4.5, width: 9, height: 9)), with: .color(color))
-                }
-                let badgeRect = CGRect(x: badge.x - 9.5, y: badge.y - 9.5, width: 19, height: 19)
-                context.fill(Path(ellipseIn: badgeRect), with: .color(.white))
-                context.stroke(Path(ellipseIn: badgeRect), with: .color(color))
-                label(&context, "\(q.no)", badge.x, badge.y + 4, weight: .medium, color: color)
-                let right = degree <= 180
-                let title = q.title.count > 8 ? String(q.title.prefix(7)) + "…" : q.title
-                label(&context, title, badge.x + (right ? 14 : -14), badge.y + 4, color: q.weak ? RRC.ink : RRC.sub, anchor: right ? .leading : .trailing)
-            }
-            context.fill(circle(66), with: .color(.white))
-            context.stroke(circle(66), with: .color(Color(hex: 0xE4E4E0)))
-            label(&context, "总分", Self.cx, Self.cy - 34, color: RRC.sub)
-            label(&context, score.map(String.init) ?? "—", Self.cx, Self.cy + 18, size: 50, color: RRC.ink, serif: true)
-            label(&context, "/ 100", Self.cx, Self.cy + 47, color: RRC.faint)
-            context.stroke(Path { $0.move(to: CGPoint(x: 96, y: 485)); $0.addLine(to: CGPoint(x: 118, y: 485)) }, with: .color(RRC.blue), lineWidth: 2)
-            label(&context, "答到位", 124, 489, size: 12, color: RRC.sub, anchor: .leading)
-            context.stroke(Path { $0.move(to: CGPoint(x: 186, y: 485)); $0.addLine(to: CGPoint(x: 208, y: 485)) }, with: .color(RRC.orange), lineWidth: 2)
-            label(&context, "没到目标", 214, 489, size: 12, color: RRC.sub, anchor: .leading)
-            context.stroke(Path { $0.move(to: CGPoint(x: 288, y: 485)); $0.addLine(to: CGPoint(x: 310, y: 485)) }, with: .color(RRC.blue), style: StrokeStyle(lineWidth: 1.25, dash: [5, 4]))
-            label(&context, "目标：答到「\(MockRV.levelLabel(target))」", 316, 489, size: 12, color: RRC.sub, anchor: .leading)
-        }
-        .accessibilityLabel("每道题答到哪一层，总分 \(score.map(String.init) ?? "—")")
-    }
-}
-
-/// 每道题得分：底线 y=200，100 分高 136。
-struct RRScoreBars: View {
-    let questions: [MockRV.Question]
-    var body: some View {
-        RRChart(box: CGRect(x: 0, y: 48, width: 523, height: 184)) { context in
-            let base: CGFloat = 200, scale: CGFloat = 1.36, left: CGFloat = 44, width: CGFloat = 459
-            for value in [0, 50, 100] {
-                let y = base - CGFloat(value) * scale
-                context.stroke(Path { $0.move(to: CGPoint(x: left, y: y)); $0.addLine(to: CGPoint(x: left + width, y: y)) }, with: .color(RRC.thin))
-                label(&context, "\(value)", 36, y + 4, color: RRC.faint, anchor: .trailing)
-            }
-            let slot = width / CGFloat(max(1, questions.count)), bar = min(26, slot * 0.6)
-            for (index, q) in questions.enumerated() {
-                let center = left + slot * (CGFloat(index) + 0.5)
-                if let score = q.score {
-                    let height = CGFloat(score) * scale
-                    context.fill(Path(roundedRect: CGRect(x: center - bar / 2, y: base - height, width: bar, height: height), cornerRadius: 3), with: .color(q.weak ? RRC.orange : RRC.blue))
-                    label(&context, "\(score)", center, base - height - 6, size: 12, weight: q.weak ? .medium : .regular, color: q.weak ? RRC.ink : RRC.text)
-                }
-                label(&context, "\(q.no)", center, base + 20, size: 12, color: RRC.sub)
-            }
-        }
-        .accessibilityLabel("每道题得分")
-    }
-}
-
-/// 通用能力雷达：圆心 (168,142)，半径 66；以往是灰色虚线，最弱一项标橙。
-struct RRAbilityRadar: View {
+/// 总览右上的小雷达（Web `AbilityRadar compact`）：圆心 (158,92)，外圈半径 54，能力名和分数放在顶点外 26；
+/// 这场实线浅蓝填充，以往灰色浅填充；低于 60 的点和字标橙。画布按最长的标签放宽，文字不出框。
+struct RRRadar: View {
     let abilities: [MockRV.Ability]
-    let weakest: String?
+    private static let cx: CGFloat = 158, cy: CGFloat = 92, r: CGFloat = 54, gap: CGFloat = 26
+
     var body: some View {
         let count = abilities.count
         let vertex = { (index: Int, ratio: CGFloat) -> CGPoint in
             let angle = Double(index) / Double(count) * 2 * .pi
-            return CGPoint(x: 168 + 66 * ratio * CGFloat(sin(angle)), y: 142 - 66 * ratio * CGFloat(cos(angle)))
+            return CGPoint(x: Self.cx + Self.r * ratio * CGFloat(sin(angle)), y: Self.cy - Self.r * ratio * CGFloat(cos(angle)))
         }
-        let side = { (x: CGFloat) -> Int in abs(x - 168) < 8 ? 0 : x > 168 ? 1 : -1 }
-        let text = { (a: MockRV.Ability) in "\(a.label) \(a.score)" }
-        let width = { (s: String) in CGFloat(s.reduce(0) { $0 + ($1.unicodeScalars.first!.value > 255 ? 12 : 7) }) }
-        var left: CGFloat = 0, right: CGFloat = 340
+        let width = { (s: String) in CGFloat(s.reduce(0) { $0 + ($1.unicodeScalars.first!.value > 255 ? 11 : 11 * 0.58) }) }
+        var left: CGFloat = 0, right: CGFloat = 316, top = Self.cy, bottom = Self.cy
         for (index, item) in abilities.enumerated() {
-            let x = vertex(index, 1).x, s = side(x), w = width(text(item))
-            let from = s == 0 ? x - w / 2 : s > 0 ? x + 9 : x - 9 - w
-            left = min(left, from - 8); right = max(right, from + w + 8)
+            let at = vertex(index, (Self.r + Self.gap) / Self.r), half = width(item.label) / 2
+            left = min(left, at.x - half - 4); right = max(right, at.x + half + 4)
+            top = min(top, at.y - 20); bottom = max(bottom, at.y + 20)
         }
         let ratio = { (score: Double) in CGFloat(max(0.08, min(1, score / 100))) }
-        return RRChart(box: CGRect(x: left, y: 44, width: right - left, height: 200)) { context in
+        return RRChart(box: CGRect(x: left, y: top, width: right - left, height: bottom - top)) { context in
             func shape(_ ratios: [CGFloat]) -> Path {
                 Path { p in for (i, r) in ratios.enumerated() { i == 0 ? p.move(to: vertex(i, r)) : p.addLine(to: vertex(i, r)) }; p.closeSubpath() }
             }
             for r in [1, 0.66, 0.33] as [CGFloat] { context.stroke(shape(Array(repeating: r, count: count)), with: .color(RRC.thin)) }
-            for index in 0..<count { context.stroke(Path { $0.move(to: CGPoint(x: 168, y: 142)); $0.addLine(to: vertex(index, 1)) }, with: .color(RRC.thin)) }
+            for index in 0..<count { context.stroke(Path { $0.move(to: CGPoint(x: Self.cx, y: Self.cy)); $0.addLine(to: vertex(index, 1)) }, with: .color(ROC.headLine)) }
             if abilities.contains(where: { $0.past != nil }) {
-                context.stroke(shape(abilities.map { ratio($0.past ?? Double($0.score)) }), with: .color(RRC.faint), style: StrokeStyle(lineWidth: 1.25, dash: [4, 3]))
+                let past = shape(abilities.map { ratio($0.past ?? Double($0.score)) })
+                context.fill(past, with: .color(ROC.faint.opacity(0.08)))
+                context.stroke(past, with: .color(Color(hex: 0xB5B0A8)), lineWidth: 1.2)
             }
             let mine = shape(abilities.map { ratio(Double($0.score)) })
-            context.fill(mine, with: .color(RRC.blue.opacity(0.1)))
-            context.stroke(mine, with: .color(RRC.blue), lineWidth: 1.75)
+            context.fill(mine, with: .color(ROC.blue.opacity(0.12)))
+            context.stroke(mine, with: .color(ROC.blue), lineWidth: 1.6)
             for (index, item) in abilities.enumerated() {
-                let dot = vertex(index, ratio(Double(item.score))), at = vertex(index, 1), s = side(at.x), low = item.key == weakest
-                context.fill(Path(ellipseIn: CGRect(x: dot.x - 3, y: dot.y - 3, width: 6, height: 6)), with: .color(low ? RRC.orange : RRC.blue))
-                label(&context, text(item), at.x + CGFloat(s) * 9, s != 0 ? at.y + 4 : at.y + (at.y < 142 ? -9 : 19), size: 12, weight: low ? .medium : .regular,
-                      color: low ? RRC.ink : RRC.sub, anchor: s == 0 ? .center : s > 0 ? .leading : .trailing)
+                let low = item.score < MockRV.passScore
+                let dot = vertex(index, ratio(Double(item.score)))
+                let ring = CGRect(x: dot.x - 3, y: dot.y - 3, width: 6, height: 6)
+                context.fill(Path(ellipseIn: ring.insetBy(dx: -1.5, dy: -1.5)), with: .color(.white))
+                context.fill(Path(ellipseIn: ring), with: .color(low ? Color(hex: 0xD97706) : ROC.blue))
+                let at = vertex(index, (Self.r + Self.gap) / Self.r)
+                label(&context, item.label, at.x, at.y - 3, size: 11, weight: low ? .medium : .regular, color: low ? ROC.warn : ROC.gray)
+                label(&context, "\(item.score)", at.x, at.y + 13, size: 12, weight: .semibold, color: low ? ROC.low : ROC.ink)
             }
         }
-        .accessibilityLabel(abilities.map(text).joined(separator: "，"))
+        .accessibilityLabel(abilities.map { "\($0.label) \($0.score)" }.joined(separator: "，"))
+    }
+}
+
+/// 本场知识点掌握度（Web `WaveChart`）：按作答顺序一题一个点，达标线以上是浅绿的达标区；
+/// 低于 60 的点标橙，最高最低两题加光晕；下面一题一格写题号和题名，点点或题名进单题详情。
+struct RRWave: View {
+    let questions: [MockRV.Question]
+    /// 窄时横轴只留题号
+    var names = true
+    let open: (String) -> Void
+
+    var body: some View {
+        let scores = questions.map { $0.score ?? 0 }
+        let xs = MockWave.xs(scores.count)
+        let points = scores.indices.map { CGPoint(x: xs[$0], y: MockWave.y(scores[$0])) }
+        let calls = MockWave.calls(scores)
+        let best = scores.max() ?? 0, worst = scores.min() ?? 0
+        let step = scores.count > 1 ? xs[1] - xs[0] : MockWave.width
+        let cell = min(step, 160)
+        GeometryReader { geometry in
+            let scale = geometry.size.width / CGFloat(MockWave.width)
+            ZStack(alignment: .topLeading) {
+                RRChart(box: CGRect(x: 0, y: 0, width: MockWave.width, height: MockWave.bottom + 8)) { context in
+                    draw(&context, points: points, scores: scores, calls: calls, best: best, worst: worst)
+                }
+                ForEach(Array(questions.enumerated()), id: \.element.id) { index, q in
+                    Button { open(q.id) } label: { Color.clear.frame(width: 24, height: 24).contentShape(Circle()) }
+                        .buttonStyle(.plain).position(x: points[index].x * scale, y: points[index].y * scale)
+                        .accessibilityLabel("\(q.title) \(scores[index]) 分")
+                    Button { open(q.id) } label: {
+                        VStack(spacing: 0) {
+                            Text(verbatim: "Q\(index + 1)").font(V3.number(10.5, weight: .regular)).foregroundStyle(ROC.faint).frame(height: 15)
+                            if names {
+                                Text(verbatim: q.title).font(V3.sans(12, weight: .medium)).foregroundStyle(ROC.ink).lineLimit(2).multilineTextAlignment(.center)
+                                    .lineHeight(12, 16).truncationMode(.tail)
+                            }
+                        }
+                        .frame(width: max(0, CGFloat(cell) * scale - 12)).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .position(x: CGFloat(xs[index]) * scale, y: CGFloat(MockWave.bottom + 8) * scale + 2 + (names ? 25 : 9))
+                }
+            }
+        }
+        .aspectRatio(MockWave.width / (MockWave.bottom + 8), contentMode: .fit)
+        .padding(.bottom, names ? 52 : 20)
+    }
+
+    private func draw(_ context: inout GraphicsContext, points: [CGPoint], scores: [Int], calls: [MockWave.Call], best: Int, worst: Int) {
+        let w = MockWave.width, left = MockWave.left, bottom = MockWave.bottom, pass = MockWave.pass
+        let passY = MockWave.y(pass)
+        let green = Color(hex: 0x4D8B68)
+        context.fill(Path(CGRect(x: left, y: MockWave.top, width: w - left, height: passY - MockWave.top)), with: .color(Color(hex: 0xF2FBF5)))
+        let hline = { (y: Double) in Path { $0.move(to: CGPoint(x: left, y: y)); $0.addLine(to: CGPoint(x: w, y: y)) } }
+        context.stroke(hline(MockWave.y(25)), with: .color(ROC.thin))
+        context.stroke(hline(bottom), with: .color(ROC.line))
+        context.stroke(hline(passY), with: .color(Color(hex: 0xB7DEC5)), style: StrokeStyle(lineWidth: 1.2, dash: [4, 3]))
+        for value in [100, 25, 0] { label(&context, "\(value)", 24, MockWave.y(value) + 4, size: 10.5, color: ROC.faint, anchor: .trailing) }
+        label(&context, "\(pass)", 24, passY + 4, size: 10.5, weight: .medium, color: green, anchor: .trailing)
+        // 右端的“达标线”名字和最右一题的分数挤在一起时，名字挪到线下面
+        let crowded = calls.contains { $0.x > w - 130 && abs($0.y - (passY - 6)) < 16 }
+        label(&context, "达标线 \(pass)", w - 8, crowded ? passY + 14 : passY - 6, size: 10.5, weight: .medium, color: green, anchor: .trailing)
+        if points.count > 1 {
+            let tangents = MockWave.tangents(points.map { (x: Double($0.x), y: Double($0.y)) })
+            var line = Path()
+            line.move(to: points[0])
+            for i in 0..<(points.count - 1) {
+                let p = points[i], q = points[i + 1], dx = (q.x - p.x) / 3
+                line.addCurve(to: q, control1: CGPoint(x: p.x + dx, y: p.y + CGFloat(tangents[i]) * dx), control2: CGPoint(x: q.x - dx, y: q.y - CGFloat(tangents[i + 1]) * dx))
+            }
+            var area = line
+            area.addLine(to: CGPoint(x: points[points.count - 1].x, y: bottom)); area.addLine(to: CGPoint(x: points[0].x, y: bottom)); area.closeSubpath()
+            context.fill(area, with: .linearGradient(Gradient(colors: [ROC.blue.opacity(0.1), ROC.blue.opacity(0.01)]), startPoint: CGPoint(x: 0, y: MockWave.top), endPoint: CGPoint(x: 0, y: bottom)))
+            context.stroke(line, with: .color(ROC.blue), style: StrokeStyle(lineWidth: 2.4, lineCap: .round))
+        }
+        for (index, point) in points.enumerated() {
+            let score = scores[index], low = score < pass
+            let halo = points.count > 1 && (score == best || score == worst) && best != worst
+            if halo {
+                context.fill(Path(ellipseIn: CGRect(x: point.x - 10, y: point.y - 10, width: 20, height: 20)), with: .color(low ? Color(hex: 0xFEF3C7).opacity(0.9) : Color(hex: 0xDBEAFE).opacity(0.7)))
+            }
+            let dot = CGRect(x: point.x - 5, y: point.y - 5, width: 10, height: 10)
+            context.fill(Path(ellipseIn: dot.insetBy(dx: -1, dy: -1)), with: .color(.white))
+            context.fill(Path(ellipseIn: dot.insetBy(dx: 1, dy: 1)), with: .color(low ? Color(hex: 0xD97706) : ROC.blue))
+            let call = calls[index]
+            let anchor: UnitPoint = call.anchor == .start ? .leading : call.anchor == .end ? .trailing : .center
+            label(&context, "\(score)", call.x, call.y, size: 12.5, weight: .semibold, color: low ? ROC.low : score == best && halo ? ROC.blue : ROC.ink, anchor: anchor)
+        }
     }
 }
 

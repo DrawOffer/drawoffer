@@ -53,25 +53,8 @@ private let document = """
     #expect(settings.pageMargin == 10 && settings.verticalPageMargin == 12)
 }
 
-@Test func textRunsKeepValueInSyncAndDropPlainRuns() throws {
-    let bold = ResumeDocument.textRun("张", marks: ["bold"])
-    let plain = ResumeDocument.textRun("三")
-    let value = try #require(ResumeDocument.setTextRuns(nil, [bold, plain, ResumeDocument.textRun("")]))
-    #expect(value.text("value") == "张三")
-    #expect(value["runs"]?.items.count == 2)
-    let flattened = try #require(ResumeDocument.setTextRuns(value, [ResumeDocument.textRun("张"), ResumeDocument.textRun("三")]))
-    #expect(flattened.text("value") == "张三" && flattened["runs"] == nil && flattened.text("node_id") == value.text("node_id"))
-    #expect(ResumeDocument.setTextRuns(value, []) == nil)
-    let merged = ResumeDocument.normalizeRuns([plain, plain, .object(["inline_type": .string("icon"), "name": .string("Mail")]), plain])
-    #expect(merged.count == 3 && merged[0].text("text") == "三三")
-}
-
-@Test func collegeIsAnEditableEntryField() throws {
+@Test func collegeIsAnEditableEntryField() {
     #expect(ResumeDocument.entryFields.contains { $0.key == "college" && $0.label == "学院" })
-    let college = try #require(ResumeDocument.setTextRuns(nil, [ResumeDocument.textRun("计算机学院")]))
-    let changed = try #require(ResumeDocument.setTextRuns(college, [ResumeDocument.textRun("软件学院")]))
-    #expect(changed.text("value") == "软件学院")
-    #expect(changed.text("node_id") == college.text("node_id"))
 }
 
 @Test func sectionOrderRestoresCanonicalKinds() throws {
@@ -79,13 +62,7 @@ private let document = """
     #expect(ResumeSectionOrder.restoreDefault(sections).map { $0.text("node_id") } == ["node_profile", "node_work", "node_skills"])
 }
 
-@Test func newBlocksMatchCanonicalShapes() {
-    let pair = ResumeDocument.newRow(kind: "pair")
-    #expect(pair["cells"]?.items.count == 2 && pair["left_width_percent"]?.numberValue == 50)
-    #expect(ResumeDocument.newRow(kind: "meta")["left_width_percent"] == .null)
-    #expect(ResumeDocument.newImage(src: "/api/resumes/1/assets/a.png", alt: nil)["width_unit"]?.stringValue == "%")
-    #expect(ResumeDocument.validImageSource("/api/resumes/1/assets/a.png"))
-    #expect(!ResumeDocument.validImageSource("file:///tmp/a.png"))
+@Test func avatarMatchesCanonicalShape() {
     let avatar = ResumeDocument.avatar(nil, src: "/api/resumes/1/assets/a.png")
     #expect(avatar["width"]?.numberValue == 96 && avatar["align"] == .null && avatar.text("media_kind") == "avatar")
 }

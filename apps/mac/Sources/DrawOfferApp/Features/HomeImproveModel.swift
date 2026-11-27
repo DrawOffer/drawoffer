@@ -7,7 +7,6 @@ import SwiftUI
 final class HomeImproveModel {
     enum State { case loading, failed, ready(HomeInput) }
     private(set) var state: State = .loading
-    var profile: JSONValue?
     private var owner = ""
     private var disclosed = ""
 
@@ -29,7 +28,6 @@ final class HomeImproveModel {
             let resumeList = try await resumes
             let (datasetJSON, sessionJSON, homeJSON, profileJSON) = await (datasets, sessions, home, profile)
             guard owner == account else { return }
-            self.profile = profileJSON
             state = .ready(HomeInput(
                 now: now, home: homeJSON.map(MemoryHome.init(json:)),
                 resumes: resumeList.map { HomeResume(id: $0.id, title: $0.title, updatedAt: $0.updatedAt) },
@@ -51,15 +49,6 @@ final class HomeImproveModel {
         Task {
             do { _ = try await api.careerRequest(path: "/api/memory/home/disclosures", method: "POST", query: [:], body: .object(["issues": .array(keys.map(JSONValue.string))])) }
             catch { if disclosed == signature { disclosed = "" } }
-        }
-    }
-
-    func updateProfile(_ value: JSONValue) {
-        profile = value
-        if case .ready(var input) = state {
-            input.directions = (value["job_directions"]?.items ?? []).compactMap(\.stringValue)
-            input.targetRole = value.text("target_role")
-            state = .ready(input)
         }
     }
 }

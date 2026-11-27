@@ -33,8 +33,11 @@ import Testing
     #expect(deck.stations.map(\.short) == ["投递", "筛选"])
     #expect(deck.current?.title == "简历筛选")
     #expect(deck.days == 3 && deck.daysLabel == "已投递")
-    let line = deck.line(now: now)
-    #expect(line.next == "下一站")
-    guard case .wait(let label, _) = line.stations[1].rows[1] else { Issue.record("expected wait row"); return }
-    #expect(label == "等筛选 · 第 3 天")
+    let timeline = CareerJourney.timeline(application: app, deck: deck, now: now)
+    #expect(timeline.head == "从投递到现在 · 3 天")
+    #expect(timeline.nodes.map(\.label) == ["投递", "筛选", "笔试 / 测评", "面试", "Offer"])
+    #expect(timeline.nodes[1].line == "已等 3 天")
+    // 筛选没有场次，不画「今天」
+    #expect(timeline.today == nil && timeline.todayNode == nil)
+    #expect(timeline.segments.map(\.style) == [.current, .future, .future, .future])
 }

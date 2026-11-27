@@ -9,6 +9,15 @@ public sealed class ResumeEditingTests
 {
     static JsonNode J(string source) => JsonNode.Parse(source)!;
 
+    /// <summary>纯文字 run（测试数据；格式与编辑器写入的一致）。</summary>
+    static JsonObject TextRun(string text, IEnumerable<string>? marks = null) => new()
+    {
+        ["inline_type"] = "text", ["text"] = text,
+        ["marks"] = new JsonArray((marks ?? []).Select(x => (JsonNode?)JsonValue.Create(x)).ToArray()),
+        ["href"] = null,
+        ["style"] = new JsonObject { ["color"] = null, ["font_size_pt"] = null, ["highlight_color"] = null },
+    };
+
     const string TwoColumnStyle = """
 {"schema_version":"resume-presentation.v1","portable":{"smart_one_page":false},"template_scoped":{},
  "template_snapshot":{"template_key":"fixture-two","regions":[{"region_id":"side","region_kind":"sidebar","order":1},{"region_id":"main","region_kind":"main","order":2}],
@@ -69,13 +78,13 @@ public sealed class ResumeEditingTests
     [Fact]
     public void TextRunsKeepValueInSyncAndDropPlainRuns()
     {
-        var bold = ResumeDocument.TextRun("张", ["bold"]);
-        var plain = ResumeDocument.TextRun("三");
-        var value = ResumeDocument.SetTextRuns(null, [bold, plain, ResumeDocument.TextRun("")]);
+        var bold = TextRun("张", ["bold"]);
+        var plain = TextRun("三");
+        var value = ResumeDocument.SetTextRuns(null, [bold, plain, TextRun("")]);
         Assert.NotNull(value);
         Assert.Equal("张三", value.Text("value"));
         Assert.Equal(2, value["runs"]!.AsArray().Count);
-        var flattened = ResumeDocument.SetTextRuns(value, [ResumeDocument.TextRun("张"), ResumeDocument.TextRun("三")]);
+        var flattened = ResumeDocument.SetTextRuns(value, [TextRun("张"), TextRun("三")]);
         Assert.NotNull(flattened);
         Assert.True(flattened.Text("value") == "张三" && !((JsonObject)flattened).ContainsKey("runs") && flattened.Text("node_id") == value.Text("node_id"));
         Assert.Null(ResumeDocument.SetTextRuns(value, []));
@@ -87,9 +96,9 @@ public sealed class ResumeEditingTests
     public void CollegeIsAnEditableEntryField()
     {
         Assert.Contains(ResumeDocument.EntryFields, x => x.Key == "college" && x.Label == "学院");
-        var college = ResumeDocument.SetTextRuns(null, [ResumeDocument.TextRun("计算机学院")]);
+        var college = ResumeDocument.SetTextRuns(null, [TextRun("计算机学院")]);
         Assert.NotNull(college);
-        var changed = ResumeDocument.SetTextRuns(college, [ResumeDocument.TextRun("软件学院")]);
+        var changed = ResumeDocument.SetTextRuns(college, [TextRun("软件学院")]);
         Assert.NotNull(changed);
         Assert.Equal("软件学院", changed.Text("value"));
         Assert.Equal(college.Text("node_id"), changed.Text("node_id"));
@@ -100,20 +109,6 @@ public sealed class ResumeEditingTests
     {
         var sections = J(Document)["sections"]!.AsArray().ToList();
         Assert.Equal(["node_profile", "node_work", "node_skills"], ResumeSectionOrder.RestoreDefault(sections).Select(x => x.Text("node_id")));
-    }
-
-    [Fact]
-    public void NewBlocksMatchCanonicalShapes()
-    {
-        var pair = ResumeDocument.NewRow("pair");
-        Assert.True(pair["cells"]!.AsArray().Count == 2 && pair.Number("left_width_percent") == 50);
-        var meta = ResumeDocument.NewRow("meta");
-        Assert.True(meta.ContainsKey("left_width_percent") && meta["left_width_percent"] is null);
-        Assert.Equal("%", ResumeDocument.NewImage("/api/resumes/1/assets/a.png", null)["width_unit"].String());
-        Assert.True(ResumeDocument.ValidImageSource("/api/resumes/1/assets/a.png"));
-        Assert.False(ResumeDocument.ValidImageSource("file:///tmp/a.png"));
-        var avatar = ResumeDocument.Avatar(null, "/api/resumes/1/assets/a.png");
-        Assert.True(avatar.Number("width") == 96 && avatar.ContainsKey("align") && avatar["align"] is null && avatar.Text("media_kind") == "avatar");
     }
 
     [Fact]

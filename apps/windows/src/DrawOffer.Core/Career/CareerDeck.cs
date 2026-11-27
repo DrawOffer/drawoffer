@@ -17,23 +17,6 @@ public enum CareerDeckEndedKind { Rejected, Accepted, Withdrew, Declined, Other 
 
 public sealed record CareerDeckEnded(CareerDeckEndedKind Kind, DateTimeOffset At);
 
-public enum CareerLineTone { Done, Cur, Wait, Next, None }
-
-public enum CareerLineStop { Done, Current, Failed, Offer, Ended }
-
-/// <summary>站点线的一行（Swift `CareerLineRow` 枚举）。</summary>
-public abstract record CareerLineRow(CareerLineTone Tone)
-{
-    public sealed record Stop(CareerLineStop Kind, CareerLineTone Tone) : CareerLineRow(Tone);
-    public sealed record Span(int Days, CareerLineTone Tone) : CareerLineRow(Tone);
-    public sealed record Event(string Text, string? Detail, bool Upcoming, CareerLineTone Tone) : CareerLineRow(Tone);
-    public sealed record Wait(string Label, CareerLineTone Tone) : CareerLineRow(Tone);
-    public sealed record Today(string Label, CareerLineTone Tone) : CareerLineRow(Tone);
-}
-
-/// <param name="Next">当前站之后的空心站；投递结束后为 null。</param>
-public sealed record CareerLine(IReadOnlyList<(CareerStation Station, IReadOnlyList<CareerLineRow> Rows)> Stations, string? Next);
-
 public static class CareerDeckFormat
 {
     public static string Two(int value) => value < 10 ? "0" + value : value.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -235,81 +218,4 @@ public sealed class CareerDeck
     }
 
     // 左侧站点线
-
-    internal static DateTimeOffset? SessionDay(JsonNode? session)
-    {
-        if (session is null || session.Text("status") == "cancelled") return null;
-        if (session.Text("schedule_kind") == "open_window")
-            return new[] { session.Text("answer_plan_start_at"), session.Text("completed_at"), session.Text("end_at") }.Select(CareerApplication.Date).FirstOrDefault(x => x is not null);
-        return CareerApplication.Date(session.Text("start_at"));
-    }
-
-    (string Text, string? Detail) Event(CareerStation station, JsonNode session, DateTimeOffset at)
-    {
-        string md = CareerDeckFormat.MonthDay(at, _zone), clock = CareerDeckFormat.Clock(at, _zone);
-        if (station.Kind == CareerStationKind.Written)
-            return (session.Text("schedule_kind") == "open_window" ? $"{md} 作答" : $"{md} 笔试 {clock}", null);
-        var mode = session.Text("mode") switch { "video" => "视频", "onsite" => "现场", "phone" => "电话", _ => "其他方式" };
-        var minutes = (int)SwiftText.Rounded(((CareerApplication.Date(session.Text("end_at")) ?? at) - (CareerApplication.Date(session.Text("start_at")) ?? at)).TotalSeconds / 60);
-        return ($"{md} 面试 {clock}", minutes > 0 ? $"{mode} · {minutes} 分钟" : mode);
-    }
-
-    public CareerLine Line(DateTimeOffset now)
-    {
-        var today = new CareerLineRow.Today(CareerDeckFormat.MonthDay(now, _zone), CareerLineTone.Next);
-        var result = new List<(CareerStation, IReadOnlyList<CareerLineRow>)>();
-        int Count(DateTimeOffset from, DateTimeOffset to) => CareerDeckFormat.DayCount(from, to, _zone);
-        for (var position = 0; position < Stations.Count; position++)
-        {
-            var station = Stations[position];
-            if (position + 1 < Stations.Count)
-            {
-                var next = Stations[position + 1];
-                result.Add((station, [new CareerLineRow.Stop(station.Result == "rejected" ? CareerLineStop.Failed : CareerLineStop.Done, CareerLineTone.Done), new CareerLineRow.Span(Count(station.Start, next.Start), CareerLineTone.Done)]));
-                continue;
-            }
-            if (Ended is { } ended)
-            {
-                var stop = ended.Kind == CareerDeckEndedKind.Rejected ? CareerLineStop.Failed : ended.Kind == CareerDeckEndedKind.Accepted ? CareerLineStop.Offer : CareerLineStop.Ended;
-                result.Add((station, [new CareerLineRow.Stop(stop, CareerLineTone.None)]));
-                continue;
-            }
-            var rows = new List<CareerLineRow>();
-            var session = station.Kind is CareerStationKind.Written or CareerStationKind.Interview ? station.Session : null;
-            if (session is not null && SessionDay(session) is { } upcomingAt && session.Text("status") == "scheduled" && upcomingAt > now)
-            {
-                // 还没到的笔试 / 面试：先到今天，再虚线走到那一天
-                var (text, detail) = Event(station, session, upcomingAt);
-                var sofar = Count(station.Start, now);
-                rows.Add(new CareerLineRow.Stop(CareerLineStop.Current, CareerLineTone.Cur));
-                if (sofar > 0) rows.Add(new CareerLineRow.Span(sofar, CareerLineTone.Cur));
-                rows.Add(today);
-                rows.Add(new CareerLineRow.Span(Count(now, upcomingAt), CareerLineTone.Next));
-                rows.Add(new CareerLineRow.Event(text, detail, true, CareerLineTone.Next));
-            }
-            else if (session is not null && SessionDay(session) is { } pastAt)
-            {
-                var (text, detail) = Event(station, session, pastAt);
-                int before = Count(station.Start, pastAt), waited = Count(pastAt, now);
-                rows.Add(new CareerLineRow.Stop(CareerLineStop.Current, CareerLineTone.Cur));
-                if (before > 0) rows.Add(new CareerLineRow.Span(before, CareerLineTone.Cur));
-                rows.Add(new CareerLineRow.Event(text, detail, false, waited > 0 ? CareerLineTone.Wait : CareerLineTone.Next));
-                if (waited > 0) rows.Add(new CareerLineRow.Wait($"等结果 · 第 {waited} 天", CareerLineTone.Wait));
-                rows.Add(today);
-            }
-            else
-            {
-                var waited = Count(station.Start, now);
-                string? label = station.Kind == CareerStationKind.Apply && Pending ? $"还没投递 · 已导入 {waited} 天"
-                    : station.Kind == CareerStationKind.Screening ? $"等筛选 · 第 {waited} 天" : null;
-                rows.Add(new CareerLineRow.Stop(CareerLineStop.Current, label is not null && waited > 0 ? CareerLineTone.Wait : waited > 0 ? CareerLineTone.Cur : CareerLineTone.Next));
-                if (label is not null && waited > 0) rows.Add(new CareerLineRow.Wait(label, CareerLineTone.Wait));
-                else if (waited > 0) rows.Add(new CareerLineRow.Span(waited, CareerLineTone.Cur));
-                rows.Add(today);
-            }
-            result.Add((station, rows));
-        }
-        var last = Stations[^1];
-        return new CareerLine(result, Ended is not null ? null : last.Kind == CareerStationKind.Offer ? "做决定" : Pending ? "投递" : "下一站");
-    }
 }

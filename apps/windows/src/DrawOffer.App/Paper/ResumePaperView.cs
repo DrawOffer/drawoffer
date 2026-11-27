@@ -35,12 +35,6 @@ public sealed partial class ResumePaperView : UserControl
         };
     }
 
-    public void Clear()
-    {
-        _pending = null;
-        if (_ready) _ = _webView.CoreWebView2.ExecuteScriptAsync("window.drawoffer.clear()");
-    }
-
     public void Render(ResumeRenderRequest request)
     {
         _pending = request.ToJson();

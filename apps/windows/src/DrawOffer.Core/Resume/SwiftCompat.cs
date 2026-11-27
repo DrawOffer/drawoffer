@@ -40,10 +40,6 @@ internal static class SwiftCompat
     /// <summary>Swift `nilIfBlank`：修剪后为空时为 null，否则返回原串（不修剪）。</summary>
     public static string? NilIfBlank(string s) => Trimmed(s).Length == 0 ? null : s;
 
-    /// <summary>`Character.isWhitespace`：字素首个标量具有 Unicode White_Space 属性。</summary>
-    public static bool IsWhitespaceScalar(int value) => value is >= 0x09 and <= 0x0D or 0x20 or 0x85 or 0xA0 or 0x1680 or >= 0x2000 and <= 0x200A
-        or 0x2028 or 0x2029 or 0x202F or 0x205F or 0x3000;
-
     // MARK: 字素（Swift Character）
 
     /// <summary>字符串的扩展字素簇。</summary>
@@ -83,9 +79,6 @@ internal static class SwiftCompat
         }
         return "";
     }
-
-    /// <summary>字素数与 Swift 相同的“非空白字符数”：`s.filter { !$0.isWhitespace }.count`。</summary>
-    public static int CountNonWhitespace(string s) => Graphemes(s).Count(g => !IsWhitespaceScalar(char.ConvertToUtf32(g, 0)));
 
     static HashSet<int> Boundaries(string s)
     {
@@ -207,7 +200,6 @@ internal static class SwiftCompat
     /// 换算到任意时区或取当天零点时不会越界。
     /// </summary>
     public static readonly DateTimeOffset DistantPast = DateTimeOffset.MinValue.AddDays(2);
-    public static readonly DateTimeOffset DistantFuture = DateTimeOffset.MaxValue.AddDays(-2);
 
     static readonly Regex IsoPattern = new(@"^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})T([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2})(?:\.([0-9]+))?(Z|z|([+-])([0-9]{1,2})(?::?([0-9]{1,2}))?)$", RegexOptions.CultureInvariant);
     static readonly Regex LocalPattern = new(@"^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})T([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2})(?:\.([0-9]{1,9}))?[ \t]*$", RegexOptions.CultureInvariant);
@@ -329,26 +321,6 @@ internal static class SwiftCompat
     /// <summary>Swift `max(x, y)`：`y &gt;= x ? y : x`。</summary>
     public static double Max(double x, double y) => y >= x ? y : x;
 
-    /// <summary>Swift `Sequence.min()`：逐个用 `&lt;` 比较，保留最先的最小值。</summary>
-    public static double Least(IEnumerable<double> values)
-    {
-        using var e = values.GetEnumerator();
-        if (!e.MoveNext()) throw new InvalidOperationException("empty sequence");
-        var result = e.Current;
-        while (e.MoveNext()) if (e.Current < result) result = e.Current;
-        return result;
-    }
-
-    /// <summary>Swift `Sequence.max()`。</summary>
-    public static double Most(IEnumerable<double> values)
-    {
-        using var e = values.GetEnumerator();
-        if (!e.MoveNext()) throw new InvalidOperationException("empty sequence");
-        var result = e.Current;
-        while (e.MoveNext()) if (result < e.Current) result = e.Current;
-        return result;
-    }
-
     /// <summary>Swift `hasPrefix`：按字素比较，前缀必须结束在字素边界上；空前缀永远为 true。</summary>
     public static bool HasPrefix(string s, string prefix) =>
         prefix.Length == 0 || s.StartsWith(prefix, StringComparison.Ordinal) && (s.Length == prefix.Length || Boundaries(s).Contains(prefix.Length));
@@ -420,9 +392,6 @@ internal static class SwiftCompat
     /// 不是数组时为空。
     /// </summary>
     public static List<JsonNode?> Arr(JsonNode? node) => node is JsonArray array ? array.ToList() : [];
-
-    /// <summary>`json[key]?.items`：键不存在为 null，存在但不是数组为空表。</summary>
-    public static List<JsonNode?>? ArrOpt(JsonNode? node, string key) => HasKey(node, key) ? Arr(node![key]) : null;
 
     /// <summary>对象里是否有这个键（值为 JSON null 也算有）。Swift `json[key] != nil`。</summary>
     public static bool HasKey(JsonNode? node, string key) => node is JsonObject obj && obj.ContainsKey(key);

@@ -6,124 +6,33 @@ namespace DrawOffer.Core.Tests;
 
 public class MockRulesTests
 {
-    [Fact] public void EmptyFallbacksAndUnicodeQuoteFollowMac()
-    {
-        var empty = J("{}"); var home = MockMap.HomePoints(null,null,null,"technical"); Assert.Empty(home.Points); Assert.Equal(6,home.Sectors.Count); Assert.Null(MockLayout.SlotsOf(empty,[]));
-        var map = MockSession.MapOf(empty,[],[],null,null,MockSession.Phase.Done); Assert.Null(map.Bounds); Assert.Null(MockSession.LayoutOf(map,3,true)); Assert.Null(MockReview.OverviewMapOf([]));
-        Assert.Equal(("前", "é", "后"),MockSession.SplitQuoted("前é后","é")); Assert.Null(MockSession.SplitQuoted("é","e")); Assert.Null(MockSession.SourceChip(J("""{"kind":"follow_up","anchor":"原话"}""")));
-        var item = new MockInterview(J("""{"id":1,"questions":false,"status":null}""")); Assert.Equal("",item.Id); Assert.Empty(item.Questions); Assert.Null(item.Current);
-        Assert.Equal(3,MockMap.SlotXs(3).Count); Assert.Equal(new double[]{497.5,892.5},MockSession.BeadXs(2));
-        Assert.Equal(668,MockMap.ArcY(1151,668)(575.5)); Assert.Equal(225-22.5,new MockMap.Geo(0,0,1).ROf(1)); Assert.Equal(180,new MockMap.Geo(0,0,1).RingOf(1));
-    }
-    [Fact] public void ProjectDeepDiveOffsetsAndStageChainMatchMac()
-    {
-        var outline=J("""{"enabled":true,"hooks":[{"id":1,"text":"第一个项目","held":{"status":"untested"}},{"id":2,"text":"第二个项目","held":{"status":"untested"}}]}""");
-        var (points,_)=MockMap.HomePoints(null,outline,null,"project_deep_dive"); Assert.Equal(new double[]{88,140},points.Select(p=>p.Point.Angle)); Assert.Equal(new double[]{0,-22},points.Select(p=>p.Point.Offset));
-        var g=new MockMap.Geo(0,0,1); Assert.NotEqual(MockMap.Place(g,points.Select(p=>p.Point))[1].X,MockLayout.PlaceOnMap(g,points.Select(p=>p.Point))[1].X);
-        var app=J("""{"current_stage":{"id":3},"stages":[{"id":1,"stage_type":"screening","sequence_no":1},{"id":2,"stage_type":"interview","sequence_no":2,"stage_label":"一面","stage_result":"passed"},{"id":3,"stage_type":"interview","sequence_no":3,"stage_label":"二面"}]}""");
-        var chain=MockMap.StageChain(app,null,DateTimeOffset.UtcNow); Assert.Equal(new[]{"投递","一面","二面","HR","Offer"},chain.Select(c=>c.Label)); Assert.Equal(MockMap.ChainTone.Now,chain[2].Tone);
-    }
-    static double R(double value) => Math.Round(value, 2, MidpointRounding.AwayFromZero);
     static JsonNode J(string value) => JsonNode.Parse(value)!;
 
-    [Fact] public void HomePointsAndPriorityMatchMacFixture()
+    [Fact] public void LiveSessionMatchesMac()
     {
-        var f = Fixture; var (points, sectors) = MockMap.HomePoints(f["atlas"], f["outline"], f["match"], "comprehensive");
-        Assert.Equal(new[] { "j:r1", "n:cache", "n:index", "n:react", "n:tcp", "e:青舟软件有限公司", "e:样例实验室", "n:talk" }, points.Select(p => p.Point.Id));
-        Assert.Equal(new double[] { -136, -120, -104, -60, 0, 108, 132, 180 }, points.Select(p => p.Point.Angle));
-        Assert.Equal(new[] { "后端", "前端", "网络", "__empty_3", "项目经历", "表达" }, sectors.Select(s => s.Name));
-        Assert.Equal("n:react", MockMap.SuggestFocus(points, 3)?.Point.Id);
-        var subs = MockMap.PointSubs(points, 3, "n:cache"); Assert.Contains("示例科技一面只答到", subs["n:cache"].Text); Assert.Equal(MockMap.SubTone.Orange, subs["j:r1"].Tone);
-        Assert.Null(MockMap.SuggestFocus(points.Where(p => p.Point.Level >= 3).ToList(), 3));
-    }
-    [Fact] public void HomeCollisionPlacementMatchesMacCoordinates()
-    {
-        var f = Fixture; var (points, sectors) = MockMap.HomePoints(f["atlas"], f["outline"], f["match"], "comprehensive");
-        var lay = MockLayout.HomeMap(MockMap.Place(new(770, 316, 1), points.Select(p => p.Point)), sectors, 3, "中级目标线 · 要答到「掌握」", new() { [points[0].Point.Id] = "差 1 层" }, ["n:react"], true);
-        var expected = new Dictionary<string, (double L, double T)> { ["n:react"] = (886.81,108.07), ["j:r1"] = (531,101.12), ["n:cache"] = (619.14,151.99), ["e:青舟软件有限公司"] = (614.72,476.4), ["e:样例实验室"] = (531.95,510.91), ["n:talk"] = (536,307.5), ["n:index"] = (712.03,174.84), ["n:tcp"] = (1028.61,326.61) };
-        Assert.Equal(expected.Count, lay.Labels.Count); foreach (var (id, box) in expected) Assert.Equal(box, (R(lay.Labels[id].Box.L), R(lay.Labels[id].Box.T)));
-        Assert.Equal((628,70.05), (R(lay.Sectors["后端"].X),R(lay.Sectors["后端"].Y)));
-    }
-    [Fact] public void SessionSlotsGroupPathAndCoordinatesMatchMac()
-    {
-        var f = Fixture; var (points, _) = MockMap.HomePoints(f["atlas"], f["outline"], f["match"], "comprehensive"); var slots = MockLayout.SlotsOf(f["detail"], points.Select(p => p.Point).ToList())!;
-        Assert.Equal(new[] { "q:11", "q:13", "q:14" }, slots.Points.Select(p => p.Id)); Assert.Equal(new double[] { -150, 90, -30 }, slots.Points.Select(p => p.Angle)); Assert.Equal(new double[] { -210, 30 }, slots.Bounds);
-        Assert.Equal(new[] { new MockMap.PathStep("q:11",2,3,true), new MockMap.PathStep("q:13",2,3,false), new MockMap.PathStep("q:14",1,1,false) }, slots.Path);
-        var lay = MockLayout.HomeSession(slots, 3, "中级目标线 · 要答到「掌握」"); Assert.Equal((600.47,270.36), (R(lay.Labels["q:11"].Box.L),R(lay.Labels["q:11"].Box.T))); Assert.Equal((780.61,439.11), (R(lay.Labels["q:13"].Box.L),R(lay.Labels["q:13"].Box.T)));
-    }
-    [Theory] [InlineData(MockSession.Phase.Thinking, "? 掌握 · 口径统一靠什么机制", 779.64)] [InlineData(MockSession.Phase.Asking, "追问 · 掌握", 830.54)]
-    public void LiveSessionMatchesMac(MockSession.Phase phase, string annotation, double left)
-    {
-        var f = Fixture; var d = Live; var (points, sectors) = MockMap.HomePoints(f["atlas"], f["outline"], null, "technical"); var current = MockSession.Current(d);
-        Assert.Equal("示例科技 一面准备 · 文字面试",MockSession.Heading(d)); Assert.Equal("专业面 · 中级 · 4 题 · 先问 缓存一致性",MockSession.Subtitle(d)); Assert.Equal("第 2 / 4 题 · 追问 1 次",MockSession.Progress(d,current));
-        Assert.Equal(new[] { MockSession.BeadState.Done, MockSession.BeadState.Now, MockSession.BeadState.Todo, MockSession.BeadState.Todo },MockSession.Beads(d,current).Select(b=>b.State));
-        var map = MockSession.MapOf(d,points.Select(p=>p.Point).ToList(),sectors,null,current,phase); Assert.Equal(150,map.Rotation); Assert.Equal("q:13",map.Now); Assert.Equal(new double[] { 0,180 },map.Points.Select(p=>p.Angle)); Assert.Null(map.Path[1].Ok);
-        Assert.Equal(new[] { "✓ 熟悉 · 分了 ODS/DWD 两层", annotation },map.Annotations.Select(a=>a.Text)); var lay = MockSession.LayoutOf(map,3,false)!; Assert.Single(lay.Labels); Assert.Equal((left,339.21),(R(lay.Labels["q:13"].Box.L),R(lay.Labels["q:13"].Box.T)));
+        var d = Live;
         Assert.True(MockSession.HasAnswered(d)); Assert.Equal("15",MockSession.LastAsked(d)!.Display("id"));
     }
-    [Fact] public void ReviewTransformationAndOverviewMatchMac()
+    [Fact] public void ReviewStatsMatchMac()
     {
-        var d = Done["mock_interview"]!; var report = d["report"]!; var rows = MockReview.Rows(d,report); var view = MockReview.ViewOf(d,report,rows,"T","S");
-        Assert.Equal(new[] { MockReview.Outcome.Reached, MockReview.Outcome.OneShort, MockReview.Outcome.Missed, MockReview.Outcome.Missed, MockReview.Outcome.Reached },view.Questions.Select(q=>q.Outcome));
-        Assert.Equal(new[] { "2 / 5 道", "2 道", "2 次" },view.Stats.Select(s=>s.Value)); Assert.Equal("接近目标",view.Verdict?.Text); Assert.Equal("中级目标线 · 要答进「掌握」",view.TargetLabel);
-        Assert.Equal(new int?[] { 4,3,2,4,null },view.Dimensions.Select(s=>s.Steps)); Assert.Equal(new int?[] { 1,3,2,5,null },view.Dimensions.Select(s=>s.EvidenceNo)); Assert.True(view.Actions[1].Done); Assert.Equal(new[] { 3,4,2 },MockReview.Weak(view).Select(q=>q.No));
-        var map = MockReview.OverviewMapOf(view.Questions)!; Assert.Equal(new double[] { -150,-6,138,-78,66 },map.Points.Select(p=>p.Angle)); Assert.Equal(new double[] { -186,-42,102 },map.Bounds); Assert.Equal(new double[] { 3,3,2,1,3 },map.Points.Select(p=>p.Level));
-        var lay = MockLayout.OverviewLayout(map.Points,map.Sectors,map.Path,0,view.Target,view.TargetLabel); Assert.Equal((625.34,257.17),(R(lay.Labels["11"].Box.L),R(lay.Labels["11"].Box.T))); Assert.Equal((906.9,299.44),(R(lay.Labels["13"].Box.L),R(lay.Labels["13"].Box.T)));
-        Assert.Equal(6,MockReview.Record(d).Count); Assert.Equal(26,MockMap.StatsOf(d).Minutes);
+        var d = Done["mock_interview"]!;
+        Assert.Equal(26,MockMap.StatsOf(d).Minutes);
     }
-    [Fact] public void LatestEvaluationMergesWithoutReplacingIdentityOrMutatingReport()
-    {
-        var detail = J("""{"questions":[{"id":1,"kind":"main","sequence_no":2,"evaluation":{"score":82.5,"sequence_no":999,"topic":"changed","outcome":"reached"}}]}"""); var report = J("""{"questions":[{"sequence_no":2,"topic":"original","score":20}]}""");
-        var rows = MockReview.Rows(detail,report); Assert.Equal("original",rows[0].Evaluation.Text("topic")); Assert.Equal(2,rows[0].Evaluation.Integer("sequence_no")); Assert.Equal(20,report["questions"]![0].Integer("score")); Assert.Equal(83,MockReview.ViewOf(detail,report,rows,"","").Questions[0].Score);
-        Assert.Null(MockReview.Rows(detail,J("{}"))[0].Evaluation);
-    }
-    [Fact] public void BeijingDatesTargetSelectionAndHorizonDelta()
+    [Fact] public void BeijingDatesAndTargetSelection()
     {
         var now = DateTimeOffset.Parse("2026-11-02T15:30:00Z"); var tomorrow = DateTimeOffset.Parse("2026-11-02T16:30:00Z"); Assert.Equal(1,MockMap.DayDiff(now,tomorrow)); Assert.Equal("明天",MockMap.RelativeDay(tomorrow,now)); Assert.Equal("今晚",MockMap.RelativeDay(now,now)); Assert.Equal("00:30",MockMap.Hhmm(tomorrow)); Assert.Equal("11·03",MockMap.MmddDot(tomorrow));
         var apps=J("""[{"id":1,"status":"active","job_description_id":1,"current_stage_type":"interview"},{"id":2,"status":"active","job_description_id":2,"current_stage_type":"offer"}]""").Items();
         var sessions=J("""[{"application_id":1,"status":"scheduled","start_at":"2026-11-03T01:00:00Z","end_at":"2026-11-03T02:00:00Z"}]""").Items(); Assert.Equal(MockMap.TargetKind.Interview,MockMap.PickTarget(apps,sessions,now,null).Kind); Assert.Equal("2",MockMap.PickTarget(apps,[],now,null).Application.Display("id")); Assert.Equal(MockMap.TargetKind.General,MockMap.PickTarget(apps,sessions,now,"general").Kind);
-        var history=J("""[{"id":"a","status":"completed","difficulty":"intermediate","total_score":62.5,"finished_at":"2026-10-31T16:01:00Z"},{"id":"b","status":"abandoned","difficulty":"intermediate","finished_at":"2026-11-01T01:00:00Z"},{"id":"c","status":"completed","difficulty":"intermediate","total_score":70,"finished_at":"2026-11-01T02:00:00Z"}]""").Items();
-        var horizon=MockMap.HorizonOf(history,new(MockMap.TargetKind.General,null,null),"intermediate",now); Assert.Equal(new int?[]{63,null,70},horizon.Sessions.Select(s=>s.Score)); Assert.Equal(7,horizon.Sessions[2].Delta); Assert.Equal("11·01",horizon.Sessions[0].Date); Assert.Equal(2,MockMap.TrackLine(history,new(MockMap.TargetKind.General,null,null),"intermediate").Count);
     }
-    [Fact] public void UnicodeTextAndEditDistanceMatchSwiftUnits()
+    [Fact] public void ClockTextMatchesSwiftUnits()
     {
-        Assert.Equal("Redis Cluster 的…",MockSession.ShortNote("Redis Cluster 的 slot 迁移过程很长很长",10)); Assert.Equal("口径统一靠什么机制",MockSession.ShortNote("口径统一靠什么机制：没讲到",10));
-        Assert.Equal("一二三…",MockReview.ShortText("一二三四五",4)); Assert.Equal("👨‍👩‍👧‍👦…",MockReview.ShortText("👨‍👩‍👧‍👦你好",2)); Assert.Equal(0,MockReview.ChangeRatio("", "")); Assert.Equal(1,MockReview.ChangeRatio("", "新")); Assert.Equal(6.0/7,MockReview.ChangeRatio("先删缓存再写库","先写库再删缓存")); Assert.Equal(.5,MockReview.ChangeRatio("😀","😁"));
-        Assert.Equal(11.5,MockLayout.TextWidth("é",11.5)); Assert.Equal("熟悉",MockMap.LevelName(1.5)); Assert.Equal("00:00",MockSession.Mmss(-1)); Assert.Equal("01:01",MockSession.Mmss(61.9));
-        Assert.Equal("2.4 积分（每题 0.3）",MockMap.Credits(J("""{"priceMode":"fixed","unitPoints":"0.3"}"""),null,8)); Assert.Equal("本次免费",MockMap.Credits(J("""{"priceMode":"fixed","unitPoints":1}"""),J("""{"priceMode":"free"}"""),8));
+        Assert.Equal("00:00",MockSession.Mmss(-1)); Assert.Equal("01:01",MockSession.Mmss(61.9));
     }
-    [Fact] public void ResumeIndexSkipsSkillsAndUsesStableBodyFallback()
+    [Fact] public void RoundsUseIntroAndPendingFollowUps()
     {
-        var resume=J("""{"sections":[{"semantic_kind":"skills","entries":[{"fields":{"name":{"value":"不能选"}},"blocks":[{"value":"建立缓存一致性机制"}]}]},{"semantic_kind":"projects","entries":[{"fields":{"name":{"value":"虚构项目"}},"blocks":[{"value":"建立缓存一致性机制"}]}]}]}"""); var index=MockMap.ExperienceIndex(resume); Assert.Equal("虚构项目",index("建立，缓存一致性机制")); Assert.Null(index("")); Assert.Null(index("完全无关"));
         var detail=J("""{"has_intro":true,"status":"in_progress","questions":[{"id":2,"kind":"main","sequence_no":2,"depth_level":2,"answer_status":"answered"},{"id":3,"parent_id":2,"kind":"follow_up","sequence_no":3,"depth_level":3,"answer_status":"pending"},{"id":1,"kind":"main","plan_index":0,"sequence_no":1,"answer_status":"answered"}]}"""); var rounds=MockMap.Rounds(detail); Assert.True(rounds[0].Intro); Assert.Null(rounds[1].Ok); Assert.Equal(3,rounds[1].To); Assert.Equal(1,MockMap.StatsOf(detail).Answered);
     }
 
-    static JsonNode Fixture => JsonNode.Parse("""
-{
- "atlas": {"enabled": true, "gaps": [], "nodes": [
-  {"key":"cache","name":"缓存一致性","kind":"knowledge","domain":"后端","level":2,"previous_level":1,"real_count":2,"mock_count":1,"asks":[{"kind":"real","depth":2,"company":"示例科技","stage":"一面","date":"2026-10-01T10:00:00Z","source_id":"x"}]},
-  {"key":"index","name":"数据库索引","kind":"knowledge","domain":"后端","level":3,"previous_level":null,"real_count":0,"mock_count":1,"asks":[]},
-  {"key":"react","name":"React 渲染","kind":"knowledge","domain":"前端","level":1,"previous_level":null,"real_count":1,"mock_count":0,"asks":[]},
-  {"key":"tcp","name":"TCP 拥塞控制","kind":"knowledge","domain":"网络","level":0,"previous_level":null,"real_count":0,"mock_count":0,"asks":[]},
-  {"key":"talk","name":"结构化表达","kind":"competency","domain":null,"level":2,"previous_level":null,"real_count":0,"mock_count":2,"asks":[]}
- ]},
- "outline": {"enabled": true, "target": null, "basics": [], "hooks": [
-  {"id":"h1","kind":"experience","experience":"青舟软件有限公司","text":"主导数据工作台重构","transfer":false,"held":{"status":"held","level":2,"statement":"讲清了分层"},"target_level":3,"asked":"高","follow_ups":[{"level":3,"question":"为什么这样分层","source":"model"}],"practice":{"kind":"experience","ref":"e1","label":"数据工作台"}},
-  {"id":"h2","kind":"number","experience":"样例实验室","text":"把延迟降到 40ms","transfer":false,"held":{"status":"untested","level":null,"statement":""},"target_level":3,"asked":"中","follow_ups":[],"practice":null}
- ]},
- "match": {"enabled": true, "match_status": "ready", "requirements": [
-  {"id":"r1","group":"skill","text":"熟悉后端消息队列","importance":"must","interview":{"status":"insufficient","skills":[{"name":"消息队列"}]},"nodes":[]},
-  {"id":"r2","group":"qualification","text":"本科","importance":"must","interview":{"status":"insufficient","skills":[]},"nodes":[]}
- ]},
- "detail": {"status":"completed","has_intro":true,"questions":[
-  {"id":10,"kind":"main","plan_index":0,"sequence_no":1,"depth_level":1,"topic":"自我介绍","content":"请介绍一下自己","anchor_kind":"intro","answer_status":"answered","evaluation":null,"parent_id":null},
-  {"id":11,"kind":"main","plan_index":1,"sequence_no":2,"depth_level":2,"topic":"缓存一致性","content":"讲讲缓存","anchor_kind":"knowledge","answer_status":"answered","evaluation":{"achieved_depth":3,"probed_depth":3,"depth_status":"met"},"parent_id":null},
-  {"id":12,"kind":"follow_up","sequence_no":3,"depth_level":3,"topic":"","content":"再深一点","answer_status":"answered","parent_id":11},
-  {"id":13,"kind":"main","plan_index":2,"sequence_no":4,"depth_level":2,"topic":"数据工作台分层","content":"你在「主导数据工作台重构」里怎么分层","anchor_kind":"resume","anchor":"主导数据工作台重构","answer_status":"answered","evaluation":{"achieved_depth":2,"probed_depth":3,"depth_status":"below"},"parent_id":null},
-  {"id":14,"kind":"main","plan_index":3,"sequence_no":5,"depth_level":1,"topic":"消息队列选型","content":"说说消息队列","anchor_kind":"job","answer_status":"skipped","evaluation":null,"parent_id":null}
- ]}
-}
-""")!;
     static JsonNode Live => JsonNode.Parse("""
 {"status": "in_progress", "has_intro": true, "answer_mode": "text", "company_name": "示例科技", "stage_label": "一面", "resume_title": "后端简历", "interview_type": "technical", "difficulty": "intermediate", "question_count": 4, "practice_focus": {"label": "缓存一致性"}, "current_question_id": 15, "questions": [{"id": 10, "kind": "main", "plan_index": 0, "sequence_no": 1, "depth_level": 1, "topic": "自我介绍", "content": "请介绍一下自己", "anchor_kind": "intro", "answer_status": "answered", "parent_id": null}, {"id": 11, "kind": "main", "plan_index": 1, "sequence_no": 2, "depth_level": 2, "topic": "缓存一致性", "content": "讲讲缓存", "anchor_kind": "knowledge", "answer_status": "answered", "parent_id": null, "notes": [{"kind": "hit", "text": "先删缓存再写库，说清了时序问题"}]}, {"id": 12, "kind": "follow_up", "sequence_no": 3, "depth_level": 3, "topic": "", "content": "再深一点", "answer_status": "answered", "parent_id": 11}, {"id": 13, "kind": "main", "plan_index": 2, "sequence_no": 4, "depth_level": 2, "topic": "数据工作台分层", "content": "你在「主导数据工作台重构」里怎么分层", "anchor_kind": "resume", "anchor": "主导数据工作台重构", "answer_status": "answered", "parent_id": null, "notes": [{"kind": "hit", "text": "分了 ODS/DWD 两层，理由清楚"}]}, {"id": 15, "kind": "follow_up", "sequence_no": 5, "depth_level": 3, "topic": "", "content": "DWD 层的口径怎么统一", "source_quote": "DWD", "answer_status": "pending", "parent_id": 13, "notes": [{"kind": "question", "text": "口径统一靠什么机制：没讲到"}]}]}
 """)!;

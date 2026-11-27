@@ -32,7 +32,7 @@ public struct ResumeTemplate: Decodable, Identifiable, Sendable {
     public let data: JSONValue
     public let style: JSONValue
     public let layoutPlan: JSONValue?
-    /// 真实模板接口返回的使用次数；随包示例没有此字段。
+    /// 模板列表与详情接口返回的使用次数；嵌入简历响应时为空。
     public let useCount: Int?
 
     enum CodingKeys: String, CodingKey {

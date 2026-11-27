@@ -22,8 +22,6 @@ public sealed record DatasetRecord(JsonNode Raw){
     public bool Busy=>Text("upload_status")=="uploading"||Text("parse_status") is "queued" or "processing";
     public bool Retryable=>!Media&&Text("upload_status")=="succeeded"&&Text("parse_status")=="failed";
     public string Status=>Ready?(Media?"可下载":"可用"):Text("upload_status")=="failed"?"上传失败":new Dictionary<string,string>{{"queued","等待解析"},{"processing","正在解析"},{"failed","解析失败"}}.GetValueOrDefault(Text("parse_status"),"正在上传");
-    public string Size=>FormatSize(Raw["file_size"]?.GetValue<long>()??0);
-    public static string FormatSize(long bytes)=>bytes>=1024*1024?$"{bytes/(1024.0*1024):F1} MB":bytes>=1024?$"{bytes/1024.0:F1} KB":$"{bytes} B";
 }
 public sealed record DatasetUpload(string Id,string File,string Directory,string Folder,string Name,long Limit,string? Replacing=null,string? Revision=null){
     public static DatasetUpload Snapshot(string source,string folder,long limit){

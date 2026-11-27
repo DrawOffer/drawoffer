@@ -72,7 +72,13 @@ struct ModelPickerPanel: View {
                 Text(loading ? "正在读取模型" : "当前没有可用模型").font(.system(size: 12)).foregroundStyle(V3.fnt).padding(.horizontal, 10).padding(.vertical, 8)
             } else {
                 ScrollView {
-                    VStack(spacing: 2) { ForEach(models, id: \.self) { row($0) } }.padding(.vertical, 2)
+                    // 免费在上、会员在下、点不了的在最后，段与段之间一条细线
+                    VStack(spacing: 2) {
+                        ForEach(Array(AgentModelSections.split(models).enumerated()), id: \.offset) { index, section in
+                            if index > 0 { Rectangle().fill(V3.line).frame(height: 1).padding(.horizontal, 6).padding(.vertical, 4) }
+                            ForEach(section, id: \.self) { row($0) }
+                        }
+                    }.padding(.vertical, 2)
                 }.frame(maxHeight: 200).fixedSize(horizontal: false, vertical: true)
             }
         }
