@@ -6,7 +6,8 @@ import UniformTypeIdentifiers
 
 /// 简历编辑（Web `ResumeWorkbench` 的对应页）：纸面即编辑器，与 Web 同一套 TipTap 编辑器、分页、斜杠菜单与选区工具栏
 /// （`ResumeEditorPaperView`）；顶栏、排版卡片、模板栏、引导、右上角小绘与右下角缩放由原生实现。
-/// 保存提交 `PUT /api/resumes/{id}` 的 data、style 与 base_lock_version；冲突时提示重新载入，不覆盖他处的修改。
+/// 保存（Web a667ae1ba 起）：只有点顶栏“保存”或 ⌘S 才提交 `PUT /api/resumes/{id}` 的 data、style 与 base_lock_version；
+/// 没保存的修改每分钟写到这台电脑（`ResumeDraftKeeper`），下次打开时恢复；冲突时提示重新载入，不覆盖他处的修改。
 struct ResumeEditorView: View {
     @Environment(SessionStore.self) private var session
     let resumeID: String
@@ -51,9 +52,24 @@ struct ResumeEditorView: View {
     @State private var uploading = false
     /// 右侧工具轨当前打开的面板（Web 大纲 / 模板 / 排版）。
     @State private var panel: String?
-    /// 自动保存：停顿后串行保存；失败时显示横幅和重试。
-    @State private var autosaveTask: Task<Void, Never>?
+    /// 保存失败：顶部常驻“简历没有保存”（Web `wb3-save-notice`），保存成功后消失。
     @State private var saveFailed = false
+    @State private var saveErrorCode: String?
+    /// Web `Toast kind="error" persistent`：标题“简历没有保存”、说明按错误码、动作“重试”（点了先收起，没存成再出来）。
+    @State private var saveNotice: NoticeToastItem?
+    /// 顶部提示（Web `Toast`）：导出、换模板、保存并离开没存成。
+    @State private var toast: NoticeToastItem?
+    /// 本地草稿：第一次改动起每分钟写一次，离开时立刻写；保存后删掉。
+    @State private var draftKeeper = ResumeDraftKeeper(store: ResumeDraftStore.standard())
+    @State private var draftTimer: Task<Void, Never>?
+    /// K3：光标停在一段 0.8 秒后小绘左边说“想改「某段」这段？点我改”。
+    @State private var orbHint: String?
+    @State private var orbHintDismissed = false
+    /// 小绘停在段旁改一段（Web `EditorChat`）：要改的段（空 = 先挑一段）与外部带进来的一句话。
+    @State private var chatEntry = ""
+    @State private var chatRequest: ResumeEditorChatView.Request?
+    @State private var chatSeq = 0
+    @State private var menuHover = false
     @State private var exporting = false
     @State private var importWarnings: [String] = []
     /// 新建引导（A2，Web `GuideFlow`）：引导进行中时整页换成引导——顶栏换成六步进度，纸右边一列一次问一件事。
@@ -72,6 +88,8 @@ struct ResumeEditorView: View {
     private var sections: [JSONValue] { doc["sections"]?.items ?? [] }
     private var templateKey: String { style["template_snapshot"]?.text("template_key") ?? "" }
     private var busy: Bool { saving || uploading }
+    private var saveStatus: ResumeSave.Status { saving ? .saving : saveFailed ? .error : .idle }
+    private var userID: String { session.coachUser }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -91,8 +109,8 @@ struct ResumeEditorView: View {
             }
         }
         .task { await load(); await loadGuide() }
-        .onExitCommand { if orbOpen { orbOpen = false } else if panel != nil { panel = nil } }
-        .onChange(of: doc) { _, next in templatePreviewCache = [:]; guideFlow?.paper = next; scheduleAutosave() }
+        .onExitCommand { if orbOpen { orbOpen = false } else if panel != nil { panel = nil } else { orbHintDismissed = true } }
+        .onChange(of: doc) { _, next in templatePreviewCache = [:]; guideFlow?.paper = next; noteDraft() }
         .onChange(of: panel) { _, next in
             if next != "template" { previewTemplate(nil) }
             if next != nil { orbOpen = false }
@@ -101,14 +119,16 @@ struct ResumeEditorView: View {
         .onChange(of: style) { _, _ in
             // 排版面板改的版式下发给纸面；纸面自己回报的（头像尺寸）不再回送
             if style != paperStyle { styleRevision += 1 }
-            scheduleAutosave()
+            noteDraft()
         }
-        .onChange(of: title) { _, _ in scheduleAutosave() }
-        .onDisappear { autosaveTask?.cancel(); layoutTask?.cancel() }
-        .centeredConfirmation("放弃未保存的修改？", isPresented: $confirmLeave) {
-            Button("放弃修改", role: .destructive, action: close)
-            Button("继续编辑", role: .cancel) {}
-        }
+        .onChange(of: title) { _, _ in noteDraft() }
+        .onDisappear { draftTimer?.cancel(); draftKeeper.flush(); layoutTask?.cancel() }
+        // Web `ConfirmDialog`「修改还没保存」：暂不保存（修改留在这台电脑，下次打开时恢复）/ 保存并离开
+        .centeredConfirmation(ResumeSave.leaveTitle, isPresented: $confirmLeave) {
+            Button(ResumeSave.leaveConfirm) { Task { await saveAndLeave() } }.keyboardShortcut(.defaultAction)
+            Button(ResumeSave.leaveDiscard) { leaveNow() }
+            Button("取消", role: .cancel) {}
+        } message: { Text(ResumeSave.leaveMessage) }
     }
 
     // MARK: Canvas
@@ -120,7 +140,11 @@ struct ResumeEditorView: View {
     private var typeOpen: Bool { panel == "type" }
     private var lineOpen: Bool { panel == "line" && lineTarget != nil }
     private var guideOpen: Bool { guideFlow != nil }
-    private var columnOpen: Bool { guideOpen || lineOpen }
+    /// 小绘停在段旁改一段（Web `.wbx-chat`，C2–C6）：列宽 480、距纸 40。
+    private var chatOpen: Bool { panel == "chat" && !guideOpen }
+    private var columnOpen: Bool { guideOpen || lineOpen || chatOpen }
+    static let chatWidth: CGFloat = 480
+    static let chatGap: CGFloat = 40
     /// 模板栏（07.1）：顶栏「模板」打开，贴编辑器右边一整列（跟 Web 分区 18 一样，和右上角“模板”按钮同侧），纸往左让开。
     private var templateOpen: Bool { panel == "template" }
     /// 07.1 模板栏宽 343（含左侧 1 的细线）；12.x 对话列 400、距纸 52。
@@ -136,8 +160,8 @@ struct ResumeEditorView: View {
     /// 纸与右边一列当成一组居中：纸面宽 560 × 缩放（渲染器 EDITOR_PAGE_BASE_SCALE = 560 / 794，稿 A4 Page 560）；放不下时右列贴右 24。
     /// 引导列 440、距纸 64（`.gf-stage`），对话列 400、距纸 52。
     private func columnLayout(width: CGFloat) -> (paperTrailing: CGFloat, columnX: CGFloat) {
-        let column = guideOpen ? ResumeGuideColumn.width : ResumeTalk.columnWidth
-        let gap = guideOpen ? 64 : Self.columnGap
+        let column = guideOpen ? ResumeGuideColumn.width : chatOpen ? Self.chatWidth : ResumeTalk.columnWidth
+        let gap = guideOpen ? 64 : chatOpen ? Self.chatGap : Self.columnGap
         let paper = Self.paperWidth * zoom
         let group = paper + gap + column
         if width >= group + 80 {
@@ -179,6 +203,19 @@ struct ResumeEditorView: View {
                                 .transition(.opacity.combined(with: .offset(y: -4)))
                         }
                     }
+                // 段旁对话同样不挂在纸面上（换上会重载纸面）
+                if chatOpen {
+                    ResumeEditorChatView(resumeID: resumeID, units: chatUnits, entryID: $chatEntry, document: doc, request: chatRequest,
+                                         write: { next in doc = next; channel.replaceData(next) },
+                                         decorate: { highlight, preview in channel.send(.decorate(source: "chat", highlight: highlight, preview: preview)) },
+                                         saveFirst: { await saveBeforeWrite() },
+                                         notice: { toast = .attention($0) },
+                                         close: { panel = nil })
+                        .frame(width: Self.chatWidth).frame(maxHeight: .infinity, alignment: .top)
+                        .padding(.top, 24).padding(.bottom, 76)
+                        .offset(x: layout.columnX)
+                        .transition(.opacity)
+                }
                 // 引导列不挂在纸面上：纸面换稿（paperGeneration）会连带重建挂在它上面的视图，各步写到一半的状态会丢
                 if let guideFlow {
                     ResumeGuideColumn(flow: guideFlow).frame(maxHeight: .infinity, alignment: .top).offset(x: layout.columnX)
@@ -195,7 +232,8 @@ struct ResumeEditorView: View {
             }
         }
         .overlay(alignment: .topTrailing) {
-            if record != nil, !lineOpen, !guideOpen { orb.padding(.top, 20).padding(.trailing, 24 + (templateOpen ? Self.railWidth : 0)) }
+            // 小绘停在段旁（改这一条 / 改这一段）时，右上角这朵先隐去
+            if record != nil, !lineOpen, !guideOpen, !chatOpen { orb.padding(.top, 20).padding(.trailing, 24 + (templateOpen ? Self.railWidth : 0)) }
         }
         .overlay(alignment: .bottomTrailing) {
             if record != nil, paperSeed != nil, !guideOpen {
@@ -206,7 +244,13 @@ struct ResumeEditorView: View {
                     .padding(.trailing, 24 + (templateOpen ? Self.railWidth : 0)).padding(.bottom, 22)
             }
         }
-        .overlay(alignment: .top) { if saveFailed { saveNotice.padding(.top, 15) } }
+        .overlay(alignment: .top) {
+            VStack(spacing: 8) {
+                // 保存失败：常驻顶部（Figma 21 · C3），不自动消失、不能关，保存成功后消失
+                NoticeToast(item: $saveNotice) { _ in Task { await save() } }
+                NoticeToast(item: $toast)
+            }.padding(.top, 15)
+        }
         .overlay { if let zoomBadge { zoomFeedback(zoomBadge) } }
         .animation(.easeOut(duration: 0.16), value: typeOpen)
     }
@@ -253,37 +297,86 @@ struct ResumeEditorView: View {
                                action: orbSaid.undo ? { channel.send(.layoutUndo) } : nil)
                     .frame(minHeight: 40).transition(.opacity.combined(with: .offset(x: 8)))
                     .accessibilityElement(children: .contain).accessibilityLabel(orbSaid.text)
+            } else if let orbHint, let cursor, cursor.unit.id == orbHint {
+                // K3：光标停在一段时一直写着“想改「某段」这段？点我改”
+                ResumeOrbNudge(kind: .said, text: ResumeOrb.hint(cursor.label), actionLabel: ResumeOrb.hintAction,
+                               action: { openChat(entry: orbHint) })
+                    .frame(minHeight: 40).transition(.opacity.combined(with: .offset(x: 8)))
+                    .accessibilityElement(children: .contain).accessibilityLabel(ResumeOrb.hint(cursor.label))
             }
             ResumeEditorOrb(open: orbOpen, busy: layoutRun != nil) {
+                // K3：提示还在时点小绘，直接去改这一段（同 C2）
+                if !orbOpen, let orbHint, cursor?.unit.id == orbHint { openChat(entry: orbHint); return }
                 // 选中了文字再点小绘：直接去改这一句（Web `orbTakesSelection`）
-                if let paperLine, paperLine.selection != nil, canAsk { orbOpen = false; openLine(paperLine); return }
+                if !orbOpen, let paperLine, ResumeOrb.takesSelection(hasSelection: paperLine.selection != nil, lineID: paperLine.lineIDs.first,
+                                                                     layoutBusy: layoutRun != nil), canAsk {
+                    openLine(paperLine); return
+                }
                 orbReply = nil
                 orbSaid = nil
                 orbOpen.toggle()
             }
             .disabled(busy || conflict)
         }
+        .task(id: hintCandidate) {
+            // 停 0.8 秒才出现；打字、选字、换段时先收起
+            orbHint = nil
+            guard let hintCandidate else { return }
+            try? await Task.sleep(for: ResumeOrb.hintDelay)
+            if !Task.isCancelled { orbHint = hintCandidate }
+        }
+        .onChange(of: paperLine?.unitID) { _, _ in orbHintDismissed = false }
         .animation(.easeOut(duration: 0.16), value: orbOpen)
         .animation(.easeOut(duration: 0.18), value: layoutRun)
         .animation(.easeOut(duration: 0.18), value: orbSaid)
+        .animation(.easeOut(duration: 0.16), value: orbHint)
+    }
+
+    /// K3 提示指向的段：光标停在能改写的一段（纸面在打字时不报光标行）、没选字、白板没开、没在排版或说别的话。
+    private var hintCandidate: String? {
+        let cursor = cursorUnit
+        let allowed = ResumeOrb.hintAllowed(cursorUnit: cursor != nil, dismissed: orbHintDismissed, open: orbOpen, typing: false,
+                                            away: lineOpen || chatOpen, disabled: busy || conflict || !canAsk, layoutBusy: layoutRun != nil,
+                                            hasSelection: paperLine?.selection != nil, saying: orbSaid != nil)
+        return allowed ? cursor?.unit.id : nil
+    }
+
+    /// 段旁的编辑单元（Web `editorUnits`：跳过基本信息、教育、证书、获奖、语言、兴趣）。
+    private var chatUnits: [ResumeEditorChatView.Unit] {
+        let skipped: Set<String> = ["identity", "basics", "education", "certificates", "awards", "languages", "interests"]
+        return sections.flatMap { section -> [ResumeEditorChatView.Unit] in
+            let kind = section.text("semantic_kind")
+            guard !skipped.contains(kind) else { return [] }
+            let label = sectionLabel(section)
+            let other = ResumeEditorChat.isNonExperience(semanticKind: kind, label: label)
+            let entries = section["entries"]?.items ?? []
+            if entries.isEmpty {
+                return SectionFocus.unit(section: section).map { [ResumeEditorChatView.Unit(focus: $0, label: label, nonExperience: other)] } ?? []
+            }
+            return entries.compactMap { entry in
+                SectionFocus.unit(entry: entry).map { unit in
+                    ResumeEditorChatView.Unit(focus: unit, label: unit.heading.isEmpty ? label : "\(label) · \(unit.heading)", nonExperience: other)
+                }
+            }
+        }
+    }
+
+    /// 小绘去这一段旁边（Web `onOpenDeepen`）：空 = 先挑一段；`prompt` 是白板上直接说的那句。
+    private func openChat(entry: String, prompt: String = "") {
+        orbOpen = false
+        orbHint = nil
+        chatEntry = entry
+        if !prompt.isEmpty { chatSeq += 1; chatRequest = .init(entryID: entry, prompt: prompt, seq: chatSeq) }
+        panel = "chat"
     }
 
     private func runOrb(_ action: ResumeOrb.Action) {
         switch action {
-        case .pickUnit:
-            orbOpen = false
-            channel.send(.focus)
+        case .deepenAll:
+            openChat(entry: "")
         case .deepenUnit(let id):
-            // Web 这里进入整段深化（editor-chat，未对桌面开放）；桌面先从光标所在的那一条聊着改
-            guard let line = paperLine, line.unitID == id else {
-                if let unit = focusUnit(id), let first = unit.lines.first {
-                    orbOpen = false
-                    lineTarget = ResumeLineChat.Target(unit: unit, lineIDs: [first.id]); lineAsk += 1; panel = "line"
-                } else { orbReply = "这一段暂时不能聚焦修改。" }
-                return
-            }
-            orbOpen = false
-            openLine(line)
+            // Web `onOpenDeepen({ unitId })`：小绘滑到这一段旁边（editor-chat；c42dbeae9 尚未对桌面开放，打不开时白板上说一句）
+            openChat(entry: id)
         case .layout:
             runLayout()
         case .layoutCancel:
@@ -358,15 +451,9 @@ struct ResumeEditorView: View {
         say(outcome.message, undo: outcome.undoable, seconds: outcome.seconds)
     }
 
-    /// “或者直接说想改什么…”：有光标所在段就带着这句话去改那一条；没有就请用户先点一段。
+    /// “或者直接说想改什么…”（Web `sendDraft`）：带着这句话去光标所在的那一段；没有光标所在段就先挑一段。
     private func sayToOrb(_ text: String) {
-        guard let cursor = cursorUnit else { orbReply = "先点纸上一段，我再按你说的改。"; return }
-        let ids = (paperLine?.lineIDs ?? []).filter { id in cursor.unit.lines.contains { $0.id == id } }
-        guard let first = ids.first ?? cursor.unit.lines.first?.id else { orbReply = "这一段暂时不能聚焦修改。"; return }
-        orbOpen = false
-        lineTarget = ResumeLineChat.Target(unit: cursor.unit, lineIDs: ids.isEmpty ? [first] : ids, instruction: text)
-        lineAsk += 1
-        panel = "line"
+        openChat(entry: cursorUnit?.unit.id ?? "", prompt: text)
     }
 
     /// 改这一条所在的模块类型（技能不给 STAR）。
@@ -375,22 +462,6 @@ struct ResumeEditorView: View {
         let section = sections.first { $0.nodeKey == id || ($0["entries"]?.items ?? []).contains { $0.nodeKey == id } }
         guard let section else { return .experience }
         return ResumeCheck.kind(semantic: section.text("semantic_kind"), label: sectionLabel(section))
-    }
-
-    /// `.wb3-save-notice`：420×64 白卡，圆角 12，红色 16 圆圈「!」、标题与原因、重试保存。
-    private var saveNotice: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Text("!").font(V3.number(10, weight: .bold)).foregroundStyle(V3.red)
-                .frame(width: 16, height: 16).overlay(Circle().stroke(V3.red, lineWidth: 1.4)).padding(.top, 2)
-            VStack(alignment: .leading, spacing: 3) {
-                Text("保存失败").font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
-                Text(error ?? "修改仍保留在本页，可以重试保存。").font(V3.sans(11.5)).foregroundStyle(V3.sub).lineLimit(1)
-            }.frame(maxWidth: .infinity, alignment: .leading)
-            Button("重试保存") { Task { await save() } }.buttonStyle(V3ButtonStyle(kind: .ghost, height: 30)).disabled(saving)
-        }
-        .padding(.horizontal, 16).padding(.vertical, 13).frame(width: 420, height: 64, alignment: .topLeading)
-        .background(.white, in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(V3.cl))
-        .shadow(color: .black.opacity(0.1), radius: 12, y: 8)
     }
 
     /// `.workbench-zoom-feedback`：居中 104×68 的深色半透明块，等宽数字百分比。
@@ -423,55 +494,78 @@ struct ResumeEditorView: View {
 
     // MARK: Toolbar & preview
 
-    /// Figma macOS 稿 03 页 07.0「Editor Toolbar · NSToolbar」：52 高，和画布同底、不画分隔线。
-    /// 窗口是隐藏标题栏，红绿灯中线在顶上 16pt（与侧栏顶行一致）：整行控件放在顶上 32 高里与红绿灯同一中线，左让出 84，下面留 20 给画布上沿。
-    /// 左：← 我的简历（同 Web `BackCrumb`：灰字常规、悬停转墨黑，无底色）、撤销 / 重做；中：简历标题居中（最宽 560，末尾省略）；
-    /// 右：无边框「排版」「模板」「导出 PDF」（Web 收在 ⋯ 菜单里的三项；Mac 稿只画了模板与导出，排版卡片 06.2 需要一个入口）。
-    /// 不显示“已保存”，自动保存失败才在画布上方出提示卡。
+    /// 顶栏（Web DRAWOFFER2-157 I 区 `.wbs-head`，Figma 04 页 5870:2945；Mac 稿 03 页还没有这一版，照 Web）：
+    /// 左上只有返回（28×28 圆形，平时透明、悬停浅灰底）；简历名在整个窗口正中、点了直接改名；
+    /// 右上“保存”（无边框文字，没改动时置灰，⌘S）+ 最右“⋯”菜单（撤销 / 重做、排版 / 模板、导出 PDF）。
+    /// 窗口是隐藏标题栏，红绿灯中线在顶上 16pt：整行放在顶上 32 高里与红绿灯同一中线，左让出 84，下面留 20 给画布上沿。
     private var toolbar: some View {
         ZStack {
             HStack(spacing: 6) {
                 Button { leave() } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "arrow.left").font(.system(size: 13))
-                        Text("我的简历").font(V3.sans(14))
-                    }.frame(height: 28).contentShape(Rectangle())
-                }.buttonStyle(BackCrumbStyle()).help("返回我的简历").accessibilityLabel("返回我的简历")
-                // 稿：返回与撤销 / 重做相隔 14，撤销 / 重做各 26×26、间距 4
-                HStack(spacing: 4) {
-                    Button { channel.send(.undo) } label: { toolbarIcon("arrow.uturn.backward") }
-                        .buttonStyle(ToolbarPlainStyle()).disabled(!canUndo || busy).help("撤销（⌘Z）").accessibilityLabel("撤销")
-                        .keyboardShortcut("z", modifiers: .command)
-                    Button { channel.send(.redo) } label: { toolbarIcon("arrow.uturn.forward") }
-                        .buttonStyle(ToolbarPlainStyle()).disabled(!canRedo || busy).help("重做（⇧⌘Z）").accessibilityLabel("重做")
-                        .keyboardShortcut("z", modifiers: [.command, .shift])
-                }.padding(.leading, 8)
+                    Image(systemName: "arrow.left").font(.system(size: 14)).frame(width: 28, height: 28).contentShape(Circle())
+                }.buttonStyle(HeadBackStyle()).help("返回我的简历").accessibilityLabel("返回我的简历")
                 Spacer(minLength: 16)
-                if conflict { Button("重新载入") { Task { await load() } }.buttonStyle(ToolbarPlainStyle(strong: true)).padding(.trailing, 4) }
-                Button { togglePanel("type") } label: { toolbarLabel("排版", "textformat.size", weight: .regular) }
-                    .buttonStyle(ToolbarPlainStyle(pressed: typeOpen)).disabled(busy || conflict || record == nil)
-                    .accessibilityLabel("排版").accessibilityAddTraits(typeOpen ? .isSelected : [])
-                Button { togglePanel("template") } label: { toolbarLabel("模板", "square.grid.2x2", weight: .regular) }
-                    .buttonStyle(ToolbarPlainStyle(pressed: panel == "template")).disabled(busy || conflict || record == nil)
-                    .accessibilityLabel("简历模板").accessibilityAddTraits(panel == "template" ? .isSelected : [])
-                Button { Task { await exportPDF() } } label: { toolbarLabel(exporting ? "导出中…" : "导出 PDF", "square.and.arrow.up") }
-                    .buttonStyle(ToolbarPlainStyle()).disabled(exporting || record == nil)
+                if conflict { Button("重新载入") { Task { await load() } }.buttonStyle(HeadSaveStyle(strong: true)) }
+                Button(ResumeSave.buttonLabel(saveStatus)) { Task { await save() } }
+                    .buttonStyle(HeadSaveStyle())
+                    .disabled(!ResumeSave.buttonEnabled(loaded: record != nil, dirty: dirty, status: saveStatus, pending: uploading || conflict))
+                    .keyboardShortcut("s", modifiers: .command)
+                    .help("保存到云端（⌘S）")
+                headMenu
             }
-            TitleField(title: $title).frame(maxWidth: 560)
+            .padding(.leading, 84).padding(.trailing, 14)
+            // 简历名在整个窗口正中（Web `.wbs-head-title` left:50%，最宽 360），不随左边给红绿灯让出的 84 偏右
+            TitleField(title: $title).frame(maxWidth: 360).disabled(saving && panel == "template")
         }
-        .padding(.leading, 84).padding(.trailing, 14).frame(height: 32).padding(.bottom, 20)
+        .frame(height: 32).padding(.bottom, 20)
         .background(Self.canvas)
     }
 
-    private func toolbarIcon(_ symbol: String) -> some View {
-        Image(systemName: symbol).font(.system(size: 14)).frame(width: 26, height: 26).contentShape(Rectangle())
+    /// Web `WorkbenchHeadMenu`：系统下拉菜单，快捷键提示与勾选态由系统画。
+    private var headMenu: some View {
+        let open: ResumeEditorMenu.Command? = typeOpen ? .type : templateOpen ? .template : nil
+        let items = ResumeEditorMenu.items(canUndo: canUndo && !busy, canRedo: canRedo && !busy, openCard: open, exporting: exporting,
+                                           typeDisabled: busy || conflict || record == nil, templateDisabled: busy || conflict || record == nil,
+                                           exportDisabled: exporting || record == nil)
+        return Menu {
+            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                if let command = item.command {
+                    menuEntry(item, command)
+                } else {
+                    Divider()
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis").font(.system(size: 14, weight: .medium))
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .frame(width: 28, height: 28)
+        .background(Circle().fill(Color.black.opacity(menuHover ? 0.06 : 0)))
+        .onHover { menuHover = $0 }
+        .help("编辑器操作").accessibilityLabel("编辑器操作")
     }
 
-    private func toolbarLabel(_ title: String, _ symbol: String, weight: Font.Weight = .medium) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: symbol).font(.system(size: 13))
-            Text(title).font(V3.sans(13, weight: weight))
-        }.padding(.horizontal, 8).frame(height: 28).contentShape(Rectangle())
+    @ViewBuilder private func menuEntry(_ item: ResumeEditorMenu.Item, _ command: ResumeEditorMenu.Command) -> some View {
+        switch command {
+        case .undo:
+            Button(item.label) { perform(command) }.keyboardShortcut("z", modifiers: .command).disabled(!item.enabled)
+        case .redo:
+            Button(item.label) { perform(command) }.keyboardShortcut("z", modifiers: [.command, .shift]).disabled(!item.enabled)
+        case .type, .template:
+            Toggle(item.label, isOn: Binding(get: { item.checked }, set: { _ in perform(command) })).disabled(!item.enabled)
+        case .export:
+            Button(item.label) { perform(command) }.disabled(!item.enabled)
+        }
+    }
+
+    private func perform(_ command: ResumeEditorMenu.Command) {
+        switch command {
+        case .undo: channel.send(.undo)
+        case .redo: channel.send(.redo)
+        case .type: togglePanel("type")
+        case .template: togglePanel("template")
+        case .export: Task { await exportPDF() }
+        }
     }
 
     /// 纸面实际页数；智能一页时为 1。
@@ -619,7 +713,8 @@ struct ResumeEditorView: View {
 
     // MARK: Actions
 
-    private func apply(_ resume: JSONValue) async {
+    /// `restoreDraft`：打开编辑器时，这台电脑上有这一版的没保存修改就换上（Web `applyResumeWithLocalDraft`）。
+    private func apply(_ resume: JSONValue, restoreDraft: Bool = false) async {
         record = resume
         saved = resume["data"] ?? .null
         doc = saved
@@ -631,15 +726,19 @@ struct ResumeEditorView: View {
         paperLine = nil
         cancelLayout(); orbSaid = nil
         templatePreviewTask?.cancel(); templatePreviewName = nil; templatePreviewCache = [:]
+        if panel == "chat" { panel = nil }
         if panel == "check" || panel == "line" { panel = nil; lineTarget = nil }
         importWarnings = (resume["import"]?["warnings"]?.items ?? resume["import_warnings"]?.items ?? []).compactMap(\.stringValue)
-        saveFailed = false; canUndo = false; canRedo = false
-        paperSeed = .object(["data": saved, "style": savedStyle])
-        paperStyle = savedStyle
+        saveFailed = false; saveNotice = nil; canUndo = false; canRedo = false
+        if restoreDraft, let draft = draftKeeper.store?.read(user: userID, resume: resumeID, lockVersion: resume["lock_version"]?.integer ?? 0) {
+            doc = draft.data; style = draft.style; title = draft.title
+        }
+        paperSeed = .object(["data": doc, "style": style])
+        paperStyle = style
         paperGeneration += 1
     }
 
-    /// 保存成功：更新已保存的基线与记录；保存期间用户继续编辑的内容保留，等下一次自动保存。
+    /// 保存成功：更新已保存的基线与记录；保存期间用户继续编辑的内容保留，等下一次点保存。
     private func applySaved(_ resume: JSONValue, keeping pending: (JSONValue, JSONValue, String)) async {
         let editedDuringSave = doc != pending.0 || style != pending.1 || title != pending.2
         let current = (doc, style, title)
@@ -648,62 +747,89 @@ struct ResumeEditorView: View {
         savedStyle = resume["style"] ?? .null
         if editedDuringSave {
             doc = current.0; style = current.1; title = current.2
-            scheduleAutosave()
         } else {
             // 已保存的正文以服务端为准，但不重载纸面（保留光标与撤销历史）
             doc = saved; title = resume.text("title")
             if style != savedStyle { paperStyle = savedStyle; style = savedStyle }
         }
+        noteDraft()
     }
 
-    /// 自动保存（Web 串行保存队列）：停顿 1.5 秒后保存；正在保存时等这次完成再排下一次。
-    private func scheduleAutosave() {
-        guard record != nil, dirty, !conflict else { return }
-        autosaveTask?.cancel()
-        autosaveTask = Task {
-            try? await Task.sleep(for: .milliseconds(1500))
-            guard !Task.isCancelled else { return }
-            while saving { try? await Task.sleep(for: .milliseconds(200)) }
-            guard !Task.isCancelled, dirty else { return }
-            await save()
+    /// 本地草稿（Web `scheduleLocalResumeDraft`）：有没保存的修改就记下，第一次改动起一分钟写一次；已保存就删掉。
+    private func noteDraft() {
+        guard let record, !userID.isEmpty else { return }
+        guard dirty else {
+            draftTimer?.cancel(); draftTimer = nil
+            draftKeeper.clear(user: userID, resume: resumeID)
+            return
+        }
+        let draft = ResumeLocalDraft(userID: userID, resumeID: resumeID, baseLockVersion: record["lock_version"]?.integer ?? 0,
+                                     title: title, data: doc, style: style)
+        if draftKeeper.note(draft) {
+            let keeper = draftKeeper
+            draftTimer = Task {
+                try? await Task.sleep(for: ResumeSave.draftInterval)
+                guard !Task.isCancelled else { return }
+                keeper.flush()
+            }
         }
     }
 
-    /// 离开编辑器：有未保存修改时先保存，保存失败再询问是否放弃。
+    /// 离开编辑器：有没保存的修改时先问（Web `leaveSafely`）。
     private func leave() {
-        guard dirty else { close(); return }
-        Task {
-            autosaveTask?.cancel()
-            await save()
-            if dirty { confirmLeave = true } else { close() }
-        }
+        guard ResumeSave.needsLeaveConfirmation(dirty: dirty, uploading: uploading) else { leaveNow(); return }
+        confirmLeave = true
     }
 
-    /// 编辑器顶栏“导出 PDF”：先保存当前修改，再按最新 lock_version 导出。
+    /// 直接离开（暂不保存）：没保存的修改立刻写到这台电脑，下次打开时恢复。
+    private func leaveNow() {
+        draftTimer?.cancel()
+        draftKeeper.flush()
+        close()
+    }
+
+    /// 保存并离开：没存成就留在本页说一句（Web `saveAndLeave`）。
+    private func saveAndLeave() async {
+        await save()
+        if saveFailed || dirty {
+            toast = .failed(ResumeSave.leaveFailed)
+            return
+        }
+        leaveNow()
+    }
+
+    /// 编辑器“导出 PDF”（Web `exportResumePdf`）：先把当前修改存到服务端，再按最新 lock_version 导出。
     private func exportPDF() async {
-        if dirty { autosaveTask?.cancel(); await save() }
-        guard !dirty, let record, let version = record["lock_version"]?.integer else { return }
+        guard !exporting else { return }
+        if dirty { await save() }
+        guard !dirty, !saveFailed else {
+            toast = .failed(ResumeSave.imageContractMessage(saveErrorCode) ?? "简历保存失败，请修正后重试")
+            return
+        }
+        guard let record, let version = record["lock_version"]?.integer, version > 0 else { toast = .failed("简历暂时无法导出，请稍后重试"); return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.pdf]
         panel.nameFieldStringValue = ResumesView.fileName(title)
         guard panel.runModal() == .OK, let destination = panel.url else { return }
         exporting = true; error = nil
+        toast = .waiting("正在生成 PDF…")
         defer { exporting = false }
         do {
             let data = try await session.api.downloadResumePDF(id: resumeID, lockVersion: version)
             try data.write(to: destination, options: .atomic)
-            notice = "已导出 PDF"
+            toast = .done("PDF 已导出")
         } catch {
-            if case APIError.unauthorized = error { session.reportAuthenticationFailure(); return }
-            if case APIError.server(_, "RESUME_PDF_SNAPSHOT_STALE") = error { self.error = "简历已在其他设备更新，请重新载入后再导出。"; conflict = true }
-            else if error is CocoaError { self.error = "PDF 已生成，但保存到所选位置失败，请换个位置重试。" }
-            else { self.error = "导出 PDF 失败，请稍后重试。" }
+            if case APIError.unauthorized = error { toast = nil; session.reportAuthenticationFailure(); return }
+            if error is CocoaError { toast = .failed("PDF 已生成，但保存到所选位置失败，请换个位置重试。"); return }
+            let code: String? = if case APIError.server(_, let code) = error { code } else { nil }
+            let status: Int? = if case APIError.server(let status, _) = error { status } else { nil }
+            toast = .failed(ResumeSave.pdfExportError(code: code, status: status))
         }
     }
 
-    /// 引导写入前：有未保存修改先保存；保存失败不写。
+    /// 引导、小绘写入前：有未保存修改先保存；保存失败不写（Web `flushActiveDraft`）。
     private func saveBeforeWrite() async -> Bool {
-        if dirty { autosaveTask?.cancel(); await save() }
+        if dirty { await save() }
         return !dirty
     }
 
@@ -736,7 +862,7 @@ struct ResumeEditorView: View {
         do {
             let result = try await session.api.careerRequest(path: "/api/resumes/\(resumeID)", method: "GET", query: [:], body: nil)
             guard let resume = result["resume"] else { throw APIError.invalidResponse }
-            await apply(resume)
+            await apply(resume, restoreDraft: true)
         } catch {
             if case APIError.unauthorized = error { session.reportAuthenticationFailure() }
             self.error = ResumeRequest.errorMessage(error, fallback: "简历读取失败，请稍后重试。")
@@ -758,12 +884,15 @@ struct ResumeEditorView: View {
             guard let resume = result["resume"] else { throw APIError.invalidResponse }
             let pending = (doc, style, title)
             await applySaved(resume, keeping: pending)
-            saveFailed = false; notice = nil
+            saveFailed = false; saveErrorCode = nil; saveNotice = nil
         } catch {
             if case APIError.unauthorized = error { session.reportAuthenticationFailure() }
             if case APIError.server(409, "RESUME_EDIT_CONFLICT") = error { conflict = true }
             self.error = ResumeDocument.saveError(error)
+            saveErrorCode = if case APIError.server(_, let code) = error { code } else { nil }
             saveFailed = true
+            saveNotice = .failed(ResumeSave.failureTitle, ResumeSave.failureMessage(code: saveErrorCode),
+                                 actions: [.init(label: "重试", id: "retry")], persistent: true)
         }
     }
 
@@ -783,13 +912,14 @@ struct ResumeEditorView: View {
             guard let resume = result["resume"] else { throw APIError.invalidResponse }
             await apply(resume)
             if let pendingType { style = pendingType.apply(to: style) }
-            notice = "已切换为「\(template.name)」"
+            toast = .done("已切换为“\(template.name)”，内容已按新模板重新排版")
             return nil
         } catch {
             if case APIError.unauthorized = error { session.reportAuthenticationFailure() }
             if case APIError.server(409, "RESUME_EDIT_CONFLICT") = error { conflict = true }
             let message = ResumeDocument.saveError(error)
             self.error = message
+            if guideFlow == nil { toast = .failed("模板切换失败，当前简历未被替换") }
             return message
         }
     }
@@ -799,27 +929,29 @@ struct ResumeEditorView: View {
 
 
 
-/// 统一工具栏里的无边框按钮（`.borderless`）：平时没有底色和描边，悬停或按下才出现 8% 黑底；`pressed` 是对应面板打开时的常亮态。
-/// Web `.v3-crumb-back`：常态 `--v3-fnt`，悬停 `--v3-txt`，没有底色。
-private struct BackCrumbStyle: ButtonStyle {
+/// Web `.wbs-back`：28×28 圆形，#55554f；悬停 6% 黑底、墨黑。
+private struct HeadBackStyle: ButtonStyle {
     @State private var hover = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundStyle(hover || configuration.isPressed ? V3.txt : V3.fnt)
+            .foregroundStyle(hover || configuration.isPressed ? V3.txt : Color(hex: 0x55554F))
+            .background(hover || configuration.isPressed ? Color.black.opacity(0.06) : .clear, in: Circle())
             .onHover { hover = $0 }
     }
 }
 
-private struct ToolbarPlainStyle: ButtonStyle {
+/// Web `.wbs-save`：28 高胶囊、左右 16、12/500；平时 #55554f，悬停 4% 黑底墨黑，禁用 #b9b9b2。
+private struct HeadSaveStyle: ButtonStyle {
     var strong = false
-    var pressed = false
     @Environment(\.isEnabled) private var enabled
     @State private var hover = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundStyle(!enabled ? V3.fnt2 : strong || pressed || hover ? V3.txt : V3.sub)
-            .background(pressed || configuration.isPressed ? Color.black.opacity(0.08) : enabled && hover ? Color.black.opacity(0.05) : .clear,
-                        in: RoundedRectangle(cornerRadius: 6))
+            .font(V3.sans(12, weight: .medium)).lineLimit(1)
+            .foregroundStyle(!enabled ? Color(hex: 0xB9B9B2) : strong || hover ? V3.txt : Color(hex: 0x55554F))
+            .padding(.horizontal, 16).frame(minWidth: 56, minHeight: 28)
+            .background(enabled && (hover || configuration.isPressed) ? Color.black.opacity(0.04) : .clear, in: Capsule())
+            .contentShape(Capsule())
             .onHover { hover = $0 }
     }
 }

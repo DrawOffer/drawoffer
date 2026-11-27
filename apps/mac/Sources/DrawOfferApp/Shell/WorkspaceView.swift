@@ -165,6 +165,8 @@ struct WorkspaceView: View {
             if new != .account { careerProfile = false }
         }
         .onChange(of: user == nil) { _, guest in if guest { selection = .home } }
+        // 退出登录：这个账号存在这台电脑上的简历草稿一起删掉（Web `clearLocalResumeDraftsForUser`）
+        .onChange(of: user?.id) { old, new in if let old, new == nil { ResumeDraftStore.standard()?.clearAll(user: old) } }
         .onChange(of: router.pending) {
             switch router.take() {
             case .section(let section): selection = section

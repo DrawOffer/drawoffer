@@ -44,9 +44,7 @@ private let detail = json(#"""
     #expect(old.rounds[1].source == 1 && old.sources[1].nodes[0].state == "weak" && old.rounds[1].from == "上次没答好 · 复测")
 }
 
-@Test func mockPrepPhraseAndAnswers() {
-    #expect(MockPrep.phraseHits("我准备好了") == [true, true, true, true, true, true, false, false, false, false, false])
-    #expect(MockPrep.phraseHits("").allSatisfy { !$0 })
+@Test func mockPrepAnswers() {
     let answered = json(#"{"has_intro": true, "questions": [{"plan_index": 0, "answer_status": "answered"}, {"plan_index": 1, "answer_status": "pending"}], "report": null}"#)
     #expect(!MockPrep.hasAnswers(answered))
     #expect(MockPrep.hasAnswers(json(#"{"report": {"questions": [{"is_intro": false, "skipped": false}]}}"#)))

@@ -79,7 +79,8 @@ struct MockHomeV2: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(.horizontal, 61).padding(.top, 60)
             } else {
-                V3Loading("正在加载模拟面试…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Web `MockHome`：数据未到时画模拟面试首页骨架（SkeletonMockHome）
+                V3SkeletonMockHome()
             }
         }
         .background(.white)

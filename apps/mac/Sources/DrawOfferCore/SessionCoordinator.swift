@@ -85,6 +85,11 @@ public actor SessionCoordinator {
         return result
     }
 
+    /// 公开的 `GET /api/auth/capabilities`（新手引导开关等）：不带凭据，但和其他请求共用同一个连接池，不再单独握手。
+    public func authCapabilities() async throws -> JSONValue {
+        try await transport.send(JSONValue.self, path: "/api/auth/capabilities")
+    }
+
     public func beginLogin(clientVersion: String) async throws -> DesktopLoginChallenge {
         let current = UUID()
         try await signOut(generation: current)

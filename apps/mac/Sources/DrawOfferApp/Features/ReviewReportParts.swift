@@ -292,9 +292,12 @@ struct RRMemorySection: View {
             // 两类分开读：只读进展和习惯，没答好的知识点在底部「建议先补」里，不在这里告知
             var found: [JSONValue] = []
             var waiting: JSONValue?
-            for kind in ["progress", "insight"] {
-                guard let result = try? await session.api.careerRequest(path: "/api/memory/feedback", method: "GET", query: ["mock_interview_id": mockID, "kinds": kind], body: nil),
-                      result["enabled"]?.bool == true, let card = result["card"], card != .null else { continue }
+            // 两次读互不依赖，一起发；结果仍按 进展 → 习惯 的顺序合并
+            let api = session.api, id = mockID
+            async let progress = try? api.careerRequest(path: "/api/memory/feedback", method: "GET", query: ["mock_interview_id": id, "kinds": "progress"], body: nil)
+            async let insight = try? api.careerRequest(path: "/api/memory/feedback", method: "GET", query: ["mock_interview_id": id, "kinds": "insight"], body: nil)
+            for value in [await progress, await insight] {
+                guard let result = value, result["enabled"]?.bool == true, let card = result["card"], card != .null else { continue }
                 if card.text("status") == "pending" { waiting = card } else { found += (card["points"]?.items ?? []).filter { ["progress", "insight"].contains($0.text("kind")) } }
             }
             if Task.isCancelled { return }

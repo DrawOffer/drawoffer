@@ -45,6 +45,8 @@ struct InterviewScheduleView: View {
     @State private var recordAction: JobAction?
     @State private var refresh = UUID()
     @State private var loading = false
+    /// 已经读到过哪个账号的日程：只有首次加载才画骨架，之后刷新保留现有日历（Web `loading && !hasLoadedData`）。
+    @State private var loadedAccount: String?
     @State private var failure: String?
     @State private var datePicker = false
     @State private var overflow: Date?
@@ -64,6 +66,8 @@ struct InterviewScheduleView: View {
     private func at(_ day: Date, minute: Int) -> Date { calendar.date(bySettingHour: minute / 60, minute: minute % 60, second: 0, of: day)! }
     private var heading: String { SchedulePage.title(month: mode == "month", anchor: anchor) }
     private var subtitle: String { account.isEmpty ? "游客模式 · 登录后管理面试安排" : SchedulePage.subtitle(interviews, now: Date()) }
+    /// 首次加载、还没有任何日程数据。
+    private var firstLoad: Bool { !account.isEmpty && loading && loadedAccount != account }
     /// 场次能否改期 / 改作答计划：仍为 scheduled 且所属岗位没归档。
     private func canReschedule(_ item: ScheduledInterview) -> Bool {
         item.editable && (applications.first { $0.id == item.applicationID }?.raw.text("archived_at").isEmpty ?? true)
@@ -85,7 +89,7 @@ struct InterviewScheduleView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .task(id: account + refresh.uuidString) { await load() }
         .onChange(of: account) { _, _ in
-            interviews = []; applications = []; action = nil; creating = nil; overflow = nil; detail = nil; record = nil; selectedID = nil
+            interviews = []; applications = []; loadedAccount = nil; action = nil; creating = nil; overflow = nil; detail = nil; record = nil; selectedID = nil
         }
         .overlay(alignment: .top) { if record == nil { NoticeToast(item: $notice).padding(.top, 20) } }
         .centeredSheet(item: $creating) { value in
@@ -138,9 +142,13 @@ struct InterviewScheduleView: View {
                     Button("重试") { refresh = UUID() }.buttonStyle(CareerActionStyle(kind: .link))
                 }.padding(.top, 10)
             }
-            Group { if mode == "month" { monthView } else { weekView } }
+            Group {
+                // Web `ScheduleLoading`（SkeletonSchedule）：首次加载时日历换成 7 × 5 的格子骨架
+                if firstLoad { V3SkeletonCalendar(label: "正在加载求职数据…") }
+                else if mode == "month" { monthView } else { weekView }
+            }
                 .frame(minHeight: 280, maxHeight: .infinity, alignment: .top).padding(.top, 14)
-                .overlay(alignment: .topTrailing) { if loading { ProgressView().controlSize(.small).padding(6) } }
+                .overlay(alignment: .topTrailing) { if loading && !firstLoad { ProgressView().controlSize(.small).padding(6) } }
         }
         .padding(.top, 64).padding(.bottom, 32)
         .frame(maxHeight: .infinity, alignment: .top)
@@ -155,10 +163,15 @@ struct InterviewScheduleView: View {
     private var head: some View {
         HStack(alignment: .top, spacing: 24) {
             VStack(alignment: .leading, spacing: 0) {
-                Text(verbatim: "SCHEDULE · " + SchedulePage.rangeCount(interviews, month: mode == "month", anchor: anchor))
-                    .font(V3.sans(11)).foregroundStyle(ScheduleInk.faint).frame(height: 13)
+                // Web `SkeletonSchedule`：眉题里的数量与副标题在首次加载时是文字占位（96 / 220 宽）
+                HStack(spacing: 0) {
+                    Text(verbatim: "SCHEDULE · ")
+                    if firstLoad { V3LoadingText(width: 96, size: 11) } else { Text(verbatim: SchedulePage.rangeCount(interviews, month: mode == "month", anchor: anchor)) }
+                }.font(V3.sans(11)).foregroundStyle(ScheduleInk.faint).frame(height: 13)
                 Text("面试日程").font(V3.serif(28)).foregroundStyle(V3.txt).frame(height: 40).padding(.top, 13)
-                Text(subtitle).font(V3.sans(13)).foregroundStyle(V3.sub).lineLimit(1).frame(height: 16).padding(.top, 2)
+                Group {
+                    if firstLoad { V3LoadingText(width: 220, size: 13) } else { Text(subtitle).font(V3.sans(13)).foregroundStyle(V3.sub).lineLimit(1) }
+                }.frame(height: 16).padding(.top, 2)
             }
             Spacer(minLength: 0)
             HStack(spacing: 0) {
@@ -517,21 +530,19 @@ struct InterviewScheduleView: View {
     private func load() async {
         guard !account.isEmpty else { loading = false; failure = nil; return }
         loading = true; failure = nil
+        let api = session.api
         do {
-            var items: [JSONValue] = []; var cursor = ""; var seen = Set<String>()
-            repeat {
-                var query = ["limit": "500"]; if !cursor.isEmpty { query["cursor"] = cursor }
-                let page = try await session.api.careerRequest(path: "/api/interview-sessions", method: "GET", query: query, body: nil)
-                try Task.checkCancellation(); items += page["items"]?.items ?? []; cursor = page.text("next_cursor")
-                if !cursor.isEmpty && !seen.insert(cursor).inserted { throw APIError.invalidResponse }
-            } while !cursor.isEmpty
-            var jobs: [CareerApplication] = []; cursor = ""; seen = []
-            repeat {
-                var query = ["scope": "all", "limit": "200"]; if !cursor.isEmpty { query["cursor"] = cursor }
-                let page = try await session.api.careerRequest(path: "/api/job-applications", method: "GET", query: query, body: nil)
-                try Task.checkCancellation(); jobs += (page["items"]?.items ?? []).map { CareerApplication($0) }; cursor = page.text("next_cursor")
-                if !cursor.isEmpty && !seen.insert(cursor).inserted { throw APIError.invalidResponse }
-            } while !cursor.isEmpty
+            // Web `loadData`（schedule 视图）：排期与求职进程两张分页表一起读（`Promise.all`），每张表内部按 cursor 一页接一页
+            async let listedSessions = ConcurrentLoad.pages(base: ["limit": "500"]) {
+                try await api.careerRequest(path: "/api/interview-sessions", method: "GET", query: $0, body: nil)
+            }
+            async let listedJobs = ConcurrentLoad.pages(base: ["scope": "all", "limit": "200"]) {
+                try await api.careerRequest(path: "/api/job-applications", method: "GET", query: $0, body: nil)
+            }
+            let items = try await listedSessions
+            let jobs = try await listedJobs.map { CareerApplication($0) }
+            try Task.checkCancellation()
+            loadedAccount = account
             interviews = items.map(ScheduledInterview.init); applications = jobs
         } catch { if !Task.isCancelled { failure = "排期加载失败，请检查连接或重新登录后重试。" } }
         if !Task.isCancelled { loading = false }

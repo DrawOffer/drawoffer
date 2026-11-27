@@ -53,7 +53,7 @@ struct ResumesView: View {
         // Figma 03 页 02.1：内容区距顶 64（眉题），标题 28 衬线，说明 13；右上「导入简历」+ 墨黑「新建简历」。
         V3Page(top: 64) {
             VStack(alignment: .leading, spacing: 0) {
-                ResumesHead(count: loaded ? "\(resumes.count) 份" : "个人工作区",
+                ResumesHead(count: loaded ? "\(resumes.count) 份" : "个人工作区", loading: !loaded && !loadError && !account.isEmpty,
                             subtitle: atLimit ? "已达到 \(ResumeRequest.maximumPerUser) 份上限。删除不用的简历后，才能新建、导入或复制。" : "每份简历独立编辑，需要时复制一份按岗位修改。",
                             warn: atLimit) {
                     if !account.isEmpty {
@@ -118,12 +118,16 @@ struct ResumesView: View {
         }
     }
 
-    private var list: some View {
+    /// 02.1 工具行：距头部 32、高 30；「全部简历」16/600（Web `.hv3-toolbar-title` --ui-text-md），数字 11 灰；搜索 220×30、圆角 7、#f4f4f2 底。
+    /// 加载中数字是一条 20 宽的文字占位（Web `<LoadingText width={20} />`），搜索框照常显示。
+    private var toolbar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // 02.1 工具行：距头部 32、高 30；「全部简历」16/600（Web `.hv3-toolbar-title` --ui-text-md），数字 11 灰；搜索 220×30、圆角 7、#f4f4f2 底
             HStack {
-                (Text("全部简历  ").font(V3.sans(16, weight: .semibold)).foregroundStyle(V3.txt)
-                 + Text("\(resumes.count)").font(V3.number(11, weight: .medium)).foregroundStyle(resumesHint))
+                HStack(spacing: 0) {
+                    Text("全部简历  ").font(V3.sans(16, weight: .semibold)).foregroundStyle(V3.txt)
+                    if loaded { Text("\(resumes.count)").font(V3.number(11, weight: .medium)).foregroundStyle(resumesHint) }
+                    else { V3LoadingText(width: 20, size: 11) }
+                }
                 Spacer()
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(V3.fnt)
@@ -132,6 +136,12 @@ struct ResumesView: View {
                     .background(V3.field, in: RoundedRectangle(cornerRadius: 7))
             }.frame(height: 30).padding(.top, 32)
             Rectangle().fill(V3.line).frame(height: 1).padding(.top, 2)
+        }
+    }
+
+    private var list: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            toolbar
             if visible.isEmpty {
                 // 02.1 ③ 搜索没有结果：三张小纸 + 放大镜，标题 17/500，说明 13，「清除搜索」胶囊
                 VStack(spacing: 0) {
@@ -177,16 +187,22 @@ struct ResumesView: View {
         }
     }
 
+    /// Web「我的简历」数据加载占位：工具行照常显示，下面 4 张卡——#F4F4F2 纸面（同一道扫光）+ 名称 128×14、时间 72×11 两条占位，
+    /// 与真实卡片（ResumeCard）同间距。
     private var skeleton: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 199), spacing: 20)], alignment: .leading, spacing: 37) {
-            ForEach(0..<4, id: \.self) { _ in
-                VStack(alignment: .leading, spacing: 10) {
-                    RoundedRectangle(cornerRadius: 6).fill(V3.field).aspectRatio(210.0 / 297, contentMode: .fit)
-                    RoundedRectangle(cornerRadius: 3).fill(V3.field).frame(width: 120, height: 12)
-                    RoundedRectangle(cornerRadius: 3).fill(V3.field).frame(width: 80, height: 10)
+        VStack(alignment: .leading, spacing: 0) {
+            toolbar
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 199), spacing: 20, alignment: .top)], alignment: .leading, spacing: 37) {
+                ForEach(0..<4, id: \.self) { _ in
+                    VStack(alignment: .leading, spacing: 6) {
+                        GeometryReader { box in V3Skeleton(width: box.size.width, height: box.size.height, radius: 6, color: V3.field) }
+                            .aspectRatio(210.0 / 297, contentMode: .fit)
+                        V3Skeleton(width: 128, height: 14, radius: 3).frame(height: 16).padding(.top, 4)
+                        V3Skeleton(width: 72, height: 11, radius: 3)
+                    }
                 }
-            }
-        }.padding(.top, 55).accessibilityLabel("正在加载我的简历…")
+            }.padding(.top, 18)
+        }.accessibilityElement(children: .contain).accessibilityLabel("正在加载我的简历…")
     }
 
     /// `.hv3-load-error`：分隔线距头部 58，下方 55 处 480 宽的卡片，150 高点阵舞台，112×36 的「重新加载」。
@@ -226,12 +242,14 @@ struct ResumesView: View {
         defer { if owner == account { loading = false } }
         do {
             guard let client = session.api as? HTTPAPIClient else { return }
+            // 导入任务卡（`resume-overview`）与简历列表互不依赖：一起读，列表到了先画，任务卡随后补上（Web 一次读 overview 拿到两者）
+            async let overview = try? client.careerRequest(path: "/api/resume-overview", method: "GET", query: [:], body: nil)
             let page = try await client.listResumePage()
             let result = page.resumes
             try Task.checkCancellation()
             guard owner == account else { return }
             resumes = result; defaultID = page.defaultID; loadedAccount = owner
-            await loadImports(owner: owner)
+            await applyImports(await overview, owner: owner)
             if let current = preview { preview = result.first { $0.id == current.id } }
             if let focus = focusResumeID {
                 focusResumeID = nil
@@ -252,8 +270,11 @@ struct ResumesView: View {
 
     /// 导入任务卡（`GET /api/resume-overview` 的进行中与失败任务）；有进行中的任务时每 3 秒刷新，完成后刷新列表。
     private func loadImports(owner: String) async {
-        guard let overview = try? await session.api.careerRequest(path: "/api/resume-overview", method: "GET", query: [:], body: nil),
-              owner == account else { return }
+        await applyImports(try? await session.api.careerRequest(path: "/api/resume-overview", method: "GET", query: [:], body: nil), owner: owner)
+    }
+
+    private func applyImports(_ overview: JSONValue?, owner: String) async {
+        guard let overview, owner == account else { return }
         let active = overview["active_imports"]?.items ?? []
         let previousActive = imports.filter { $0.text("upload_status") != "failed" && $0.text("parse_status") != "failed" }.count
         imports = active + (overview["failed_imports"]?.items ?? [])
@@ -549,15 +570,23 @@ enum WebBridge {
 /// 02.1 页头：眉题 11 灰「RESUMES · N 份」，标题 28 衬线，说明 13（到上限时橙色）；按钮距顶 32。
 private struct ResumesHead<Actions: View>: View {
     let count: String
+    /// 首次加载：眉题数量与副标题画文字占位（Web `<LoadingText width={36} />` / `<LoadingText width={320} />`）。
+    var loading = false
     let subtitle: String
     var warn = false
     @ViewBuilder var actions: () -> Actions
     var body: some View {
         HStack(alignment: .top, spacing: 24) {
             VStack(alignment: .leading, spacing: 0) {
-                Text("RESUMES · \(count)").font(V3.sans(11)).foregroundStyle(resumesHint).frame(height: 13)
+                HStack(spacing: 0) {
+                    Text("RESUMES · ")
+                    if loading { V3LoadingText(width: 36, size: 11) } else { Text(count) }
+                }.font(V3.sans(11)).foregroundStyle(resumesHint).frame(height: 13)
                 Text("我的简历").font(V3.serif(28)).foregroundStyle(V3.txt).frame(height: 40).padding(.top, 13)
-                Text(subtitle).font(V3.sans(13)).foregroundStyle(warn ? V3.orange : V3.sub).lineLimit(1).frame(height: 16).padding(.top, 2)
+                Group {
+                    if loading { V3LoadingText(width: 320, size: 13) }
+                    else { Text(subtitle).font(V3.sans(13)).foregroundStyle(warn ? V3.orange : V3.sub).lineLimit(1) }
+                }.frame(height: 16).padding(.top, 2)
             }
             Spacer(minLength: 0)
             HStack(spacing: 10) { actions() }.padding(.top, 32)

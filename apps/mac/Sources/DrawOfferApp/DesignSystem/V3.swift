@@ -39,13 +39,18 @@ struct V3PageHead<Actions: View>: View {
     var compact = false
     /// 求职页 `CareerPageHead` 的副标题行高 20（简历页为文字自然高度）。
     var subtitleHeight: CGFloat? = nil
+    /// 副标题还在等数据：同一行画这么宽的文字占位（Web `<Reveal inline placeholder={<LoadingText width />}>`）。
+    var subtitleLoading: CGFloat? = nil
     @ViewBuilder var actions: () -> Actions
     var body: some View {
         HStack(alignment: .top, spacing: 24) {
             VStack(alignment: .leading, spacing: 0) {
                 Text(eyebrow.joined(separator: " · ")).font(V3.sans(12, weight: .medium)).foregroundStyle(V3.fnt).frame(height: 18)
                 Text(title).font(V3.serif(28)).foregroundStyle(V3.txt).frame(height: 36).padding(.top, compact ? 9 : 8)
-                if let subtitle {
+                if let subtitleLoading {
+                    V3LoadingText(width: subtitleLoading, size: compact ? 13 : 14)
+                        .frame(height: compact ? 16 : subtitleHeight ?? 20, alignment: .leading).padding(.top, 6)
+                } else if let subtitle {
                     Text(subtitle).font(V3.sans(compact ? 13 : 14)).foregroundStyle(V3.sub).lineLimit(1)
                         .frame(height: compact ? 16 : subtitleHeight).padding(.top, compact ? 6 : 6)
                 }

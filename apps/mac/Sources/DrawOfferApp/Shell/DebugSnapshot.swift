@@ -377,7 +377,12 @@ enum DebugSnapshot {
             var actions: CFArray?
             if AXUIElementCopyActionNames(element, &actions) == .success, let names = actions as? [String],
                names.contains(kAXPressAction) || names.contains(kAXShowMenuAction) {
-                let labels = [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].map { text(element, $0) }.filter { !$0.isEmpty }
+                // 不用 map 闭包捕获 element：release 构建的 Swift 6 并发检查会把它判成跨隔离域传递
+                var labels: [String] = []
+                for name in [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute] {
+                    let label = text(element, name)
+                    if !label.isEmpty { labels.append(label) }
+                }
                 if labels.contains(target) { exact.append(element) }
                 else if labels.contains(where: { $0.contains(target) }) { partial.append(element) }
             }

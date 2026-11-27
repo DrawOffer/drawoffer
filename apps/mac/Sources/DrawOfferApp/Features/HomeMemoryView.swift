@@ -52,7 +52,8 @@ struct HomeMemoryView: View {
                                  openChat: openChat, chatsChanged: chatsChanged)
                 }
             } else {
-                V3Loading("正在读取首页…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Web `HomeMemory`：数据到达前首页本身就是一张空白画布（路由骨架同样留白），不画转圈或吉祥物
+                Color.white.frame(maxWidth: .infinity, maxHeight: .infinity).accessibilityLabel("正在读取首页…")
             }
         }
         .background(.white)
@@ -737,6 +738,15 @@ private struct FeedbackHome: View {
     @State private var chat: HomeChatTopic?
     /// 同一个知识点再点「聊一聊」接着上次那段聊（只在这次打开页面期间记得）
     @State private var chatSessions: [String: String] = [:]
+    /// 图谱区域（`.hf-slot`）的实际大小：小图按它等比缩放，左边列表按它对齐
+    @State private var slot: CGSize = .zero
+    /// 最近进展列表的高度：窗口变了才重新取（Web `listHeight`），切换条目时图不跟着跳
+    @State private var listHeight: Double?
+    @State private var listNow: Double = 0
+
+    private struct ListKey: Hashable { let size: CGSize; let items: Int
+        func hash(into hasher: inout Hasher) { hasher.combine(size.width); hasher.combine(size.height); hasher.combine(items) }
+    }
 
     /// 有节点就画图谱，不等掌握结论；一个节点都没有时右边换成一句话
     private var graphReady: Bool { !graph.nodes.isEmpty }
@@ -747,52 +757,28 @@ private struct FeedbackHome: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let padX = min(56, max(28, geometry.size.width * 0.05))
-            let padTop = min(36, max(20, geometry.size.height * 0.045))
-            let padBottom = min(40, max(20, geometry.size.height * 0.048))
-            let graphWidth = min(529, max(320, (geometry.size.width - padX * 2 - 40) * 0.51))
-            VStack(spacing: 0) {
-                HStack(alignment: .top, spacing: 40) {
-                    // 最近进展为空或图谱没有节点时，左栏不再跟图谱上沿对齐，竖直居中
-                    Group {
-                        if hasTimeline { timeline.fixedSize(horizontal: false, vertical: true).padding(.top, graphReady ? 70 : 0) } else { summary }
-                    }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: hasTimeline && graphReady ? .topLeading : .leading)
-                    VStack(spacing: 0) {
-                        HStack(spacing: 22) {
-                            Spacer()
-                            (Text("知识图谱").foregroundStyle(V3.txt).fontWeight(.medium) +
-                             Text(graphReady ? (graph.weakPoints > 0 ? "   \(graph.points) 个知识点，\(graph.weakPoints) 个还不牢" : "   \(graph.points) 个知识点") : "").foregroundStyle(V3.fnt))
-                                .font(V3.sans(13))
-                            if graphReady {
-                                Button { withAnimation(.timingCurve(0.2, 0.9, 0.25, 1, duration: 0.6)) { expanded = true } } label: {
-                                    HStack(spacing: 6) { Text("展开"); Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 11, weight: .medium)) }
-                                }.buttonStyle(.plain).font(V3.sans(13, weight: .medium)).foregroundStyle(V3.txt)
-                            }
-                        }.frame(height: 28)
-                        if graphReady {
-                            HomeGraphCanvas(graph: graph, stage: stage)
-                                .padding(.top, 31).frame(minHeight: 240, maxHeight: 535, alignment: .top)
-                                .onTapGesture(count: 2) { withAnimation(.timingCurve(0.2, 0.9, 0.25, 1, duration: 0.6)) { expanded = true } }
-                        } else {
-                            // 一个节点都没有（记忆还没读到简历，或刚清空过）
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text("图谱里还没有内容").font(V3.sans(22, weight: .medium)).foregroundStyle(V3.txt)
-                                Text("简历里的经历和技术、练过的面试，都会画在这里。").font(V3.sans(14)).lineHeight(14, 24).foregroundStyle(V3.sub)
-                            }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading).padding(.horizontal, 32)
-                        }
-                    }.frame(width: graphWidth)
-                        .coachTarget(showCoach, label: "长期记忆引导", message: "这是你的长期记忆。简历、面试和岗位里的东西\n都连在这里，每练一场都会更新。",
-                                     actions: [CoachAction(label: "知道了")], padding: 8, corner: 12) { coach.dismiss() }
-                }.frame(maxHeight: .infinity)
-                strips
+            // Web 的 vw / vh 是视口：这里取窗口内容区（首页贴着窗口右下角，全局坐标的右下角就是窗口宽高）
+            let global = geometry.frame(in: .global)
+            let layout = HomeFeedbackLayout(window: CGSize(width: global.maxX, height: global.maxY), container: geometry.size)
+            Group {
+                if layout.narrow {
+                    // ≤980：页面不再铺满一屏，单栏往下排、整页滚动（Web `.hf-root { position: relative }`）
+                    ScrollView { page(layout) }
+                } else {
+                    page(layout).frame(maxHeight: .infinity)
+                }
             }
-            .frame(maxWidth: 1160).frame(maxWidth: .infinity)
-            .padding(.horizontal, padX).padding(.top, padTop).padding(.bottom, padBottom)
             .opacity(expanded ? 0 : 1)
             .overlay {
                 if expanded {
                     expandedLayer.transition(.opacity.combined(with: .scale(scale: 0.96)))
                 }
+            }
+            // 窗口变了，列表高度重新量（Web 的 onResize 里 listHeight = null）
+            .task(id: ListKey(size: geometry.size, items: graph.timeline.count)) {
+                listHeight = nil
+                try? await Task.sleep(for: .milliseconds(120))
+                if listHeight == nil { listHeight = listNow }
             }
         }
         .task(id: graph) {
@@ -803,6 +789,87 @@ private struct FeedbackHome: View {
             if chat != nil { withAnimation(.easeOut(duration: 0.2)) { chat = nil } }
             else if expanded { withAnimation { expanded = false } }
         }
+    }
+
+    /// `.hf-page > .hf-inner`：上面首屏（左进展、右图谱）占满剩余高度，下面六个入口。
+    private func page(_ l: HomeFeedbackLayout) -> some View {
+        VStack(spacing: 0) {
+            hero(l).frame(maxHeight: l.narrow ? nil : .infinity)
+            strips(l).padding(.top, l.rowTop)
+        }
+        .frame(width: l.innerWidth)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, l.padX).padding(.top, l.padTop).padding(.bottom, l.padBottom)
+    }
+
+    /// `.hf-hero`：两栏 1fr : 1.2fr、间距 40，竖直方向拉满；≤980 单栏。
+    private func hero(_ l: HomeFeedbackLayout) -> some View {
+        let k = l.scale
+        let fit = graphFit(l)
+        let stack = l.narrow ? AnyLayout(VStackLayout(alignment: .leading, spacing: l.heroGap)) : AnyLayout(HStackLayout(alignment: .top, spacing: l.heroGap))
+        return stack {
+            // 最近进展为空或图谱没有节点时，左栏不再跟图谱对齐，竖直居中（`.hf-left.is-centered`）
+            Group {
+                if hasTimeline {
+                    timeline(l)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .onGeometryChange(for: Double.self, of: { Double($0.size.height) }) { height in
+                            listNow = height
+                            if listHeight == nil { listHeight = height }
+                        }
+                        .padding(.top, graphReady ? fit.listTop ?? 0 : 0)
+                } else { summary(l) }
+            }
+            .frame(width: l.leftWidth, alignment: .leading)
+            .frame(maxHeight: l.narrow ? nil : .infinity, alignment: hasTimeline && graphReady ? .topLeading : .leading)
+            VStack(spacing: 0) {
+                // `.hf-slotfoot`：行高 22，下边距 4
+                HStack(spacing: 22 * k) {
+                    Spacer()
+                    (Text("知识图谱").foregroundStyle(V3.txt).fontWeight(.medium) +
+                     Text(graphReady ? (graph.weakPoints > 0 ? "   \(graph.points) 个知识点，\(graph.weakPoints) 个还不牢" : "   \(graph.points) 个知识点") : "").foregroundStyle(V3.fnt))
+                        .font(V3.sans(13 * k))
+                    if graphReady {
+                        Button { withAnimation(.timingCurve(0.2, 0.9, 0.25, 1, duration: 0.6)) { expanded = true } } label: {
+                            HStack(spacing: 6 * k) { Text("展开"); Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 11 * k, weight: .medium)) }
+                        }.buttonStyle(.plain).font(V3.sans(13 * k, weight: .medium)).foregroundStyle(V3.txt)
+                    }
+                }.frame(height: 22 * k).padding(.bottom, 4 * k)
+                if graphReady {
+                    // `.hf-slot`：min-height 240、flex 1；≤980 时页面不定高，只剩最小高度
+                    HomeGraphCanvas(graph: graph, stage: stage, scale: k, stretch: fit.stretch)
+                        .frame(minHeight: 240 * k, maxHeight: l.narrow ? 240 * k : .infinity)
+                        .onGeometryChange(for: CGSize.self, of: { $0.size }) { slot = $0 }
+                        .onTapGesture(count: 2) { withAnimation(.timingCurve(0.2, 0.9, 0.25, 1, duration: 0.6)) { expanded = true } }
+                } else {
+                    // 一个节点都没有（记忆还没读到简历，或刚清空过）：`.hf-pending`
+                    VStack(alignment: .leading, spacing: 10 * k) {
+                        Text("图谱里还没有内容").font(V3.sans(22 * k, weight: .medium)).foregroundStyle(V3.txt)
+                        Text("简历里的经历和技术、练过的面试，都会画在这里。").font(V3.sans(14 * k)).lineHeight(14 * k, 24 * k).foregroundStyle(V3.sub)
+                            .frame(maxWidth: 440 * k, alignment: .leading).padding(.bottom, 22 * k)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 240 * k, maxHeight: l.narrow ? nil : .infinity, alignment: .leading)
+                    .padding(.horizontal, l.pendingPad)
+                }
+            }.frame(width: l.rightWidth)
+                .frame(maxHeight: l.narrow ? nil : .infinity, alignment: .top)
+                .coachTarget(showCoach, label: "长期记忆引导", message: "这是你的长期记忆。简历、面试和岗位里的东西\n都连在这里，每练一场都会更新。",
+                             actions: [CoachAction(label: "知道了")], padding: 8, corner: 12) { coach.dismiss() }
+        }
+    }
+
+    /// 小图的竖直拉伸，和左边列表要往下让的距离（Web `feedbackStage.ts` 收起态的 align）：
+    /// 列表顶对齐图上最高的节点，图上下拉伸到和列表一样高（0.8…1.32 倍）。≤980 或没有节点时不对齐。
+    private func graphFit(_ l: HomeFeedbackLayout) -> (stretch: Double, listTop: Double?) {
+        guard !l.narrow, let stage, slot.width > 0, slot.height > 0 else { return (1, nil) }
+        let byID = Dictionary(graph.nodes.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let spots = stage.home.compactMap { id, spot in byID[id].map { (y: spot.y, half: HomeGraphCanvas.halfHeight($0, scale: l.scale)) } }
+        guard let top = spots.min(by: { $0.y < $1.y }), let bottom = spots.max(by: { $0.y < $1.y }) else { return (1, nil) }
+        let stretch = HomeGraphFit.stretch(size: slot, top: top.y, bottom: bottom.y, topHalf: top.half, bottomHalf: bottom.half,
+                                           list: listHeight ?? (listNow > 0 ? listNow : nil), scale: l.scale)
+        guard let edge = HomeGraphFit.topEdge(size: slot, spots: spots, stretch: stretch) else { return (stretch, nil) }
+        // 图谱区域在首屏里的顶 = 标题行 22 + 4
+        return (stretch, max(0, 26 * l.scale + edge - 3 * l.scale))
     }
 
     /// 展开：铺满整页，左边图谱卡片，右边对话栏（点「聊一聊」才出现）。
@@ -825,76 +892,80 @@ private struct FeedbackHome: View {
     }
 
     /// R2（Figma 5:7·01.07）：最近进展为空时左边直接说结论（最稳、最该补的一处）；还没有结论时只说接着练。
-    private var summary: some View {
+    private func summary(_ l: HomeFeedbackLayout) -> some View {
+        let k = l.scale
         let summary = HomeSummary.of(graph)
         let lastMock = graph.entries?.mockLastID
-        return HStack(alignment: .top, spacing: 16) {
-            Circle().fill(V3.blue).frame(width: 10, height: 10).padding(.top, 6)
+        return HStack(alignment: .top, spacing: 16 * k) {
+            Circle().fill(V3.blue).frame(width: 10 * k, height: 10 * k).padding(.top, 6 * k)
             VStack(alignment: .leading, spacing: 0) {
-                Text(summary.eyebrow).font(V3.sans(13)).tracking(0.5).lineHeight(13, 22).foregroundStyle(V3.fnt).padding(.bottom, 14)
-                Text(summary.title.joined(separator: "\n")).font(V3.sans(40, weight: .semibold)).lineHeight(40, 52.8).foregroundStyle(V3.txt).minimumScaleFactor(0.6)
-                Text(summary.desc).font(V3.sans(16)).lineHeight(16, 28).foregroundStyle(V3.sub).frame(maxWidth: 544, alignment: .leading).padding(.top, 14).padding(.bottom, 22)
-                HStack(spacing: 22) {
+                Text(summary.eyebrow).font(V3.sans(13 * k)).tracking(0.5 * k).lineHeight(13 * k, 22 * k).foregroundStyle(V3.fnt).padding(.bottom, 14 * k)
+                Text(summary.title.joined(separator: "\n")).font(V3.sans(l.title, weight: .semibold)).lineHeight(l.title, l.title * 1.32).foregroundStyle(V3.txt).minimumScaleFactor(0.6)
+                Text(summary.desc).font(V3.sans(16 * k)).lineHeight(16 * k, 28 * k).foregroundStyle(V3.sub).frame(maxWidth: 544 * k, alignment: .leading).padding(.top, 14 * k).padding(.bottom, 22 * k)
+                HStack(spacing: 22 * k) {
                     if graph.hasConclusions, let weakest = graph.weakest {
-                        pill("练\(weakest.name.components(separatedBy: "（").first ?? weakest.name)") { practice(PracticeFocus(kind: "topic", ref: weakest.key, label: weakest.name, origin: "assistant")) }
+                        pill("练\(weakest.name.components(separatedBy: "（").first ?? weakest.name)", k) { practice(PracticeFocus(kind: "topic", ref: weakest.key, label: weakest.name, origin: "assistant")) }
                     } else {
-                        pill("再练一场") { practice(nil) }
+                        pill("再练一场", k) { practice(nil) }
                     }
                     if let lastMock {
                         Button { openMock(lastMock, true) } label: {
-                            HStack(spacing: 2) { Text("看最近一场的报告"); Image(systemName: "chevron.right").font(.system(size: 11)) }
-                        }.buttonStyle(HomeTextLinkStyle(size: 14))
+                            HStack(spacing: 2 * k) { Text("看最近一场的报告"); Image(systemName: "chevron.right").font(.system(size: 11 * k)) }
+                        }.buttonStyle(HomeTextLinkStyle(size: 14 * k))
                     }
-                }.padding(.bottom, 18)
-                Text("之后练面试、改简历、投岗位，进展会记在这里").font(V3.sans(13.5)).lineHeight(13.5, 22).foregroundStyle(Color(hex: 0x87867F)).padding(.top, 22)
+                }.padding(.bottom, 18 * k)
+                Text("之后练面试、改简历、投岗位，进展会记在这里").font(V3.sans(13.5 * k)).lineHeight(13.5 * k, 22 * k).foregroundStyle(Color(hex: 0x87867F)).padding(.top, 22 * k)
             }
         }
     }
 
     // 最近进展：选中的一条展开成大标题、说明和按钮，其余收成一行
-    private var timeline: some View {
-        VStack(alignment: .leading, spacing: 0) {
+    private func timeline(_ l: HomeFeedbackLayout) -> some View {
+        let k = l.scale
+        return VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(graph.timeline.enumerated()), id: \.element.id) { index, item in
                 let text = HomeProgressText.text(item, weakPoints: graph.weakPoints, hasConclusions: graph.hasConclusions)
                 let on = index == picked
-                HStack(alignment: .top, spacing: 16) {
+                HStack(alignment: .top, spacing: 16 * k) {
                     ZStack(alignment: .top) {
                         if index < graph.timeline.count - 1 {
-                            Rectangle().fill(Color(hex: 0xD5D3C9)).frame(width: 1).padding(.top, on ? 17 : 31).frame(maxHeight: .infinity)
+                            Rectangle().fill(Color(hex: 0xD5D3C9)).frame(width: 1).padding(.top, (on ? 17 : 31) * k).frame(maxHeight: .infinity)
                         }
                         Circle().fill(on ? V3.blue : .white).overlay(Circle().strokeBorder(on ? V3.blue : Color(hex: 0xBDBBB2)))
-                            .frame(width: on ? 10 : 8, height: on ? 10 : 8).padding(.top, on ? 6 : 20)
-                    }.frame(width: 10)
-                    if on { expandedItem(item, text) } else {
+                            .frame(width: (on ? 10 : 8) * k, height: (on ? 10 : 8) * k).padding(.top, (on ? 6 : 20) * k)
+                    }.frame(width: 10 * k)
+                    if on { expandedItem(item, text, l) } else {
                         Button { withAnimation(.timingCurve(0.22, 1, 0.36, 1, duration: 0.55)) { picked = index } } label: {
-                            HStack(alignment: .top, spacing: 16) {
-                                Text(HomeProgressText.when(item.date, today: graph.today)).font(V3.sans(13)).foregroundStyle(V3.fnt).monospacedDigit().frame(width: 52, alignment: .leading)
+                            HStack(alignment: .top, spacing: 16 * k) {
+                                Text(HomeProgressText.when(item.date, today: graph.today)).font(V3.sans(13 * k)).foregroundStyle(V3.fnt).monospacedDigit().frame(width: 52 * k, alignment: .leading)
                                 VStack(alignment: .leading, spacing: 0) {
-                                    Text(text.short).font(V3.sans(15)).lineHeight(15, 24).foregroundStyle(V3.txt).lineLimit(1)
-                                    Text(item.source).font(V3.sans(12)).lineHeight(12, 18).foregroundStyle(V3.fnt)
+                                    Text(text.short).font(V3.sans(15 * k)).lineHeight(15 * k, 24 * k).foregroundStyle(V3.txt).lineLimit(1)
+                                    Text(item.source).font(V3.sans(12 * k)).lineHeight(12 * k, 18 * k).foregroundStyle(V3.fnt)
                                 }
                                 Spacer(minLength: 0)
-                            }.padding(.vertical, 12).contentShape(Rectangle())
+                            }.padding(.vertical, 12 * k).contentShape(Rectangle())
                         }.buttonStyle(.plain)
                     }
                 }
             }
-        }.padding(.leading, 0)
+        }
     }
 
-    private func expandedItem(_ item: HomeGraph.Progress, _ text: HomeProgressText.Text) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("\(HomeProgressText.when(item.date, today: graph.today))  ·  \(item.source)").font(V3.sans(13)).tracking(0.5).lineHeight(13, 22).foregroundStyle(V3.fnt).padding(.bottom, 14)
+    private func expandedItem(_ item: HomeGraph.Progress, _ text: HomeProgressText.Text, _ l: HomeFeedbackLayout) -> some View {
+        let k = l.scale
+        return VStack(alignment: .leading, spacing: 0) {
+            Text("\(HomeProgressText.when(item.date, today: graph.today))  ·  \(item.source)").font(V3.sans(13 * k)).tracking(0.5 * k).lineHeight(13 * k, 22 * k).foregroundStyle(V3.fnt).padding(.bottom, 14 * k)
             text.lines.enumerated().reduce(Text("")) { result, pair in
                 let (before, mark, after) = pair.element
                 let line = Text(before) + Text(mark).foregroundColor(text.weak ? V3.orange : V3.blue) + Text(after)
                 return pair.offset == 0 ? line : result + Text("\n") + line
             }
-            .font(V3.sans(40, weight: .semibold)).lineHeight(40, 52.8).foregroundStyle(V3.txt).minimumScaleFactor(0.6)
-            Text(text.desc).font(V3.sans(16)).lineHeight(16, 28).foregroundStyle(V3.sub).frame(maxWidth: 544, alignment: .leading).padding(.top, 14).padding(.bottom, 22)
-            HStack(spacing: 22) {
+            // `.hf-title`：clamp(26px, 2.7vw, 40px)，行高 1.32
+            .font(V3.sans(l.title, weight: .semibold)).lineHeight(l.title, l.title * 1.32).foregroundStyle(V3.txt).minimumScaleFactor(0.6)
+            Text(text.desc).font(V3.sans(16 * k)).lineHeight(16 * k, 28 * k).foregroundStyle(V3.sub).frame(maxWidth: 544 * k, alignment: .leading).padding(.top, 14 * k).padding(.bottom, 22 * k)
+            HStack(spacing: 22 * k) {
                 if item.kind == .resume, let id = graph.resumeID {
-                    pill("打开简历") { editResume(id) }
+                    pill("打开简历", k) { editResume(id) }
                 } else if let label = item.practiceLabel ?? graph.weakest?.name {
                     // 练经历且给了延伸点：带上简历和延伸点，整段从这一点问起（Web `focusPath`）
                     let focus = item.practiceRef.map { ref in
@@ -903,66 +974,76 @@ private struct FeedbackHome: View {
                             : PracticeFocus(kind: item.practiceKind ?? "topic", ref: ref, label: label, origin: "assistant")
                     }
                         ?? graph.weakest.map { PracticeFocus(kind: "topic", ref: $0.key, label: $0.name) }
-                    pill("练\(label.components(separatedBy: "（").first ?? label)") { practice(focus) }
+                    pill("练\(label.components(separatedBy: "（").first ?? label)", k) { practice(focus) }
                 } else {
-                    pill("再练一场") { practice(nil) }
+                    pill("再练一场", k) { practice(nil) }
                 }
                 if item.kind == .mock {
                     Button { openMock(item.sourceID, true) } label: {
-                        HStack(spacing: 2) { Text("看这一场的报告"); Image(systemName: "chevron.right").font(.system(size: 11)) }
-                    }.buttonStyle(HomeTextLinkStyle(size: 14))
+                        HStack(spacing: 2 * k) { Text("看这一场的报告"); Image(systemName: "chevron.right").font(.system(size: 11 * k)) }
+                    }.buttonStyle(HomeTextLinkStyle(size: 14 * k))
                 }
-            }.padding(.bottom, 18)
+            }.padding(.bottom, 18 * k)
         }.transition(.opacity)
     }
 
-    private func pill(_ title: String, action: @escaping () -> Void) -> some View {
+    private func pill(_ title: String, _ k: Double, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 8) { Text(title).lineLimit(1); Image(systemName: "arrow.right").font(.system(size: 12, weight: .medium)) }
-        }.buttonStyle(HomePillStyle(height: 38, font: 14, leading: 22, trailing: 18))
+            HStack(spacing: 8 * k) { Text(title).lineLimit(1); Image(systemName: "arrow.right").font(.system(size: 12 * k, weight: .medium)) }
+        }.buttonStyle(HomePillStyle(height: 38 * k, font: 14 * k, leading: 22 * k, trailing: 18 * k))
     }
 
-    // 底部六个入口：三列两行
-    private var strips: some View {
+    // 底部六个入口（`.hf-row`）：三列两行，≤980 两列；≤1100 收起每条后半句的补充（`.hf-strip-more`）
+    private func strips(_ l: HomeFeedbackLayout) -> some View {
+        let k = l.scale
         let entries = graph.entries
         let overstated = graph.nodes.filter(\.overstated)
-        let interview: String = {
-            guard let entries, let start = entries.interviewStart, let date = HomeStageDate.monthDay(start) else { return "还没有排面试" }
-            return "\(date) \(entries.interviewCompany ?? "")\(entries.interviewStage ?? "面试")" + (entries.interviewCount > 1 ? "，共 \(entries.interviewCount) 场" : "")
+        let interview: (String, String) = {
+            guard let entries, let start = entries.interviewStart, let date = HomeStageDate.monthDay(start) else { return ("还没有排面试", "") }
+            return ("\(date) \(entries.interviewCompany ?? "")\(entries.interviewStage ?? "面试")", entries.interviewCount > 1 ? "，共 \(entries.interviewCount) 场" : "")
         }()
-        let mock = (entries?.mockCount ?? 0) > 0 ? "练过 \(entries!.mockCount) 场" + (entries?.mockLastScore.map { "，上一场 \(Int($0.rounded())) 分" } ?? "") : "开始第一场"
-        let saved: String = {
-            guard let entries else { return "还没有收藏岗位" }
+        let mock: (String, String) = (entries?.mockCount ?? 0) > 0
+            ? ("练过 \(entries!.mockCount) 场", entries?.mockLastScore.map { "，上一场 \(Int($0.rounded())) 分" } ?? "") : ("开始第一场", "")
+        let saved: (String, String) = {
+            guard let entries else { return ("还没有收藏岗位", "") }
             let base = entries.applicationsOpen > 0 ? "\(entries.applicationsOpen) 个在进行" : entries.jobsSaved > 0 ? "\(entries.jobsSaved) 个岗位" : "还没有收藏岗位"
-            return base + (entries.applicationsAwaiting > 0 ? "，\(entries.applicationsAwaiting) 个等结果" : "")
+            return (base, entries.applicationsAwaiting > 0 ? "，\(entries.applicationsAwaiting) 个等结果" : "")
         }()
+        let more = { (pair: (String, String)) in Text(pair.0 + (l.showMore ? pair.1 : "")) }
+        let resume = overstated.isEmpty ? Text(graph.resumeTitle)
+            : l.showMore ? Text("\(overstated.count) 处写高了，") + Text(overstated[0].label).foregroundColor(Color(hex: 0xB5651A)) : Text("\(overstated.count) 处写高了")
         let items: [(String, String, Text, () -> Void)] = [
-            ("calendar", "面试日程", Text(interview), { navigate(.schedule) }),
-            ("mic", "模拟面试", Text(mock), { navigate(.mock) }),
-            ("doc.text", "我的简历", overstated.isEmpty ? Text(graph.resumeTitle) : Text("\(overstated.count) 处写高了，") + Text(overstated[0].label).foregroundColor(Color(hex: 0xB5651A)),
-             { if let id = graph.resumeID { editResume(id) } else { navigate(.resumes) } }),
+            ("calendar", "面试日程", more(interview), { navigate(.schedule) }),
+            ("mic", "模拟面试", more(mock), { navigate(.mock) }),
+            ("doc.text", "我的简历", resume, { if let id = graph.resumeID { editResume(id) } else { navigate(.resumes) } }),
             ("briefcase", "推荐岗位", Text("按你的简历挑岗位"), { navigate(.opportunities) }),
-            ("square.split.1x2", "收藏的岗位", Text(saved), { navigate(.jobs) }),
+            ("square.split.1x2", "收藏的岗位", more(saved), { navigate(.jobs) }),
             ("folder", "资料库", Text((entries?.datasets ?? 0) > 0 ? "\(entries!.datasets) 份资料" : "还没有资料"), { navigate(.datasets) }),
         ]
-        return Grid(horizontalSpacing: 44, verticalSpacing: 30) {
-            ForEach(0..<2, id: \.self) { row in
+        let columns = l.rowColumns
+        // 每条高 52（上下 4 + 18 + 2 + 24 + 4），行距 clamp(12px, 2vh, 18px)，列距 clamp(24px, 3.4vw, 44px)
+        return Grid(horizontalSpacing: l.columnGap, verticalSpacing: l.rowGap) {
+            ForEach(0..<(items.count + columns - 1) / columns, id: \.self) { row in
                 GridRow {
-                    ForEach(0..<3, id: \.self) { column in
-                        let item = items[row * 3 + column]
-                        Button(action: item.3) {
-                            HStack(spacing: 12) {
-                                Image(systemName: item.0).font(.system(size: 19, weight: .light)).foregroundStyle(V3.sub).frame(width: 26, height: 26)
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text(item.1).font(V3.sans(13)).foregroundStyle(V3.fnt)
-                                    HStack(spacing: 2) {
-                                        item.2.font(V3.sans(15, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1)
-                                        Image(systemName: "chevron.right").font(.system(size: 11, weight: .medium)).foregroundStyle(Color(hex: 0xA5A39B))
+                    ForEach(0..<columns, id: \.self) { column in
+                        if row * columns + column < items.count {
+                            let item = items[row * columns + column]
+                            Button(action: item.3) {
+                                HStack(spacing: 12 * k) {
+                                    Image(systemName: item.0).font(.system(size: 19 * k, weight: .light)).foregroundStyle(V3.sub).frame(width: 26 * k, height: 26 * k)
+                                    VStack(alignment: .leading, spacing: 6 * k) {
+                                        Text(item.1).font(V3.sans(13 * k)).foregroundStyle(V3.fnt)
+                                        HStack(spacing: 2 * k) {
+                                            item.2.font(V3.sans(15 * k, weight: .medium)).foregroundStyle(V3.txt).lineLimit(1)
+                                            Image(systemName: "chevron.right").font(.system(size: 11 * k, weight: .medium)).foregroundStyle(Color(hex: 0xA5A39B))
+                                        }
                                     }
-                                }
-                                Spacer(minLength: 0)
-                            }.contentShape(Rectangle())
-                        }.buttonStyle(.plain).frame(maxWidth: .infinity)
+                                    Spacer(minLength: 0)
+                                }.padding(.vertical, 4 * k).contentShape(Rectangle())
+                            }.buttonStyle(.plain).frame(maxWidth: .infinity)
+                        } else {
+                            Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                        }
                     }
                 }
             }
@@ -980,17 +1061,31 @@ private enum HomeStageDate {
 }
 
 /// 首页右边的小图（Web `homeSkeleton`）：只画骨架——经历、服务的业务、多段经历共用的技术和最近几场面试；
-/// 经历衬线粗体，业务前带小方块，场次前带话筒，还不牢橙色、刚练稳蓝色。只缩不放：坐标按区域大小换算，字号不变。
+/// 经历衬线粗体，业务前带小方块，场次前带话筒，还不牢橙色、刚练稳蓝色。
+/// 坐标按 Web `feedbackStage.ts`：760 × 520 的设计稿按区域等比缩放（`HomeGraphFit`），竖直方向再按左边列表拉伸；字号只随放大倍数变。
 private struct HomeGraphCanvas: View {
     let graph: HomeGraph
     let stage: HomeGraphStage?
+    /// 放大倍数（`HomeFeedbackLayout.scale`）
+    var scale: Double = 1
+    var stretch: Double = 1
     @State private var hover: String?
+
+    /// 节点标签半高（Web `bh`：标签上下各留 5，行高约 1.2 倍字号）
+    static func halfHeight(_ node: HomeGraph.Node, scale: Double) -> Double {
+        let size: Double = switch node.kind {
+        case .experience: 15
+        case .technology, .session: 13
+        case .highlight, .point: 12
+        }
+        return (size * 1.2 + 10) * scale / 2
+    }
 
     var body: some View {
         GeometryReader { geometry in
             let size = geometry.size
             let point = { (id: String) -> CGPoint? in
-                stage?.home[id].map { CGPoint(x: size.width / 2 + $0.x * size.width, y: size.height / 2 + $0.y * size.height) }
+                stage?.home[id].map { HomeGraphFit.point(x: $0.x, y: $0.y, in: size, stretch: stretch) }
             }
             ZStack(alignment: .topLeading) {
                 Canvas { context, _ in
@@ -1003,9 +1098,9 @@ private struct HomeGraphCanvas: View {
                 }
                 ForEach(graph.nodes.filter { stage?.home[$0.id] != nil }) { node in
                     if let at = point(node.id) {
-                        HomeGraphLabel(node: node, large: false, core: false)
-                            .padding(.horizontal, 6).padding(.vertical, 5)
-                            .background(.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 4))
+                        HomeGraphLabel(node: node, large: false, core: false, scale: scale)
+                            .padding(.horizontal, 6 * scale).padding(.vertical, 5 * scale)
+                            .background(.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 4 * scale))
                             .fixedSize()
                             .help(node.label)
                             .onHover { hover = $0 ? node.id : (hover == node.id ? nil : hover) }

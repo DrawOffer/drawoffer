@@ -420,14 +420,18 @@ struct JobDetailView: View {
     private func load() async {
         loading = true; error = nil
         defer { loading = false }
+        let api = self.api, applicationID = application?.text("id") ?? ""
         do {
-            let result = try await api.careerRequest(path: "/api/job-descriptions/\(jobID)", method: "GET", query: [:], body: nil)
+            // Web `JobDetailPage`：岗位、所属进程与简历列表互不依赖，一起读（`Promise.allSettled`）；只有岗位读不到才算失败
+            async let record = api.careerRequest(path: "/api/job-descriptions/\(jobID)", method: "GET", query: [:], body: nil)
+            async let linked: JSONValue? = applicationID.isEmpty ? nil : try? await api.careerRequest(path: "/api/job-applications/\(applicationID)", method: "GET", query: [:], body: nil)
+            async let resumeList: JSONValue? = try? await api.careerRequest(path: "/api/resumes", method: "GET", query: [:], body: nil)
+            let result = try await record
             job = result["job_description"]
-            if let id = application?.text("id"), !id.isEmpty,
-               let latest = try? await api.careerRequest(path: "/api/job-applications/\(id)", method: "GET", query: [:], body: nil) {
+            if let latest = await linked {
                 app = latest["application"] ?? latest["job_application"] ?? app
             }
-            await loadResumes()
+            applyResumes(await resumeList)
         } catch is CancellationError {
         } catch {
             if case APIError.unauthorized = error { session.reportAuthenticationFailure() }
@@ -435,8 +439,8 @@ struct JobDetailView: View {
         }
     }
 
-    private func loadResumes() async {
-        guard let result = try? await api.careerRequest(path: "/api/resumes", method: "GET", query: [:], body: nil) else { resumesLoaded = true; return }
+    private func applyResumes(_ result: JSONValue?) {
+        guard let result else { resumesLoaded = true; return }
         let data = (try? JSONEncoder().encode(result["resumes"] ?? .array([]))) ?? Data("[]".utf8)
         resumes = (try? JSONDecoder().decode([ResumeSummary].self, from: data)) ?? []
         defaultResumeID = result["default_resume_id"]?.stringValue

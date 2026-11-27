@@ -21,7 +21,8 @@ struct ResumeEditorOrb: View {
 }
 
 /// C1 白板：小绘左边一段话，不加卡片——一句判断（14 墨黑）+ 一行灰字，编号选项（第一项蓝字），一行“或者直接说想改什么…”。
-/// 数字键选对应项，Esc 或再点小绘收起。
+/// 数字键选对应项，Esc 或再点小绘收起；选了一项序号先变 ✓、其余变淡，120ms 后再去做（Web 规范 ⑥）。
+/// “或者直接说想改什么…”平时是一行灰字，点了才展开成输入框（占位“想改什么，直接说”）。
 struct ResumeOrbBoard: View {
     let dialogue: ResumeOrb.Dialogue
     let pick: (ResumeOrb.Action) -> Void
@@ -30,6 +31,8 @@ struct ResumeOrbBoard: View {
     /// 选了某一项后的一句回应（失败或说明），留在白板上，可以收起。
     var reply: String? = nil
     @State private var text = ""
+    @State private var typing = false
+    @State private var chosen: Int?
     @FocusState private var focused: Bool
 
     static let width: CGFloat = 308
@@ -44,14 +47,15 @@ struct ResumeOrbBoard: View {
             }
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(dialogue.actions.enumerated()), id: \.offset) { index, action in
-                    Button { pick(action) } label: {
+                    Button { choose(action, index) } label: {
                         HStack(spacing: 8) {
-                            Text("\(index + 1)").font(V3.number(12)).foregroundStyle(index == 0 ? V3.blue : V3.fnt)
+                            Text(chosen == index ? "✓" : "\(index + 1)").font(V3.number(12)).foregroundStyle(index == 0 ? V3.blue : V3.fnt)
                                 .frame(width: 10, alignment: .leading)
                             Text(action.label).font(V3.sans(14)).foregroundStyle(index == 0 ? V3.blue : V3.txt)
                         }.frame(height: 27).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .opacity(chosen != nil && chosen != index ? 0.42 : 1)
                     .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: [])
                     .accessibilityLabel(action.label)
                 }
@@ -61,18 +65,24 @@ struct ResumeOrbBoard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if dialogue.input {
-            TextField("", text: $text, axis: .vertical)
-                .textFieldStyle(.plain).font(V3.sans(13)).foregroundStyle(V3.txt).lineLimit(1...4).focused($focused)
-                .overlay(alignment: .topLeading) {
-                    if text.isEmpty { Text(ResumeOrb.inputPlaceholder).font(V3.sans(13)).foregroundStyle(V3.fnt2).allowsHitTesting(false) }
+                if typing {
+                    ResumeTalkInput(placeholder: ResumeOrb.inputExpandedPlaceholder, text: $text) { send() }
+                        .padding(.top, 14)
+                        .accessibilityLabel("直接说想改什么")
+                } else {
+                    Button(ResumeOrb.inputPlaceholder) { typing = true }
+                        .buttonStyle(.plain).font(V3.sans(13)).foregroundStyle(V3.fnt2).padding(.top, 14)
                 }
-                .onSubmit { send() }
-                .padding(.top, 14)
-                .accessibilityLabel("直接说想改什么")
             }
         }
         .frame(width: Self.width, alignment: .leading)
         .onExitCommand(perform: close)
+    }
+
+    private func choose(_ action: ResumeOrb.Action, _ index: Int) {
+        guard chosen == nil else { return }
+        chosen = index
+        Task { try? await Task.sleep(for: .milliseconds(120)); pick(action) }
     }
 
     private func send() {
@@ -84,7 +94,7 @@ struct ResumeOrbBoard: View {
 }
 
 /// 外圈细环：inset 2、1.5 宽，只画上沿一段 #3366d9，1 秒转一圈；减少动态效果时不转。
-private struct ResumeOrbRing: View {
+struct ResumeOrbRing: View {
     @State private var turn = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {

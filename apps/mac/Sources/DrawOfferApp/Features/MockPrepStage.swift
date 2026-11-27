@@ -145,29 +145,46 @@ struct MockPrepCaption: View {
 
 /// 中间是这一场已挑好的题卡叠；外圈每个圆是一个来源（简历里的一段经历，或「这个方向常考」「岗位要求」），绕着题卡叠慢转；
 /// 来源周围的小点是它里面的每一行（白 = 没练过，朱砂 = 上次没守住，绿 = 守住了；知识来源用小方块）。每道题：选中一个来源 →
-/// 那一行亮起、旁边浮出原句 → 伸出小卡飞进中间写成题卡、三个核对点依次变绿 → 落进叠里。还没有挑题数据时中间是一张简历纸。
+/// 那一行亮起、旁边浮出原句 → 伸出小卡飞进中间写成题卡、三个核对点依次变绿 → 落进叠里。
+/// 读简历（Web Figma 09 页 04R，11-27；Mac 稿暂无，照 Web）：中间一张简历纸，淡黄扫读带从上往下扫；每扫完一段经历，那几行变黄、
+/// 缩成一个圆飘进轨道慢转，最后「这个方向常考」淡入；读完扫读带慢慢循环。题目一回来，轨道上的圆直接接上名字、简历纸淡出，
+/// 接着逐题演，不再从中间展开。
 struct MockPrepOrbit: View {
     let prep: JSONValue?
     let still: Bool
     @State private var start = Date()
+    /// 读简历动画从什么时候开始演：题目回来后公转角度从这里接着算，轨道上的圆不跳
+    @State private var readSince: Date?
 
     var body: some View {
         let plan = prep.map(MockPrep.plan) ?? (sources: [], rounds: [])
         let key = plan.rounds.map(\.title).joined(separator: "|") + "#" + plan.sources.map(\.name).joined(separator: "|")
         let end = MockPrep.duration(picks: plan.rounds.count) * 1000
+        // 题目回来时读简历已经在演：经历已经在轨道上，不再从中间展开
+        let fromReading = prep != nil && !still && readSince != nil
+        let shift = fromReading ? max(0, start.timeIntervalSince(readSince ?? start) * 1000) : 0
         Group {
-            if prep == nil {
-                OrbitFrame(sources: [], rounds: [], t: 0, reading: true)
+            if prep == nil && still {
+                OrbitFrame(sources: Orbit.readingSources, rounds: [], t: 0, reading: true)
+            } else if prep == nil {
+                TimelineView(.animation) { timeline in
+                    OrbitFrame(sources: Orbit.readingSources, rounds: [], t: max(0, timeline.date.timeIntervalSince(readSince ?? start)) * 1000, reading: true)
+                }
             } else if still {
                 OrbitFrame(sources: plan.sources, rounds: plan.rounds, t: end + 1800, reading: false)
             } else {
                 TimelineView(.animation) { timeline in
-                    OrbitFrame(sources: plan.sources, rounds: plan.rounds, t: max(0, timeline.date.timeIntervalSince(start)) * 1000, reading: false)
+                    OrbitFrame(sources: plan.sources, rounds: plan.rounds, t: max(0, timeline.date.timeIntervalSince(start)) * 1000, reading: false,
+                               fromReading: fromReading, shift: shift)
                 }
             }
         }
         .frame(width: MockFull.width, height: MockFull.height).clipped().allowsHitTesting(false).accessibilityHidden(true)
         .onChange(of: key) { start = Date() }
+        .onChange(of: "\(prep == nil)-\(still)", initial: true) {
+            // 失败后重新准备要从头演读简历，不接上一次的进度
+            if prep == nil && still { readSince = nil } else if prep == nil && readSince == nil { readSince = Date() }
+        }
     }
 }
 
@@ -181,6 +198,25 @@ private enum Orbit {
     static func lerp(_ a: Double, _ b: Double, _ k: Double) -> Double { a + (b - a) * k }
     static func color(_ state: String) -> Color { state == "weak" ? weak : state == "held" ? held : new }
     static func hex(_ value: String) -> Color { Color(hex: UInt32(value, radix: 16) ?? 0xA8A29E) }
+
+    // MARK: 读简历（Web `PrepOrbit` 的 READING_SOURCES / SHEET_ROWS / SCAN_*）
+    static let readingSources = MockPrep.readingSources
+    /// 简历纸上的行（x, y, 宽, 高）；第 2–4、5–6、7–8 行各是一段经历
+    static let sheetRows: [(x: Double, y: Double, w: Double, h: Double)] = [(38, 18, 48, 5), (38, 27, 30, 4), (14, 48, 96, 4), (14, 60, 80, 4), (14, 72, 90, 4),
+                                                                           (14, 92, 96, 4), (14, 104, 70, 4), (14, 124, 92, 4), (14, 136, 64, 4)]
+    static let sheetBlocks: [[Int]] = [[2, 3, 4], [5, 6], [7, 8]]
+    static let sheetH = 164.0
+    /// 扫读带第一遍从纸顶扫到纸底（毫秒）；之后放慢循环
+    static let scanFrom = 400.0, scanTo = 4400.0, scanLoop = 3200.0, flyMs = 1000.0, knowIn = 5000.0
+    /// 扫过的行变深（rgba(120, 113, 108, .75)）
+    static let rowRead = Color(red: 120 / 255, green: 113 / 255, blue: 108 / 255).opacity(0.75)
+    static func scanAt(_ y: Double) -> Double { scanFrom + (scanTo - scanFrom) * y / sheetH }
+    /// 每段经历被扫完的时刻 = 它最后一行被扫过的时刻
+    static let blockDone: [Double] = sheetBlocks.map { rows in scanAt(rows.map { sheetRows[$0].y + sheetRows[$0].h }.max() ?? 0) }
+    /// 读简历时第 i 个来源到轨道的进度；三段经历依次从纸上飞出，知识来源最后淡入
+    static func arrive(_ t: Double, _ i: Int) -> Double {
+        i < sheetBlocks.count ? seg(t, blockDone[i], blockDone[i] + flyMs) : seg(t, knowIn, knowIn + flyMs)
+    }
     /// 两个颜色按比例混合（CSS `color-mix(in srgb, a k%, b)`）。
     static func mix(_ a: UInt32, _ k: Double, _ b: UInt32) -> Color {
         func channel(_ v: UInt32, _ shift: UInt32) -> Double { Double((v >> shift) & 0xFF) / 255 }
@@ -193,6 +229,8 @@ private struct OrbitPlanet {
     struct Moon { var x: Double; var y: Double; var size: Double; var fill: Color; var ring: Bool; var opacity: Double; var mark: Double }
     var x = 0.0, y = 0.0, opacity = 1.0, z = 2, r0 = 0.0, mr = 0.0, md = 0.0
     var chosen = false, selected = 0.0, know = false, name = ""
+    /// 读简历时从纸上飞向轨道（圆心变淡黄、金色描边）；名字的透明度另算
+    var flying = false, labelOpacity = 1.0
     var moons: [Moon] = []
     var target: (Double, Double)?
 }
@@ -203,6 +241,9 @@ private struct OrbitFrame: View {
     let rounds: [MockPrep.Round]
     let t: Double
     let reading: Bool
+    /// 题目回来时读简历已经在演（轨道上的圆接着转，不从中间展开）；shift 为读简历已演的毫秒
+    var fromReading = false
+    var shift = 0.0
 
     var body: some View {
         let count = rounds.count
@@ -214,26 +255,49 @@ private struct OrbitFrame: View {
         let picked = reading || t < Orbit.open ? 0 : index >= 0 ? index + (rt > 4500 ? 1 : 0) : count
         let usedCount = reading || t < Orbit.open ? 0 : index >= 0 ? index + (rt > 2500 ? 1 : 0) : count
         let used = Set(rounds.prefix(usedCount).map { "\($0.source)-\($0.node)" })
-        let open = reading ? 0 : t < Orbit.open ? Orbit.seg(t, 500, 1800) : 1
+        let open = reading || fromReading ? 1 : t < Orbit.open ? Orbit.seg(t, 500, 1800) : 1
         let settle = reading ? 0 : Orbit.seg(t, pickEnd, pickEnd + 1800)
         let selected = round != nil ? Orbit.seg(rt, 0, 600) * (1 - Orbit.seg(rt, 4700, 5300)) : 0
         let marked = round != nil ? Orbit.seg(rt, 600, 1000) : 0
         let quoteOpacity = round != nil ? Orbit.seg(rt, 900, 1300) * (1 - Orbit.seg(rt, 2300, 2550)) : 0
-        let spin = { (speed: Double) in t <= pickEnd ? t / 1000 * speed : pickEnd / 1000 * speed + speed * 1.6 * (1 - exp(-(t - pickEnd) / 1000 / 1.6)) }
+        // 公转：挑题时匀速，挑完后慢慢停下；读简历时一直匀速转
+        let spin = { (speed: Double) in shift / 1000 * speed
+            + (reading || t <= pickEnd ? t / 1000 * speed : pickEnd / 1000 * speed + speed * 1.6 * (1 - exp(-(t - pickEnd) / 1000 / 1.6))) }
+        let readingCount = Orbit.readingSources.count
         let rot = spin(Orbit.tau / 46), moonRot = spin(Orbit.tau / 22)
         let planets = sources.enumerated().map { i, source -> OrbitPlanet in
-            let angle = rot + Double(i) * Orbit.tau / Double(sources.count)
+            // 题目回来时：读简历那几个圆从原来的角度滑到新的位置，多出来的来源淡入
+            let slide = fromReading ? Orbit.seg(t, 0, 900) : 1
+            let angle = fromReading && i < readingCount
+                ? Orbit.lerp(rot + Double(i) * Orbit.tau / Double(readingCount), rot + Double(i) * Orbit.tau / Double(sources.count), slide)
+                : rot + Double(i) * Orbit.tau / Double(sources.count)
             var p = OrbitPlanet()
             p.x = Orbit.cx + Orbit.orx * cos(angle) * open
             p.y = Orbit.cy + Orbit.ory * sin(angle) * open
             let depth = (sin(angle) + 1) / 2
             var k = (0.8 + 0.25 * depth) * Orbit.lerp(0.5, 1, open)
             var o = (0.6 + 0.4 * depth) * Orbit.lerp(0.4, 1, open)
-            if t < Orbit.open { o *= Orbit.seg(t, 700, 1500) }
+            // 读简历时还没飞到轨道（题目回来得早）或多出来的来源：淡入，不突然冒出来
+            if fromReading && (i >= readingCount || Orbit.arrive(shift, i) < 1) { o *= Orbit.seg(t, 0, 700) }
+            else if !fromReading && !reading && t < Orbit.open { o *= Orbit.seg(t, 700, 1500) }
+            if reading {
+                // 经历从纸上它那几行的位置飞出，边飞边长大；知识来源在轨道上原地淡入
+                let f = Orbit.arrive(t, i)
+                if i < Orbit.sheetBlocks.count {
+                    let rows = Orbit.sheetBlocks[i]
+                    let fromY = Orbit.cy - 82 + (Orbit.sheetRows[rows[0]].y + Orbit.sheetRows[rows[rows.count - 1]].y) / 2
+                    p.x = Orbit.lerp(Orbit.cx + 20, p.x, f)
+                    p.y = Orbit.lerp(fromY, p.y, f)
+                    k *= Orbit.lerp(0.35, 1, f)
+                    p.flying = f > 0 && f < 1
+                }
+                o *= f > 0 ? (i < Orbit.sheetBlocks.count ? 1 : 0.55 * f) : 0
+            }
             p.chosen = round?.source == i
             if p.chosen { k *= Orbit.lerp(1, 1.08, selected); o = Orbit.lerp(o, 1, selected) } else if round != nil { o *= Orbit.lerp(1, 0.55, selected) }
             p.opacity = o * Orbit.lerp(1, 0.45, settle)
-            p.z = p.chosen ? 20 : sin(angle) < 0 ? 2 : 12
+            p.labelOpacity = reading ? 0 : fromReading ? Orbit.seg(t, 300, 1100) : 1
+            p.z = p.chosen ? 20 : p.flying ? 12 : sin(angle) < 0 ? 2 : 12
             p.r0 = 30 * k; p.mr = 50 * k; p.md = max(8, 9 * k * 0.8)
             p.selected = p.chosen ? selected : 0
             p.know = source.know; p.name = source.name
@@ -257,13 +321,13 @@ private struct OrbitFrame: View {
         ZStack(alignment: .topLeading) {
             Ellipse().stroke(Color(hex: 0xE7E5E0), style: StrokeStyle(lineWidth: 1, dash: [3, 5]))
                 .frame(width: Orbit.orx * 2, height: Orbit.ory * 2).position(x: Orbit.cx, y: Orbit.cy)
-                .opacity(reading ? 0.6 : open * (1 - 0.6 * settle))
+                .opacity(reading ? 0.6 * Orbit.seg(t, 0, 800) + 0.3 * Orbit.arrive(t, 0) : open * (1 - 0.6 * settle))
             OrbitPlanets(planets: planets.filter { $0.z == 2 })
             OrbitCard(kind: .ghost).rotationEffect(.degrees(-4)).position(x: card.x, y: card.y + 8).opacity(picked >= 3 ? 1 : 0)
             OrbitCard(kind: .ghost).rotationEffect(.degrees(3)).position(x: card.x, y: card.y + 4).opacity(picked >= 2 ? 1 : 0)
             OrbitCard(kind: .slot).position(x: card.x, y: card.y).opacity(picked == 0 ? (reading ? 0 : t < Orbit.open ? Orbit.seg(t, 1500, 2000) : 1) : 0)
-            OrbitSheet().rotationEffect(.degrees(-3)).position(x: Orbit.cx, y: Orbit.cy)
-                .opacity(reading ? 1 : t < Orbit.open ? 1 - Orbit.seg(t, 1300, 1900) : 0)
+            OrbitSheet(t: t, reading: reading, fromReading: fromReading).rotationEffect(.degrees(-3)).position(x: Orbit.cx, y: Orbit.cy)
+                .opacity(reading ? 1 : t < Orbit.open ? 1 - (fromReading ? Orbit.seg(t, 200, 900) : Orbit.seg(t, 1300, 1900)) : 0)
             if picked >= 1 {
                 let shown = rounds[picked - 1]
                 OrbitCard(kind: .full(label: "第 \(picked) 题", round: shown), checks: (0..<3).map { j in !waiting || Int((t - pickEnd) / 280) % 4 != j })
@@ -358,8 +422,8 @@ private struct OrbitPlanets: View {
                     halo.opacity = p.opacity * p.selected
                     halo.stroke(circle(0, 0, p.r0 * 2 + 12), with: .color(Orbit.picked), lineWidth: 2)
                 }
-                layer.fill(circle(0, 0, p.r0 * 2), with: .color(p.know ? .white : Color(hex: 0xF7F5F0)))
-                layer.stroke(circle(0, 0, p.r0 * 2), with: .color(MockPalette.ink), lineWidth: p.chosen && p.selected > 0.5 ? 2 : 1.2)
+                layer.fill(circle(0, 0, p.r0 * 2), with: .color(p.flying ? Color(hex: 0xFBF1DC) : p.know ? .white : Color(hex: 0xF7F5F0)))
+                layer.stroke(circle(0, 0, p.r0 * 2), with: .color(p.flying ? Orbit.picked : MockPalette.ink), lineWidth: p.chosen && p.selected > 0.5 ? 2 : 1.2)
                 for moon in p.moons {
                     if moon.mark > 0 {
                         var mark = layer
@@ -375,7 +439,10 @@ private struct OrbitPlanets: View {
                     if moon.ring { dot.stroke(shape, with: .color(MockPalette.ink), lineWidth: 1.5) }
                 }
                 let strong = p.chosen && p.selected > 0.5
-                layer.draw(Text(verbatim: p.name).font(V3.sans(12, weight: strong ? .medium : .regular)).foregroundColor(strong ? MockPalette.ink : Color(hex: 0x6B6863)),
+                guard p.labelOpacity > 0, !p.name.isEmpty else { continue }
+                var label = layer
+                label.opacity = p.opacity * p.labelOpacity
+                label.draw(Text(verbatim: p.name).font(V3.sans(12, weight: strong ? .medium : .regular)).foregroundColor(strong ? MockPalette.ink : Color(hex: 0x6B6863)),
                            at: CGPoint(x: p.x, y: p.y + p.mr + p.md / 2 + 6), anchor: .top)
             }
         }
@@ -417,26 +484,58 @@ private struct OrbitCard: View {
     }
 }
 
-/// 读简历时中间那张简历纸（128 × 164）。
+/// 读简历时中间那张简历纸（128 × 164，`.mi3-orb-sheet`）：淡黄扫读带（`.mi3-orb-scan`，高 18）从上往下扫，
+/// 扫过的行变深；一段经历扫完时那几行短暂变黄（随后飞进轨道）。题目回来后纸上的行保持扫过的颜色淡出。
 private struct OrbitSheet: View {
-    private static let bars: [(CGFloat, CGFloat, CGFloat, CGFloat, Bool)] = [(38, 18, 48, 5, true), (38, 27, 30, 4, false), (14, 48, 96, 4, false), (14, 60, 80, 4, false), (14, 72, 90, 4, false),
-                                                                           (14, 92, 96, 4, false), (14, 104, 70, 4, false), (14, 124, 92, 4, false), (14, 136, 64, 4, false)]
+    let t: Double
+    let reading: Bool
+    var fromReading = false
+    private static let line = Color(hex: 0xD8D4CC)
+
     var body: some View {
+        let first = t < Orbit.scanTo
+        let bandY = !reading ? -20 : first ? (t - Orbit.scanFrom) / (Orbit.scanTo - Orbit.scanFrom) * Orbit.sheetH
+            : (t - Orbit.scanTo).truncatingRemainder(dividingBy: Orbit.scanLoop) / Orbit.scanLoop * Orbit.sheetH
+        let bandOpacity = !reading ? 0 : (first ? 1 : 0.55) * Orbit.seg(t, 0, Orbit.scanFrom)
+        let shape = RoundedRectangle(cornerRadius: 8)
         ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: 8).fill(.white).overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(MockPalette.ink, lineWidth: 1.5))
-            ForEach(Array(Self.bars.enumerated()), id: \.offset) { _, bar in
-                RoundedRectangle(cornerRadius: 2).fill(bar.4 ? MockPalette.ink : Color(hex: 0xD8D4CC)).frame(width: bar.2, height: bar.3).offset(x: bar.0, y: bar.1)
+            shape.fill(.white)
+            LinearGradient(stops: [.init(color: Orbit.picked.opacity(0), location: 0), .init(color: Orbit.picked.opacity(0.35), location: 0.5), .init(color: Orbit.picked.opacity(0), location: 1)],
+                           startPoint: .top, endPoint: .bottom)
+                .frame(width: 128, height: 18).offset(y: bandY - 9).opacity(bandOpacity)
+            ForEach(Orbit.sheetRows.indices, id: \.self) { index in
+                let bar = Orbit.sheetRows[index]
+                let color = rowColor(index)
+                RoundedRectangle(cornerRadius: 2).fill(color.0).frame(width: bar.w, height: bar.h).offset(x: bar.x, y: bar.y)
+                    .animation(.easeInOut(duration: 0.3), value: color.1)
             }
             Circle().fill(Orbit.picked).frame(width: 16, height: 16).offset(x: 14, y: 14)
         }
         .frame(width: 128, height: 164, alignment: .topLeading)
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(MockPalette.ink, lineWidth: 1.5))
+        .background(shape.fill(.white).shadow(color: MockPalette.ink.opacity(0.08), radius: 9, y: 6))
+    }
+
+    /// 某一行此刻的颜色（第二项是颜色的种类，给过渡动画用）。
+    private func rowColor(_ index: Int) -> (Color, Int) {
+        if index == 0 { return (MockPalette.ink, 0) }
+        let bar = Orbit.sheetRows[index]
+        let scanned = Orbit.scanAt(bar.y + bar.h)
+        let block = Orbit.sheetBlocks.firstIndex { $0.contains(index) }
+        let done = block.map { Orbit.blockDone[$0] } ?? scanned
+        let lifting = reading && block != nil && t > done - 450 && t < done + 350
+        if lifting { return (Orbit.picked, 1) }
+        if !reading { return fromReading ? (Orbit.rowRead, 2) : (Self.line, 3) }
+        return t >= scanned ? (Orbit.rowRead, 2) : (Self.line, 3)
     }
 }
 
 // MARK: 检查设备（Figma 09 · 03 开始前 03.02–03.07；Web `DeviceCheckStage`）
 
-/// 进来就请求麦克风并开始试读「我准备好了，可以开始了」；读完停一下自动识别，识别成功后自动放一句面试官的声音，问听到了没有。
-/// 中间的圈随状态变：听你读时黄色音量圈随音量外扩，放面试官声音时绿色声波外扩，都好了绿圈加勾，出问题朱砂虚线。
+/// 进来就请求麦克风；麦克风只看有没有收到声音：随便说一句、音量过线就算正常，不再让用户照读一句、也不调语音识别（Web #1563，11-27）。
+/// 听到你的声音后自动放一句面试官的声音，问听到了没有。
+/// 中间的圈随状态变：听你说话时黄色音量圈随音量外扩，放面试官声音时绿色声波外扩，都好了绿圈加勾，出问题朱砂虚线。
 struct MockDeviceCheck: View {
     @Environment(SessionStore.self) private var session
     let detail: JSONValue
@@ -448,18 +547,12 @@ struct MockDeviceCheck: View {
     /// 题目准备好后右下角「取消本场」（积分不退）
     let onCancel: () -> Void
 
-    private enum Trial { case idle, listening, recognizing, ok, empty, failed }
     private enum Speaker { case idle, playing, confirm, heard, unheard, unsupported }
     @State private var mic = MicrophoneProbe()
-    @State private var recorder = VoiceRecorder()
     @State private var heardVoice = false
     @State private var quiet = false
-    @State private var trial: Trial = .idle
-    @State private var heardText = ""
     @State private var speaker: Speaker = .idle
     @State private var player = InterviewerVoice()
-    @State private var trialStart = Date()
-    @State private var trialVoiceAt: Date?
     @State private var output = MicrophoneProbe.outputName() ?? "系统默认扬声器"
 
     private static let threshold: Float = 0.06
@@ -468,12 +561,12 @@ struct MockDeviceCheck: View {
         let granted = mic.permission == .granted
         let blocked = mic.permission == .denied || mic.permission == .error
         let silent = granted && quiet && !heardVoice
-        let trialBad = trial == .empty || trial == .failed
         let speakerBad = speaker == .unheard
-        let soundOk = granted && trial == .ok && (speaker == .heard || speaker == .unsupported)
+        let micOk = granted && heardVoice
+        let soundOk = micOk && (speaker == .heard || speaker == .unsupported)
         let preparing = detail.text("status") == "preparing"
         let ready = soundOk && !preparing
-        let bad = blocked || silent || trialBad || speakerBad
+        let bad = blocked || silent || speakerBad
         let count = detail["question_count"]?.integer ?? 0
         let first = MockPrep.prep(detail)?.text("first").nonEmptyValue
         let playing = speaker == .playing || speaker == .confirm
@@ -489,12 +582,11 @@ struct MockDeviceCheck: View {
             } else {
                 let head: (String, String) = blocked ? ("还听不到你的声音", "DrawOffer 没有拿到麦克风权限")
                     : silent ? ("还听不到你的声音", "麦克风没有收到声音")
-                    : trialBad ? ("没听清这句话", "安静环境、戴耳机效果更好")
                     : speakerBad ? ("听不到面试官的声音", "调大音量，或换一个扬声器、耳机")
                     : ready ? ("可以开始了", first.map { "\(count) 道题已经准备好，第一题从「\($0)」问起" } ?? "\(count) 道题已经准备好")
                     : soundOk ? ("声音没问题", "题目一准备好就能开始")
                     : ("先试一下声音", "安静环境、戴耳机效果更好")
-                let listening = granted && [.listening, .recognizing, .idle].contains(trial)
+                let listening = granted && !heardVoice
                 let tone: MockSoundRing.Tone = bad ? .bad : soundOk ? .ok : playing ? .play : granted ? .listen : .idle
                 let micState: (Side, String) = blocked ? (.bad, "没有权限") : silent ? (.bad, "没听到声音") : granted ? (.ok, "正常") : (.wait, "正在请求…")
                 let speakerState: (Side, String) = speaker == .heard ? (.ok, "听得到") : speaker == .playing ? (.play, "正在播放") : speaker == .confirm ? (.play, "听到了吗？")
@@ -515,13 +607,13 @@ struct MockDeviceCheck: View {
                         devicePicker(output, label: "选择扬声器", pane: "output")
                         if speaker != .idle {
                             Button("▶ 再听一次") { Task { await preview() } }.buttonStyle(MockSideLinkStyle()).disabled(speaker == .playing)
-                        } else if trial != .ok && granted {
+                        } else if granted {
                             Button("▶ 试听") { Task { await preview() } }.buttonStyle(MockSideLinkStyle())
                         }
                     }
                 }
                 .fixedSize().offset(x: 856, y: 367)
-                center(blocked: blocked, silent: silent, trialBad: trialBad, speakerBad: speakerBad, playing: playing, ready: ready, granted: granted)
+                center(blocked: blocked, silent: silent, speakerBad: speakerBad, playing: playing, soundOk: soundOk, ready: ready, preparing: preparing, granted: granted)
             }
             MockSessionFoot {
                 MockPrepFootLine(session: MockPrep.sessionLine(detail, voice: true), note: MockPrep.prepNote(detail))
@@ -533,28 +625,15 @@ struct MockDeviceCheck: View {
         .task { if mic.permission == .idle { await mic.start() } }
         .onChange(of: mic.level) { _, level in
             if level > Self.threshold * 1.5 { heardVoice = true; quiet = false }
-            if trial == .listening && level > Self.threshold { trialVoiceAt = Date() }
         }
         .task(id: "\(mic.permission == .granted)-\(heardVoice)") {
             guard mic.permission == .granted, !heardVoice else { return }
             try? await Task.sleep(for: .seconds(5))
             if !Task.isCancelled, !heardVoice { quiet = true }
         }
-        .onChange(of: mic.permission, initial: true) { _, value in
-            if value == .granted && trial == .idle { beginTrial() }
-            if value != .granted && trial == .listening { recorder.cancel(); trial = .idle }
-        }
-        .task(id: trial == .listening) {
-            // 读完一句并停顿约 1.2 秒结束试读；最长 12 秒
-            while trial == .listening && !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(200))
-                if let at = trialVoiceAt, Date().timeIntervalSince(at) >= 1.2 { await finishTrial(); return }
-                if Date().timeIntervalSince(trialStart) >= 12 { await finishTrial(); return }
-            }
-        }
-        // 读完那句自动放一句面试官的声音
-        .onChange(of: trial == .ok && speaker == .idle) { _, value in if value { Task { await preview() } } }
-        .onDisappear { mic.stop(); recorder.cancel(); player.stop() }
+        // 听到你的声音后自动放一句面试官的声音（04B.02）
+        .onChange(of: mic.permission == .granted && heardVoice && speaker == .idle) { _, value in if value { Task { await preview() } } }
+        .onDisappear { mic.stop(); player.stop() }
     }
 
     private enum Side { case ok, bad, wait, play }
@@ -590,16 +669,12 @@ struct MockDeviceCheck: View {
     }
 
     @ViewBuilder
-    private func center(blocked: Bool, silent: Bool, trialBad: Bool, speakerBad: Bool, playing: Bool, ready: Bool, granted: Bool) -> some View {
+    private func center(blocked: Bool, silent: Bool, speakerBad: Bool, playing: Bool, soundOk: Bool, ready: Bool, preparing: Bool, granted: Bool) -> some View {
         let fixSub = "改好后点「重新检测」；不方便说话也可以直接改成打字作答，题目不用重新准备"
         if blocked || silent {
             mainLine(Text(blocked ? "在“系统设置 › 隐私与安全性 › 麦克风”中允许 DrawOffer" : "检查麦克风有没有静音，或在左边换一个设备").font(V3.sans(18, weight: .medium)))
             subLine(Text(fixSub))
             act { MockArrowLink(title: "重新检测", size: 14, action: recheck) }
-        } else if trialBad {
-            mainLine(Text("靠近麦克风，再读一遍：\(MockPrep.phrase)").font(V3.sans(18, weight: .medium)))
-            subLine(Text("读完停一下就好"))
-            act { MockArrowLink(title: "再读一遍", size: 14, action: beginTrial) }
         } else if playing || speakerBad {
             mainLine(Text("「\(MockPrep.interviewerLine)」").font(V3.sans(22, weight: .medium)))
             subLine(Text(speakerBad ? "调大音量或换耳机后，点右边「再听一次」" : speaker == .playing ? "面试官在说话，听到了吗？" : "面试官说完了，听到了吗？"))
@@ -612,23 +687,15 @@ struct MockDeviceCheck: View {
                     .fontWeight(.medium).padding(.top, 4)
                 }
             }
-        } else if trial == .ok {
-            mainLine(Text(verbatim: "「\(heardText.nonEmptyValue ?? MockPrep.phrase)」").font(V3.sans(22, weight: .medium)))
-            HStack(spacing: 26) {
-                Text("我们听到的就是这句，识别没问题")
-                Button("再读一遍", action: beginTrial).buttonStyle(MockLinkStyle(color: MockPalette.ink)).fontWeight(.medium)
-            }
-            .font(V3.sans(13)).foregroundStyle(MockPalette.sub).frame(width: 1120, height: 20).offset(x: 124, y: 586)
+        } else if soundOk {
+            mainLine(Text("麦克风和声音都没问题").font(V3.sans(18, weight: .medium)))
+            subLine(Text(preparing ? "题目一准备好就能开始" : "随时可以开始"))
             if ready {
-                act { Button("开始语音面试") { mic.stop(); recorder.cancel(); player.stop(); onStart() }.buttonStyle(MockPillStyle(height: 42)).frame(minWidth: 140) }
+                act { Button("开始语音面试") { mic.stop(); player.stop(); onStart() }.buttonStyle(MockPillStyle(height: 42)).frame(minWidth: 140) }
             }
         } else {
-            let hits = MockPrep.phraseHits(recorder.partial)
-            let phrase = Array(MockPrep.phrase).enumerated().reduce(Text("请读：").foregroundColor(MockPalette.sub)) { text, item in
-                text + Text(String(item.element)).foregroundColor(hits[item.offset] ? MockPalette.ink : Color(hex: 0xA8A29E)).fontWeight(hits[item.offset] ? .bold : .regular)
-            }
-            mainLine(phrase.font(V3.sans(22)))
-            subLine(Text(trial == .recognizing ? "正在识别…" : granted ? "正在听…读完停一下就好" : "正在请求麦克风…"))
+            mainLine(Text(granted ? "随便说一句话，中间的圈跟着动就说明麦克风正常" : "正在请求麦克风…").font(V3.sans(18, weight: .medium)))
+            subLine(Text(granted ? "正在听…" : "系统弹出提示时，选择允许使用麦克风"))
         }
     }
     private func mainLine(_ text: Text) -> some View {
@@ -641,21 +708,8 @@ struct MockDeviceCheck: View {
         content().frame(width: 1120, alignment: .top).offset(x: 124, y: 620)
     }
 
-    private func beginTrial() {
-        recorder.cancel(); heardText = ""; trialVoiceAt = nil; trialStart = Date(); trial = .listening
-        Task { await recorder.start(api: session.api, interviewID: detail.display("id"), questionID: "", purpose: "device_check") }
-    }
-    private func finishTrial() async {
-        trial = .recognizing
-        do {
-            let text = try await recorder.stop().text.trimmingCharacters(in: .whitespacesAndNewlines)
-            heardText = text
-            trial = text.isEmpty ? .empty : .ok
-            if !text.isEmpty { heardVoice = true; quiet = false }
-        } catch { trial = .failed }
-    }
     private func recheck() {
-        heardVoice = false; quiet = false; trial = .idle; speaker = .idle; recorder.cancel()
+        heardVoice = false; quiet = false; speaker = .idle
         output = MicrophoneProbe.outputName() ?? "系统默认扬声器"
         Task { await mic.start() }
     }

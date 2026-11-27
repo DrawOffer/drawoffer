@@ -493,6 +493,7 @@ public struct HTTPAPIClient: APIClient {
     public func careerRequest(path: String, method: String, query: [String: String], body: JSONValue?) async throws -> JSONValue { try await coordinator.careerRequest(path: path, method: method, query: query, body: body) }
     public func uploadAgentAttachment(_ upload: AgentAttachmentUpload) async throws -> JSONValue { try await coordinator.uploadAgentAttachment(upload) }
     public func capabilities() async throws -> DesktopCapabilities { try await coordinator.capabilities() }
+    public func authCapabilities() async throws -> JSONValue { try await coordinator.authCapabilities() }
     public func beginLogin(clientVersion: String) async throws -> DesktopLoginChallenge { try await coordinator.beginLogin(clientVersion: clientVersion) }
     public func loginStatus(_ challenge: DesktopLoginChallenge) async throws -> String { try await coordinator.loginStatus(challenge) }
     public func completeLogin(_ challenge: DesktopLoginChallenge) async throws -> User { try await coordinator.completeLogin(challenge) }
