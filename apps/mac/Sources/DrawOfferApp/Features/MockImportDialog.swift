@@ -6,10 +6,12 @@ import UniformTypeIdentifiers
 
 /// 导入真实面试（Figma 09N · 09.10a–e；Web `v2/ImportDialog.tsx`）：录音、文件或粘贴文字，挂到一场已结束的面试，
 /// 或者在已有投递下补一轮（选轮次和日期，不推进投递）。那一场已经有记录时先确认替换，替换后按新记录重新生成复盘。
-/// 文字和文档在弹窗里拆题、提交复盘；录音上传后由服务端转写，转写好后在这场的面试资料里生成复盘。
+/// 建好记录后弹窗就关：文字和文档交给 `RecordImports` 在后台拆题、生成复盘；录音交给 `BackgroundUploads` 后台上传，传完等转写、转好自动复盘。
 struct MockImportDialog: View {
     @Environment(SessionStore.self) private var session
     @Environment(WorkspaceRouter.self) private var router: WorkspaceRouter?
+    @Environment(BackgroundUploads.self) private var uploads: BackgroundUploads?
+    @Environment(RecordImports.self) private var imports: RecordImports?
     var sessionID: String? = nil
     let close: () -> Void
     let done: () -> Void
@@ -31,7 +33,6 @@ struct MockImportDialog: View {
     @State private var confirmReplace = false
     /// 失败后重试不再建一条新的面试记录
     @State private var created: (key: String, sessionID: String, applicationID: String)?
-    @State private var upload: DatasetUpload?
 
     private var nothing: Bool { targets.map { ($0["sessions"]?.items ?? []).isEmpty && ($0["applications"]?.items ?? []).isEmpty } ?? false }
     private var future: Bool { if case .application = target { return day > Self.day(Date()) }; return false }
@@ -71,7 +72,7 @@ struct MockImportDialog: View {
                 .onDrop(of: [.fileURL], isTargeted: $over) { providers in
                     guard let provider = providers.first else { return false }
                     _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                        if let url, Self.allowed(url) { DispatchQueue.main.async { file = url; upload?.discard(); upload = nil } }
+                        if let url, Self.allowed(url) { DispatchQueue.main.async { file = url } }
                     }
                     return true
                 }
@@ -135,7 +136,6 @@ struct MockImportDialog: View {
             }
         }
         .task { await loadTargets() }
-        .onDisappear { upload?.discard() }
     }
 
     private func row<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
@@ -194,7 +194,7 @@ struct MockImportDialog: View {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = (Self.media + Self.documents).compactMap { UTType(filenameExtension: $0) }
-        if panel.runModal() == .OK, let url = panel.url { file = url; upload?.discard(); upload = nil; failed = nil }
+        if panel.runModal() == .OK, let url = panel.url { file = url; failed = nil }
     }
 
     private var day: String { Self.day(date) }
@@ -216,53 +216,32 @@ struct MockImportDialog: View {
             let body = MockRecords.importBody(target, replace: replace, round: round, day: day)
             let key = String(describing: body)
             if created?.key != key {
-                upload?.discard(); upload = nil
                 let record = try await request("/api/mock-interviews/imports", "POST", body)
                 created = (key, record.display("session_id"), record.display("application_id"))
             }
             guard let created else { return }
-            var source: JSONValue = .object(["source": .string("text"), "text": .string(text.trimmingCharacters(in: .whitespacesAndNewlines))])
-            if !paste, let file {
-                if upload == nil { upload = try DatasetUpload.snapshot(file, session: created.sessionID, limit: 512 * 1024 * 1024) }
-                guard let upload else { return }
-                let result = try await session.api.uploadDataset(upload)
-                upload.discard(); self.upload = nil
-                if Self.media.contains(file.pathExtension.lowercased()) {
-                    // 录音交给后台转写：转写好后在这场的面试资料里生成复盘
-                    done(); return
-                }
-                let asset = result["asset"]?.display("id").nonEmptyValue ?? result.display("id")
-                guard try await waitForParse(asset) else { throw ImportFailure.unreadable }
-                source = .object(["source": .string("dataset"), "dataset_id": .string(asset)])
+            let company: String = { if case .session(let picked) = target { return picked.text("title") }; if case .application(let item) = target { return item.text("company_name") }; return "" }()
+            if !paste, let file, Self.media.contains(file.pathExtension.lowercased()), let uploads {
+                // 录音交给后台分片上传（断网可续传），弹窗立刻关闭；传完转写、转好自动复盘，进度都在铃铛里（Web `startRecordingUpload` + `showImportProgress`）
+                var hadRecord = false
+                if case .session(let picked) = target { hadRecord = picked["has_record"]?.bool == true }
+                try await uploads.start(session: created.sessionID, application: created.applicationID, file: file, transcribe: true,
+                                        review: BackgroundUpload.Review(title: company, replace: hadRecord))
+                close(); uploads.reveal(); return
             }
-            let draft = try await request("/api/interview-sessions/\(created.sessionID)/record:structure", "POST", source)
-            let markdown = InterviewRecord.serialize(InterviewRecord.draft(draft))
-            let before = try await request("/api/interview-sessions/\(created.sessionID)")
-            _ = try await request("/api/interview-sessions/\(created.sessionID)", "PUT",
-                                  .object(["questions_markdown": markdown.isEmpty ? .null : .string(markdown), "base_lock_version": before["session"]?["lock_version"] ?? .number(1)]))
-            let saved = try await request("/api/interview-sessions/\(created.sessionID)")
-            _ = try await request("/api/interview-sessions/\(created.sessionID)/review:generate", "POST",
-                                  .object(["request_id": .string(UUID().uuidString.lowercased()), "base_lock_version": saved["session"]?["lock_version"] ?? .number(1)]))
-            done()
-        } catch ImportFailure.unreadable {
-            failed = "这个文件读不出文字，换一份再导入。"; busy = false
+            // 文字和文档交给后台拆题、生成复盘，弹窗立刻关闭；进度和结果在铃铛里（Web `startRecordImport` + `showImportProgress`）
+            guard let imports else { return }
+            if !paste, let file {
+                let sessionID = created.sessionID
+                let snapshot = try await Task.detached { try DatasetUpload.snapshot(file, session: sessionID, limit: 512 * 1024 * 1024) }.value
+                imports.start(session: created.sessionID, company: company, source: .file(snapshot))
+            } else {
+                imports.start(session: created.sessionID, company: company, source: .text(text.trimmingCharacters(in: .whitespacesAndNewlines)))
+            }
+            done(); uploads?.reveal()
         } catch {
-            if case APIError.server(let status, _) = error, (400..<500).contains(status), status != 409 { upload?.discard(); upload = nil }
-            failed = { if case APIError.server(_, let code) = error, code == "INTERVIEW_QUESTIONS_NOT_FOUND" { return "没找到面试问题，换一份文字稿再导入。" }; return MockInterviewText.error(error) }()
+            failed = MockInterviewText.error(error)
             busy = false
         }
-    }
-
-    private enum ImportFailure: Error { case unreadable }
-
-    private func waitForParse(_ id: String) async throws -> Bool {
-        for _ in 0..<30 {
-            let dataset = try await request("/api/datasets/\(id)")
-            let status = dataset["dataset"]?.text("parse_status").nonEmptyValue ?? dataset.text("parse_status")
-            if status == "succeeded" { return true }
-            if status == "failed" { return false }
-            try await Task.sleep(for: .seconds(2))
-        }
-        return false
     }
 }

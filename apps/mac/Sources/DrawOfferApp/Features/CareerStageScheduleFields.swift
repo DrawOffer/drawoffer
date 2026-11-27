@@ -20,8 +20,6 @@ struct CareerStageScheduleFields: View {
     @Binding var link: String
     @Binding var interviewer: String
     @Binding var note: String
-    @Binding var allowConflict: Bool
-    let hasError: Bool
     @State private var editing = ""
     @State private var noteOpen = false
     @State private var deadlineDays: Int?
@@ -110,7 +108,6 @@ struct CareerStageScheduleFields: View {
                         .accessibilityLabel("备注（选填）")
                 }
             }
-            if hasError { Toggle("确认仍保存有时间冲突的安排", isOn: $allowConflict).font(V3.sans(12)).padding(.top, 14) }
         }
         .onChange(of: stage) { _, value in
             if value == "assessment" { window = true }

@@ -519,9 +519,12 @@ struct CareerAdvanceSheet: View {
                     _ = try await api.careerRequest(path: "/api/interview-sessions/\(session.text("id"))/answer-plan", method: "PUT", query: [:],
                                                     body: .object(["answer_plan_start_at": .string(iso(planAt)), "answer_plan_end_at": .string(iso(planAt.addingTimeInterval(Double(Int(planMinutes) ?? 60) * 60))),
                                                                    "base_lock_version": session["lock_version"] ?? .number(1)]))
-                } catch { completed("阶段与排期已保存，但作答计划保存失败，可在安排详情中重试。"); return }
+                } catch {
+                    completed(ScheduleOverlap.message(error).map { "阶段与排期已保存，作答计划没有保存：\($0)" } ?? "阶段与排期已保存，但作答计划保存失败，可在安排详情中重试。")
+                    return
+                }
             }
-        } catch { completed("阶段已添加，但排期保存失败，可从安排时间入口重试"); return }
+        } catch { completed(scheduleFailedNotice(error)); return }
         completed(nil)
     }
 
@@ -538,8 +541,13 @@ struct CareerAdvanceSheet: View {
             _ = try await schedule(stage, type: interviewType, roundNo: interviewType == "interview" ? roundNo : nil,
                                    label: interviewType == "hr" ? stage["current_stage"]?.text("stage_label").nonEmptyValue ?? "HR 面" : interviewLabel,
                                    start: startAt!, end: startAt!.addingTimeInterval(Double(duration) * 60), kind: "fixed_slot", mode: mode)
-        } catch { completed("阶段已添加，但排期保存失败，可从安排时间入口重试"); return }
+        } catch { completed(scheduleFailedNotice(error)); return }
         completed(nil)
+    }
+
+    /// 阶段已经加上、只是时间撞了别的安排时，说清楚撞上了哪一场，再让用户从「安排时间」换个时间（Web `scheduleFailedNotice`）。
+    private func scheduleFailedNotice(_ error: Error) -> String {
+        ScheduleOverlap.message(error).map { "阶段已添加，时间还没排上：\($0)" } ?? "阶段已添加，但排期保存失败，可从安排时间入口重试"
     }
 
     private func saveOc() async throws {

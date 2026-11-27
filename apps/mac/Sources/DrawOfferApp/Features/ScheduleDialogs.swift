@@ -183,7 +183,8 @@ struct ScheduleDetailDialog: View {
                 changed("已清除作答计划：\(current.company)")
             }
         } catch {
-            if case APIError.server(let status, let code) = error { self.error = status == 409 ? "记录已更新，请关闭后刷新再试（\(code)）。" : "保存失败（\(code)）。" }
+            if let overlap = ScheduleOverlap.message(error, timeZone: TimeZone(identifier: current.raw.text("timezone")) ?? Beijing.timeZone) { self.error = overlap }
+            else if case APIError.server(let status, let code) = error { self.error = status == 409 ? "记录已更新，请关闭后刷新再试（\(code)）。" : "保存失败（\(code)）。" }
             else { self.error = "连接失败，作答计划尚未确认保存。" }
         }
         busy = false

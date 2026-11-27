@@ -38,7 +38,7 @@ public sealed partial class CareerForm : UserControl
     DateTimeOffset _ocAt = Beijing.Now;
     bool _ocAtSet;
     string _ocStartText = "", _ocNote = "";
-    bool _reuseCurrentStage, _allowConflict;
+    bool _reuseCurrentStage;
     string _interviewMode = "video";
     DateTimeOffset _start = Beijing.Now, _end = Beijing.Now.AddSeconds(3600);
     bool _window, _planSet;
@@ -246,6 +246,7 @@ public sealed partial class CareerForm : UserControl
     {
         if (error is OperationCanceledException) return "操作已取消。";
         if (error is ApiException { Status: System.Net.HttpStatusCode.Unauthorized }) return "登录已失效，请关闭并重新登录。";
+        if (ScheduleOverlap.Message(error) is { } overlap) return overlap;
         if (error is ApiException api)
         {
             var status = (int)api.Status;

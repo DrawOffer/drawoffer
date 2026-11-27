@@ -244,6 +244,8 @@ public static class CareerErrors
     {
         if (error is OperationCanceledException) return "操作已取消。";
         if (error is ApiException { Status: System.Net.HttpStatusCode.Unauthorized }) return "登录已失效，请重新登录。";
+        // 排期撞上本人另一场安排（Web `scheduleOverlapMessage`）：说清是哪家哪一轮。
+        if (ScheduleOverlap.Message(error) is { } overlap) return overlap;
         if (error is ApiException api)
         {
             if (CareerTranscript.ImportError(api.Code) is { } text) return text;

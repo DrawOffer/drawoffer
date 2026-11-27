@@ -1,4 +1,18 @@
 import Foundation
+
+/// 单片上传的发送进度（每片自己的任务委托；重定向仍由会话的委托拒绝）。
+final class PieceProgressDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+    let report: @Sendable (Int64) -> Void
+    init(_ report: @escaping @Sendable (Int64) -> Void) { self.report = report }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
+        report(totalBytesSent)
+    }
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+}
+
 extension DesktopTransport {
     func uploadDataset(_ upload: DatasetUpload, access: String?) async throws -> JSONValue {
         guard DatasetRequest.id(upload.folder), UUID(uuidString:upload.id)?.uuidString.lowercased() == upload.id,
@@ -38,6 +52,54 @@ extension DesktopTransport {
         guard (200..<300).contains(http.statusCode) else { throw APIError.server(status:http.statusCode,code:(try? JSONDecoder().decode(JSONValue.self,from:data))?.text("error") ?? "HTTP_\(http.statusCode)") }
         return try JSONDecoder().decode(JSONValue.self,from:data)
     }
+    // MARK: 公共上传通道 /api/uploads（分片上传）
+
+    /// 只走白名单里的五个路径；带 Bearer、不带 Cookie、拒绝重定向（同一个 URLSession）；响应体最多 1 MiB。
+    private func uploads(_ path: String, method: String, body: Data? = nil, type: String? = nil, key: String? = nil, access: String?,
+                         progress: (@Sendable (Int64) -> Void)? = nil) async throws -> JSONValue {
+        guard UploadRequest.allowed(path: path, method: method) else { throw APIError.invalidResponse }
+        var request = URLRequest(url: origin.appending(path: path), cachePolicy: .reloadIgnoringLocalCacheData)
+        request.httpMethod = method; request.timeoutInterval = 120
+        request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
+        if let type { request.setValue(type, forHTTPHeaderField: "Content-Type") }
+        if let key { request.setValue(key, forHTTPHeaderField: "Idempotency-Key") }
+        if let access { request.setValue("Bearer \(access)", forHTTPHeaderField: "Authorization") }
+        let (data, response) = if let body { try await session.upload(for: request, from: body, delegate: progress.map(PieceProgressDelegate.init)) }
+            else { try await session.data(for: request) }
+        guard let http = response as? HTTPURLResponse, data.count <= 1024 * 1024 else { throw APIError.invalidResponse }
+        if http.statusCode == 401 { throw APIError.unauthorized }
+        guard (200..<300).contains(http.statusCode) else {
+            throw APIError.server(status: http.statusCode, code: (try? JSONDecoder().decode(JSONValue.self, from: data))?.text("error") ?? "HTTP_\(http.statusCode)")
+        }
+        if http.statusCode == 204 || data.isEmpty { return .null }
+        return try JSONDecoder().decode(JSONValue.self, from: data)
+    }
+    private func state(_ value: JSONValue) throws -> PieceUploadState {
+        guard let state = PieceUploadState(json: value) else { throw APIError.invalidResponse }
+        return state
+    }
+    /// `POST /api/uploads`：`Idempotency-Key` 必填（小写 UUID），完成时作为入库幂等键。
+    func startPieceUpload(_ start: PieceUploadStart, key: String, access: String?) async throws -> PieceUploadState {
+        guard start.valid, UUID(uuidString: key)?.uuidString.lowercased() == key else { throw APIError.invalidResponse }
+        let result = try state(try await uploads("/api/uploads", method: "POST", body: try JSONEncoder().encode(start.json), type: "application/json", key: key, access: access))
+        guard result.fileSize == start.fileSize else { throw APIError.invalidResponse }
+        return result
+    }
+    func pieceUploadState(_ id: String, access: String?) async throws -> PieceUploadState {
+        try state(try await uploads("/api/uploads/" + id, method: "GET", access: access))
+    }
+    /// `PUT /api/uploads/{id}/chunks/{index}`：原始字节，单片不超过 4 MiB，成功 204。
+    func putPiece(_ id: String, index: Int, data: Data, access: String?, progress: @escaping @Sendable (Int64) -> Void) async throws {
+        guard index >= 0, !data.isEmpty, Int64(data.count) <= PieceUpload.chunkBytes else { throw APIError.invalidResponse }
+        _ = try await uploads("/api/uploads/\(id)/chunks/\(index)", method: "PUT", body: data, type: "application/octet-stream", access: access, progress: progress)
+    }
+    func completePieceUpload(_ id: String, access: String?) async throws -> PieceUploadState {
+        try state(try await uploads("/api/uploads/\(id)/complete", method: "POST", access: access))
+    }
+    func cancelPieceUpload(_ id: String, access: String?) async throws {
+        _ = try await uploads("/api/uploads/" + id, method: "DELETE", access: access)
+    }
+
     func downloadDataset(id:String,to target:URL,limit:Int64,access:String?) async throws {
         guard DatasetRequest.id(id), limit > 0, limit <= 512 * 1024 * 1024 else { throw APIError.invalidResponse }
         var request = URLRequest(url:origin.appending(path:"/api/datasets/" + id + "/source"),cachePolicy:.reloadIgnoringLocalCacheData); request.timeoutInterval = 600

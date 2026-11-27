@@ -7,6 +7,8 @@ import SwiftUI
 /// 中途放弃的收在最后，展开后是同样的卡片，可以按原设置重新开始。
 struct MockRecordsV2: View {
     @Environment(SessionStore.self) private var session
+    /// 后台导入推进了一步就重读（Web `subscribeMockInterviews`）。
+    @Environment(RecordImports.self) private var recordImports: RecordImports?
     let back: () -> Void
     let openReport: (String) -> Void
     let open: (String) -> Void
@@ -65,10 +67,11 @@ struct MockRecordsV2: View {
         .background(.white)
         .overlay { MockNoticeToast(notice: $notice) }
         .task(id: "\(account):\(tick)") { await load() }
+        .onChange(of: recordImports?.changed) { _, _ in tick += 1 }
         .centeredPanel(item: $importing) { request in
             MockImportDialog(sessionID: request.sessionID, close: { importing = nil }, done: {
                 importing = nil
-                notice = MockNotice(kind: .queued, title: "已开始生成复盘", message: "好了会出现在这里，也会记进长期记忆")
+                // Web `onDone`：关弹窗、重读；进度在铃铛里，页面不再弹提示
                 tick += 1
             })
         }

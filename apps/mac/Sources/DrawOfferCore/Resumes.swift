@@ -33,7 +33,8 @@ public enum ResumeRequest {
         if parts[3] == "default" { return method == "PUT" }
         // 写作引导、段落聚焦与检查简历（与后端 get_current_resume_user 白名单一致）
         if parts[3] == "guide" { return ["GET", "PUT", "PATCH"].contains(method) }
-        if ["section-review:analyze", "section-review:rewrite"].contains(parts[3]) { return method == "POST" }
+        // 智能排版（review:layout，后端已对桌面开放）
+        if ["section-review:analyze", "section-review:rewrite", "review:layout"].contains(parts[3]) { return method == "POST" }
         if parts[3] == "section-reviews" { return method == "GET" }
         return false
     }

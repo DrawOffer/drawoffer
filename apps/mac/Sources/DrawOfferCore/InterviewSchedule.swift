@@ -46,9 +46,6 @@ public enum ScheduleCalendar {
         while current < end { days.append(current); current = calendar.date(byAdding: .day, value: 1, to: current)! }
         return days
     }
-    public static func conflicts(_ items: [ScheduledInterview], excluding id: String?, start: Date, end: Date) -> [ScheduledInterview] {
-        items.filter { $0.id != id && $0.editable && !$0.openWindow && $0.overlaps(start, end) }
-    }
     /// Each overlapping connected group gets independent lanes; back-to-back events share a lane.
     public static func lanes(_ items: [ScheduledInterview]) -> [String: (index: Int, count: Int)] {
         let sorted = items.sorted { $0.start == $1.start ? $0.id < $1.id : $0.start < $1.start }
@@ -241,6 +238,78 @@ public struct ScheduleDetail: Sendable {
         let end = start.addingTimeInterval(Double(minutes) * 60)
         if start < window.start { return "开始时间早于官方开放时间 \(stamp(window.start))，换晚一点。" }
         if end > window.end { return "会做到 \(stamp(end))，超过了截止时间 \(stamp(window.end))，换早一点或缩短时长。" }
+        return nil
+    }
+}
+
+// MARK: 同一时间只能参加一场（Web `scheduleConflicts.ts` 的 OccupiedSlot / scheduleOverlapMessage / findOccupiedSlot）
+
+/// 新时间撞上的那一场：后端 409 `INTERVIEW_SCHEDULE_OVERLAP` 的 `conflict`，或拖动前本地查到的安排。
+/// 开放窗口笔试给的是作答计划时段。
+public struct OccupiedSlot: Equatable, Sendable {
+    public let company: String
+    public let stageLabel: String
+    public let start: Date
+    public let end: Date
+    public init(company: String, stageLabel: String, start: Date, end: Date) {
+        self.company = company; self.stageLabel = stageLabel; self.start = start; self.end = end
+    }
+}
+
+/// 服务端拒绝重叠的安排。`slot` 为空表示响应里没带（或读不出）被占用的那一场。
+public struct ScheduleOverlapError: Error, Equatable, Sendable {
+    public static let code = "INTERVIEW_SCHEDULE_OVERLAP"
+    public let slot: OccupiedSlot?
+    public init(slot: OccupiedSlot?) { self.slot = slot }
+    /// 从错误响应体（`{error, conflict:{company_name, stage_label, start_at, end_at, ...}}`）读出；不是这个错误返回 nil。
+    public init?(status: Int, body: JSONValue?) {
+        guard status == 409, body?["error"]?.stringValue == Self.code else { return nil }
+        let conflict = body?["conflict"]
+        let company = conflict?.text("company_name") ?? ""
+        if !company.isEmpty, let start = CareerApplication.date(conflict?.text("start_at") ?? ""),
+           let end = CareerApplication.date(conflict?.text("end_at") ?? "") {
+            slot = OccupiedSlot(company: company, stageLabel: conflict?.text("stage_label") ?? "", start: start, end: end)
+        } else { slot = nil }
+    }
+}
+
+public enum ScheduleOverlap {
+    /// Web `shortCompany`：去掉「科技 / 网络 / 集团 / 有限公司」等尾巴，全去掉了就用原名。
+    public static func shortCompany(_ name: String) -> String {
+        let short = name.replacingOccurrences(of: "(科技|网络|信息技术|集团|股份|有限公司|（中国）|\\(中国\\))+$", with: "", options: .regularExpression)
+        return short.isEmpty ? name : short
+    }
+
+    /// 「10月9日周五 14:00–15:00」（Web `slotTime`，zh-CN）。
+    static func slotTime(_ slot: OccupiedSlot, timeZone: TimeZone) -> String {
+        func format(_ pattern: String, _ date: Date) -> String {
+            let formatter = Beijing.formatter(pattern, locale: Locale(identifier: "zh_CN")); formatter.timeZone = timeZone
+            return formatter.string(from: date)
+        }
+        return "\(format("M月d日EEE", slot.start)) \(format("HH:mm", slot.start))–\(format("HH:mm", slot.end))"
+    }
+
+    /// Web `describeOccupiedSlot`。
+    public static func describe(_ slot: OccupiedSlot, timeZone: TimeZone = Beijing.timeZone) -> String {
+        "这个时间你已经安排了\(shortCompany(slot.company))\(slot.stageLabel)（\(slotTime(slot, timeZone: timeZone))），同一时间没法参加两场，换个时间吧。"
+    }
+
+    public static let genericMessage = "这个时间已经有别的面试或笔试了，同一时间没法参加两场，换个时间吧。"
+
+    /// Web `scheduleOverlapMessage`：是重叠错误就返回提示，否则 nil。
+    public static func message(_ error: Error, timeZone: TimeZone = Beijing.timeZone) -> String? {
+        if let overlap = error as? ScheduleOverlapError { return overlap.slot.map { describe($0, timeZone: timeZone) } ?? genericMessage }
+        if case APIError.server(409, ScheduleOverlapError.code) = error { return genericMessage }
+        return nil
+    }
+
+    /// Web `findOccupiedSlot`：拖动改期前先在本地判断，撞上了就直接提示、不发请求；最终仍以服务端校验为准。
+    /// 只看待进行且未结束的安排；开放窗口按作答计划算，没计划的不占时间；首尾相接不算。
+    public static func find(_ items: [ScheduledInterview], moving id: String, start: Date, end: Date, now: Date = Date()) -> OccupiedSlot? {
+        for item in items where item.id != id && item.raw.text("status") == "scheduled" {
+            guard let range = item.timed, range.start < range.end, range.end > now, range.start < end, range.end > start else { continue }
+            return OccupiedSlot(company: item.company, stageLabel: item.label, start: range.start, end: range.end)
+        }
         return nil
     }
 }

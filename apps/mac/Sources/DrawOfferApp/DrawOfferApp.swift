@@ -6,6 +6,18 @@ import SwiftUI
 /// 单窗口应用：关掉主窗口即退出（与系统设置等单窗口应用一致），不留下没有窗口、无法再打开的进程。
 final class DrawOfferAppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    /// 录音还在后台上传、或面试记录还在后台导入时先确认一下（Web `BackgroundUploadGuard` / `RecordImportGuard` 的 `beforeunload` 提醒）：
+    /// 退出会中断；录音之后选回同一个文件仍能接着传，文字和文档要重新导入。等转写的录音在服务端跑，不拦。
+    @MainActor func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let uploading = BackgroundUploads.current?.running == true
+        guard uploading || RecordImports.current?.working == true else { return .terminateNow }
+        let alert = NSAlert()
+        alert.messageText = uploading ? "录音还在上传" : "面试记录还在导入"
+        alert.informativeText = uploading ? "现在退出会中断上传。之后在铃铛里选回同一个文件，就能从断点接着传。" : "现在退出会中断导入，之后要重新导入一次。"
+        alert.addButton(withTitle: uploading ? "继续上传" : "继续导入")
+        alert.addButton(withTitle: "退出")
+        return alert.runModal() == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
+    }
 }
 
 @main

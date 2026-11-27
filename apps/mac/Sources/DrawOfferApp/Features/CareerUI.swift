@@ -201,6 +201,7 @@ enum CareerErrors {
     static func message(_ error: Error) -> String {
         if error is CancellationError { return "操作已取消。" }
         if case APIError.unauthorized = error { return "登录已失效，请重新登录。" }
+        if let overlap = ScheduleOverlap.message(error) { return overlap }
         if case APIError.server(let status, let code) = error {
             if let text = CareerTranscript.importError(code) { return text }
             if code == "LLM_MODEL_NOT_CONFIGURED" { return "请先配置模拟面试的 AI 模型，再生成复盘。" }

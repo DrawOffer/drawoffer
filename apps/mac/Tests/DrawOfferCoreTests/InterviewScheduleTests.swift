@@ -22,14 +22,60 @@ private func appointment(_ id: String, _ start: String, _ end: String, status: S
     #expect(zip(days, days.dropFirst()).contains { $1.timeIntervalSince($0) == 23 * 3600 })
 }
 @Test func scheduleConflictsUseHalfOpenIntervalsAndIgnoreCancelledAndWindows() {
+    let now = CareerApplication.date("2029-12-31T00:00:00Z")!
     let from = CareerApplication.date("2030-01-01T10:00:00Z")!, until = from.addingTimeInterval(3600)
     let a = appointment("1", "2030-01-01T09:00:00Z", "2030-01-01T10:00:00Z")
     let b = appointment("2", "2030-01-01T10:30:00Z", "2030-01-01T11:30:00Z")
     let c = appointment("3", "2030-01-01T10:00:00Z", "2030-01-01T11:00:00Z", status: "cancelled")
     let d = appointment("4", "2030-01-01T00:00:00Z", "2030-01-02T00:00:00Z", window: true)
-    #expect(ScheduleCalendar.conflicts([a,b,c,d], excluding: nil, start: from, end: until).map(\.id) == ["2"])
-    #expect(ScheduleCalendar.conflicts([a,b,c,d], excluding: "2", start: from, end: until).isEmpty)
+    #expect(ScheduleOverlap.find([a,b,c,d], moving: "9", start: from, end: until, now: now)?.start == b.start)
+    #expect(ScheduleOverlap.find([a,b,c,d], moving: "2", start: from, end: until, now: now) == nil)
     #expect(!a.overlaps(from, until))
+}
+
+// MARK: 同一时间只能参加一场（Web `scheduleConflicts.test.ts` · occupied slots）
+
+private let slotBase = CareerApplication.date("2026-10-09T06:00:00Z")!
+private func slotAt(_ minutes: Int) -> String { ISO8601DateFormatter().string(from: slotBase.addingTimeInterval(Double(minutes) * 60)) }
+private func slotSession(_ id: String, _ company: String, _ stage: String, _ startMin: Int, _ endMin: Int, status: String = "scheduled") -> ScheduledInterview {
+    ScheduledInterview(.object(["id": .string(id), "company_name": .string(company), "stage_label": .string(stage), "status": .string(status),
+                                "schedule_kind": .string("fixed_slot"), "start_at": .string(slotAt(startMin)), "end_at": .string(slotAt(endMin))]))
+}
+@Test func occupiedSlotFindsTheCollisionIgnoringTheMovedOneAndTouchingEdges() {
+    let now = slotBase.addingTimeInterval(-86_400)
+    let date = { (minutes: Int) in slotBase.addingTimeInterval(Double(minutes) * 60) }
+    let sessions = [slotSession("1", "示例资讯", "一面", 0, 60), slotSession("2", "示例云", "二面", 120, 180)]
+    let hit = ScheduleOverlap.find(sessions, moving: "2", start: date(30), end: date(90), now: now)
+    #expect(hit?.company == "示例资讯"); #expect(hit?.stageLabel == "一面")
+    #expect(ScheduleOverlap.find(sessions, moving: "2", start: date(60), end: date(120), now: now) == nil)
+    #expect(ScheduleOverlap.find(sessions, moving: "1", start: date(0), end: date(60), now: now) == nil)
+    #expect(ScheduleOverlap.find([slotSession("1", "示例资讯", "一面", 0, 60, status: "cancelled")], moving: "2", start: date(30), end: date(90), now: now) == nil)
+    // 已经结束的安排不挡（和后端一样只看未结束的）
+    #expect(ScheduleOverlap.find(sessions, moving: "2", start: date(30), end: date(90), now: date(61)) == nil)
+    // 开放窗口按作答计划占时间
+    let planned = ScheduledInterview(.object(["id": .string("5"), "company_name": .string("示例云"), "stage_label": .string("笔试"), "status": .string("scheduled"),
+        "schedule_kind": .string("open_window"), "start_at": .string(slotAt(-600)), "end_at": .string(slotAt(600)),
+        "answer_plan_start_at": .string(slotAt(200)), "answer_plan_end_at": .string(slotAt(260))]))
+    #expect(ScheduleOverlap.find([planned], moving: "2", start: date(30), end: date(90), now: now) == nil)
+    #expect(ScheduleOverlap.find([planned], moving: "2", start: date(230), end: date(300), now: now)?.start == date(200))
+}
+@Test func occupiedSlotSaysWhichArrangementTakesTheTimeAndWhy() {
+    let text = ScheduleOverlap.describe(OccupiedSlot(company: "示例资讯科技", stageLabel: "一面", start: slotBase, end: slotBase.addingTimeInterval(3600)))
+    #expect(text.contains("这个时间你已经安排了示例资讯一面"))
+    #expect(text.contains("14:00–15:00"))
+    #expect(text.contains("同一时间没法参加两场"))
+    #expect(text == "这个时间你已经安排了示例资讯一面（10月9日周五 14:00–15:00），同一时间没法参加两场，换个时间吧。")
+}
+@Test func occupiedSlotIsReadFromTheServerError() {
+    let body: JSONValue = .object(["error": .string("INTERVIEW_SCHEDULE_OVERLAP"), "conflict": .object([
+        "session_id": .string("7"), "company_name": .string("示例云"), "stage_label": .string("笔试"), "start_at": .string(slotAt(0)), "end_at": .string(slotAt(60))])])
+    let error = ScheduleOverlapError(status: 409, body: body)
+    #expect(error?.slot?.company == "示例云")
+    #expect(ScheduleOverlap.message(error!)?.contains("示例云笔试") == true)
+    #expect(ScheduleOverlap.message(ScheduleOverlapError(status: 409, body: .object(["error": .string("INTERVIEW_SCHEDULE_OVERLAP")]))!)?.contains("已经有别的面试或笔试") == true)
+    #expect(ScheduleOverlap.message(APIError.server(status: 409, code: "INTERVIEW_SCHEDULE_OVERLAP"))?.contains("已经有别的面试或笔试") == true)
+    #expect(ScheduleOverlapError(status: 409, body: .object(["error": .string("INTERVIEW_EDIT_CONFLICT")])) == nil)
+    #expect(ScheduleOverlap.message(APIError.server(status: 409, code: "INTERVIEW_EDIT_CONFLICT")) == nil)
 }
 @Test func overlappingEventsUseIndependentLanes() {
     let a = appointment("1", "2030-01-01T09:00:00Z", "2030-01-01T10:00:00Z")

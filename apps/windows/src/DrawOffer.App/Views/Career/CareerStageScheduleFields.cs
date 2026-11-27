@@ -19,12 +19,11 @@ public sealed class CareerStageScheduleFields : UserControl
 {
     string _stage;
     readonly bool _isHR;
-    bool _window, _startSet, _endSet, _planSet, _allowConflict;
+    bool _window, _startSet, _endSet, _planSet;
     DateTimeOffset _start, _end, _planStart;
     int _duration, _planDuration;
     string _mode, _link, _interviewer, _note;
-    readonly bool _hasError;
-    readonly Action<bool> _setWindow, _setStartSet, _setEndSet, _setPlanSet, _setAllowConflict;
+    readonly Action<bool> _setWindow, _setStartSet, _setEndSet, _setPlanSet;
     readonly Action<DateTimeOffset> _setStart, _setEnd, _setPlanStart;
     readonly Action<int> _setDuration, _setPlanDuration;
     readonly Action<string> _setMode, _setLink, _setInterviewer, _setNote;
@@ -36,14 +35,14 @@ public sealed class CareerStageScheduleFields : UserControl
         DateTimeOffset start, Action<DateTimeOffset> setStart, bool endSet, Action<bool> setEndSet, DateTimeOffset end, Action<DateTimeOffset> setEnd,
         int duration, Action<int> setDuration, bool planSet, Action<bool> setPlanSet, DateTimeOffset planStart, Action<DateTimeOffset> setPlanStart,
         int planDuration, Action<int> setPlanDuration, string mode, Action<string> setMode, string link, Action<string> setLink,
-        string interviewer, Action<string> setInterviewer, string note, Action<string> setNote, bool allowConflict, Action<bool> setAllowConflict, bool hasError)
+        string interviewer, Action<string> setInterviewer, string note, Action<string> setNote)
     {
         (_stage, _isHR, _window, _setWindow, _startSet, _setStartSet, _start, _setStart, _endSet, _setEndSet, _end, _setEnd) =
             (stage, isHR, window, setWindow, startSet, setStartSet, start, setStart, endSet, setEndSet, end, setEnd);
         (_duration, _setDuration, _planSet, _setPlanSet, _planStart, _setPlanStart, _planDuration, _setPlanDuration) =
             (duration, setDuration, planSet, setPlanSet, planStart, setPlanStart, planDuration, setPlanDuration);
-        (_mode, _setMode, _link, _setLink, _interviewer, _setInterviewer, _note, _setNote, _allowConflict, _setAllowConflict, _hasError) =
-            (mode, setMode, link, setLink, interviewer, setInterviewer, note, setNote, allowConflict, setAllowConflict, hasError);
+        (_mode, _setMode, _link, _setLink, _interviewer, _setInterviewer, _note, _setNote) =
+            (mode, setMode, link, setLink, interviewer, setInterviewer, note, setNote);
         StageChanged(stage);
         Render();
     }
@@ -135,13 +134,6 @@ public sealed class CareerStageScheduleFields : UserControl
                 editor.TextChanged += (_, _) => { _note = editor.Text; _setNote(editor.Text); };
                 stack.Children.Add(editor.Top(10));
             }
-        }
-        if (_hasError)
-        {
-            var check = new CheckBox { Content = Sans("确认仍保存有时间冲突的安排", 12, Txt), IsChecked = _allowConflict, MinWidth = 0 };
-            check.Checked += (_, _) => { _allowConflict = true; _setAllowConflict(true); };
-            check.Unchecked += (_, _) => { _allowConflict = false; _setAllowConflict(false); };
-            stack.Children.Add(check.Top(14));
         }
         Content = stack;
     }
