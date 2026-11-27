@@ -262,8 +262,18 @@ final class DesktopTransport: DesktopRequesting {
         throw APIError.server(status: 502, code: "AGENT_STREAM_INCOMPLETE")
     }
 
+    /// 只在个别路径上用的查询键：复盘上下文的 kind / id；记忆反馈与复盘对比按哪场模拟面试或面试取（Web `getMemoryFeedback` / `getReviewComparison`）。
+    static func scopedQueryKey(path: String, key: String) -> Bool {
+        switch path {
+        case "/api/mock-interviews/review-context": ["kind", "id"].contains(key)
+        case "/api/memory/feedback": ["mock_interview_id", "interview_session_id", "kinds"].contains(key)
+        case "/api/memory/review-comparison": ["mock_interview_id", "interview_session_id"].contains(key)
+        default: false
+        }
+    }
+
     func career(path: String, method: String, query: [String: String], body: JSONValue?, access: String?) async throws -> JSONValue {
-        guard CareerRequest.allowed(path: path, method: method), !query.keys.contains(where: { !(path == "/api/mock-interviews/review-context" && ["kind", "id"].contains($0)) && !["scope", "cursor", "limit", "week_start", "timezone", "application_id", "include_archived", "v", "job_application_id", "resume_id", "status", "folder_id", "confirm_contents", "start_at", "end_at", "type", "q", "prefix", "session_id", "include_history", "keyword", "company_ids", "city", "job_category", "recruitment_type", "job_id", "page", "page_size", "sort", "industry", "direction", "published_within", "exclude_joined", "intent", "seed"].contains($0) }) else { throw APIError.invalidResponse }
+        guard CareerRequest.allowed(path: path, method: method), !query.keys.contains(where: { !Self.scopedQueryKey(path: path, key: $0) && !["scope", "cursor", "limit", "week_start", "timezone", "application_id", "include_archived", "v", "job_application_id", "resume_id", "status", "folder_id", "confirm_contents", "start_at", "end_at", "type", "q", "prefix", "session_id", "include_history", "keyword", "company_ids", "city", "job_category", "recruitment_type", "job_id", "page", "page_size", "sort", "industry", "direction", "published_within", "exclude_joined", "intent", "seed"].contains($0) }) else { throw APIError.invalidResponse }
         var url = URLComponents(url: origin.appending(path: path), resolvingAgainstBaseURL: false)!
         url.queryItems = JobPool.queryItems(query)
         var request = URLRequest(url: url.url!)

@@ -51,10 +51,10 @@ struct MockStartRequest: Equatable, Identifiable {
     /// 首页星图、对话、资料库带来的一个考点或一段经历（Web `readFocus` + `startRequest`）。
     init(focus: PracticeFocus) {
         if focus.kind == "experience", focus.scope != nil || focus.hook != nil || focus.short {
-            self.init(resumeID: focus.resumeID, plan: .experience(MockStart.Experience(ref: focus.ref, label: focus.label, scope: focus.scope ?? "packaged",
+            self.init(applicationID: focus.applicationID, resumeID: focus.resumeID, plan: .experience(MockStart.Experience(ref: focus.ref, label: focus.label, scope: focus.scope ?? "packaged",
                                                                                         hook: focus.hook, short: focus.short, origin: focus.origin)))
         } else {
-            self.init(resumeID: focus.resumeID, plan: .single(MockStart.Item(label: focus.label), ref: focus.ref.nonEmptyValue,
+            self.init(applicationID: focus.applicationID, resumeID: focus.resumeID, plan: .single(MockStart.Item(label: focus.label), ref: focus.ref.nonEmptyValue,
                                                              focusKind: focus.kind == "experience" ? "experience" : "topic", origin: focus.origin))
         }
     }

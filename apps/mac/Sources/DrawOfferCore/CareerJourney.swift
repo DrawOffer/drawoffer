@@ -258,6 +258,15 @@ public enum CareerJourney {
     /// 一次最多带三题去练。
     public static let practiceLimit = 3
 
+    /// 约好还没面的这一轮（Web `ProgressDeckPage` 的 `upcoming`）：只有这时台历上才列长期记忆里没答稳的考点。
+    /// 正在看的是当前这一轮、流程没结束、是面试、场次已安排且不是自选时段、开始时间还没到。
+    public static func memoryTopicsDue(deck: CareerDeck, station: CareerStation, viewing: Bool, now: Date) -> Bool {
+        guard !viewing, deck.ended == nil, station.current, station.kind == .interview,
+              let session = station.session, session.text("status") == "scheduled", session.text("schedule_kind") != "open_window",
+              let start = CareerApplication.date(session.text("start_at")) else { return false }
+        return start > now
+    }
+
     /// Web `ReviewBand.reviewHeadline`：结论一句与「差一层 / 答到位 / 没记下各几题」。
     public static func reviewHeadline(_ session: JSONValue) -> (title: String, detail: String) {
         let report = session["review_report"] ?? .null

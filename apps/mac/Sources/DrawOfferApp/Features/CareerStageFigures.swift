@@ -537,31 +537,34 @@ private func topicName(_ label: String) -> String {
     return name.count > 1 ? name : label
 }
 
-/// topics：长期记忆里没答稳的考点，写在日期右边；没有时只有日期，居中。
+/// topics：长期记忆里没答稳的考点，写在日期右边；没有时只有日期，居中。nil 是还在读，先不写字，免得排版跳。
 struct DayFigure: View {
     let day: Date
     let time: String?
     let ribbon: Bool
-    var topics: [(ref: String, label: String)] = []
+    var topics: [(ref: String, label: String)]? = []
     var onPractice: ((String, String) -> Void)?
     var body: some View {
         let parts = Beijing.calendar.dateComponents([.month, .day], from: day)
-        let beside = !topics.isEmpty
+        let shown = topics ?? []
+        let beside = !shown.isEmpty
         SFFigure(top: 130, label: "\(parts.month ?? 0) 月 \(parts.day ?? 0) 日", stampAt: CGPoint(x: 330, y: 150), draw: { art in art.calendarPad(ribbon: ribbon) }) {
-            text("\(parts.month ?? 0) 月", x: 84, y: 195, size: 16, lineHeight: 22, weight: .medium, color: SF.sub, beside: beside)
-            text("\(parts.day ?? 0)", x: 77, y: 196, size: 122, lineHeight: 175, serif: true, beside: beside)
-            text([CareerDeckFormat.weekday(day), time].compactMap { $0 }.joined(separator: " "), x: 84, y: 395, size: 17, lineHeight: 23, weight: .medium, beside: beside)
-            if beside {
-                VStack(alignment: .leading, spacing: 16) {
-                    ForEach(topics, id: \.ref) { topic in
-                        Button { onPractice?(topic.ref, topic.label) } label: {
-                            HStack(spacing: 13) {
-                                Circle().fill(SF.orange).frame(width: 7, height: 7)
-                                Text(topicName(topic.label)).font(V3.sans(15, weight: .medium)).foregroundStyle(SF.ink).lineLimit(1).truncationMode(.tail)
-                            }.frame(height: 22).contentShape(Rectangle())
-                        }.buttonStyle(.plain).help(topic.label).accessibilityLabel(topic.label)
-                    }
-                }.frame(width: 152, alignment: .leading).offset(x: 262, y: 286)
+            if topics != nil {
+                text("\(parts.month ?? 0) 月", x: 84, y: 195, size: 16, lineHeight: 22, weight: .medium, color: SF.sub, beside: beside)
+                text("\(parts.day ?? 0)", x: 77, y: 196, size: 122, lineHeight: 175, serif: true, beside: beside)
+                text([CareerDeckFormat.weekday(day), time].compactMap { $0 }.joined(separator: " "), x: 84, y: 395, size: 17, lineHeight: 23, weight: .medium, beside: beside)
+                if beside {
+                    VStack(alignment: .leading, spacing: 16) {
+                        ForEach(shown, id: \.ref) { topic in
+                            Button { onPractice?(topic.ref, topic.label) } label: {
+                                HStack(spacing: 13) {
+                                    Circle().fill(SF.orange).frame(width: 7, height: 7)
+                                    Text(topicName(topic.label)).font(V3.sans(15, weight: .medium)).foregroundStyle(SF.ink).lineLimit(1).truncationMode(.tail)
+                                }.frame(height: 22).contentShape(Rectangle())
+                            }.buttonStyle(.plain).help(topic.label).accessibilityLabel(topic.label)
+                        }
+                    }.frame(width: 152, alignment: .leading).offset(x: 262, y: 286)
+                }
             }
         }
     }
