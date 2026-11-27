@@ -115,7 +115,7 @@ public sealed partial class DesktopTransport : IDesktopTransport, IDisposable
 
     public async Task<JsonNode> CareerAsync(string path, string method, Dictionary<string,string>? query, JsonNode? body, string? access, CancellationToken ct = default)
     {
-        if (!CareerRequest.Allowed(path, method) || query is not null && query.Keys.Any(k => !CareerRequest.QueryKeys.Contains(k))) throw new InvalidDataException();
+        if (!CareerRequest.Allowed(path, method) || query is not null && query.Keys.Any(k => !CareerRequest.QueryKeys.Contains(k) && !(path == "/api/mock-interviews/review-context" && k is "kind" or "id"))) throw new InvalidDataException();
         var suffix = query is null || query.Count == 0 ? "" : "?" + string.Join("&", query.Select(x => Uri.EscapeDataString(x.Key) + "=" + Uri.EscapeDataString(x.Value)));
         using var request = new HttpRequestMessage(new HttpMethod(method), path + suffix);
         request.Headers.Add("X-Request-ID", Guid.NewGuid().ToString());

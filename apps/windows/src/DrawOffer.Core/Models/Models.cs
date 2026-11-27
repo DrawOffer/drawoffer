@@ -10,7 +10,16 @@ public sealed record User(
     [property: JsonPropertyName("email")] string? Email,
     [property: JsonPropertyName("nickname")] string Nickname,
     [property: JsonPropertyName("is_admin")] bool IsAdmin,
-    [property: JsonPropertyName("avatar_url")] string? AvatarUrl = null);
+    [property: JsonPropertyName("avatar_url")] string? AvatarUrl = null)
+{
+    /// <summary>默认头像：本机 <c>/api/auth/default-avatar</c>，或服务端复制到公共 OSS 的 <c>…/static/default-avatar-{内容指纹}.png</c>；都用随包图标，不经桌面会话下载（Mac <c>User.isDefaultAvatar</c>）。</summary>
+    public static bool IsDefaultAvatar(string path)
+    {
+        if (path.StartsWith("/api/auth/default-avatar", StringComparison.Ordinal)) return true;
+        if (!Uri.TryCreate(path, UriKind.Absolute, out var url) || url.Scheme != Uri.UriSchemeHttps || url.Query.Length > 0) return false;
+        return System.Text.RegularExpressions.Regex.IsMatch(url.AbsolutePath, "/static/default-avatar-[0-9a-f]{16}\\.png$");
+    }
+}
 
 /// <summary>
 /// 简历模板。data / style / layout_plan 是后端契约里的深层结构，原生层只负责透传给纸面渲染器，

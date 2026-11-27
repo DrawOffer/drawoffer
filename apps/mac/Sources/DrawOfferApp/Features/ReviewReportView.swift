@@ -26,13 +26,15 @@ struct MockReviewOverview<Crumb: View, Actions: View, Memory: View, Footnote: Vi
     var tag: String? = nil
     let open: (String) -> Void
     let practice: ([MockRV.Question]) -> Void
+    /// 练这几处的结果（Figma 10.23a）：不列建议先补，改列这次练的几处和前后分数；给的是「完整模拟」开一场完整模拟
+    var full: (() -> Void)? = nil
     @ViewBuilder var crumb: () -> Crumb
     @ViewBuilder var actions: () -> Actions
     @ViewBuilder var memory: () -> Memory
     @ViewBuilder var footnote: () -> Footnote
 
     var body: some View {
-        let suggestions = MockRV.suggestions(view.questions)
+        let suggestions = full == nil ? MockRV.suggestions(view.questions) : []
         let abilities = MockRV.generalAbilities(view.abilities)
         let scored = view.questions.filter { $0.score != nil }
         GeometryReader { geometry in
@@ -70,7 +72,7 @@ struct MockReviewOverview<Crumb: View, Actions: View, Memory: View, Footnote: Vi
                             .padding(.top, 22)
                             focusGrid(suggestions, wide: page > 760).padding(.top, 12)
                         }
-                        questionCard.padding(.top, 22)
+                        if let full { practiceList(full).padding(.top, 28) } else { questionCard.padding(.top, 22) }
                         HStack(spacing: 4) {
                             Text(verbatim: "总分来自这 \(view.questions.count) 道题，通用能力不计入总分。" + (view.pastCount > 0 ? "“以往”来自你之前的 \(view.pastCount) 场面试。" : ""))
                             footnote()
@@ -104,12 +106,18 @@ struct MockReviewOverview<Crumb: View, Actions: View, Memory: View, Footnote: Vi
         }
     }
 
-    /// 分数旁的小标签：+5 较上次 / 和上次持平。
+    /// 分数和上次比的差；练这几处时是这几处平均比练习前
+    private var gap: Int? {
+        if full != nil { return MockPracticeResult.averageGain(view.questions.map { (before: $0.previousScore, after: $0.score) }) }
+        guard let score = view.score, let previous = view.previous else { return nil }
+        return score - previous
+    }
+
+    /// 分数旁的小标签：+5 较上次 / 和上次持平；练这几处时是「较练习前」。
     @ViewBuilder private var delta: some View {
-        if let score = view.score, let previous = view.previous {
-            let gap = score - previous
+        if let gap {
             let tone: (Color, Color) = gap < 0 ? (Color(hex: 0xFEF2F2), Color(hex: 0xDC2626)) : gap == 0 ? (Color(hex: 0xF4F3F0), ROC.sub) : (Color(hex: 0xECFDF3), Color(hex: 0x15803D))
-            Text(verbatim: gap == 0 ? "和上次持平" : "\(gap > 0 ? "+\(gap)" : "\(gap)") 较上次")
+            Text(verbatim: MockPracticeResult.deltaText(gap, practice: full != nil))
                 .font(V3.sans(11.5, weight: .medium)).foregroundStyle(tone.1).padding(.horizontal, 9).padding(.vertical, 3.5)
                 .background(tone.0, in: Capsule()).padding(.leading, 8).alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] - 7 }
         }
@@ -131,9 +139,10 @@ struct MockReviewOverview<Crumb: View, Actions: View, Memory: View, Footnote: Vi
                 Text("分").font(V3.sans(14)).foregroundStyle(ROC.mute)
                 delta
             }
-            Text(verbatim: view.headline ?? view.conclusion).font(V3.sans(15.5, weight: .bold)).foregroundStyle(ROC.ink).lineHeight(15.5, 22)
+            Text(verbatim: full != nil ? MockPracticeResult.headline(total: view.questions.count, reached: view.questions.filter { $0.outcome == .reached }.count)
+                 : view.headline ?? view.conclusion).font(V3.sans(15.5, weight: .bold)).foregroundStyle(ROC.ink).lineHeight(15.5, 22)
                 .fixedSize(horizontal: false, vertical: true).padding(.top, 10)
-            if let summary = view.summary {
+            if full == nil, let summary = view.summary {
                 Text(verbatim: summary).font(V3.sans(13)).foregroundStyle(ROC.gray).lineHeight(13, 20).fixedSize(horizontal: false, vertical: true).padding(.top, 10)
             }
             if !stats.isEmpty {
@@ -189,6 +198,51 @@ struct MockReviewOverview<Crumb: View, Actions: View, Memory: View, Footnote: Vi
         return LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
             ForEach(suggestions) { q in RRFocusCard(question: q) { practice([q]) } }
         }
+    }
+
+    /// 这次练的几处（Figma 10.23a）：上次 → 这次的分数和一句话，右边答到哪层和查看详情；底部再练没达到的或完整模拟。
+    private func practiceList(_ full: @escaping () -> Void) -> some View {
+        let weak = view.questions.filter(\.weak)
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(verbatim: "这次练的 \(view.questions.count) 处").font(V3.serif(20)).fontWeight(.semibold).foregroundStyle(ROC.ink).lineHeight(20, 30, .serif)
+                .frame(minHeight: 44)
+            VStack(spacing: 0) {
+                ForEach(view.questions) { q in
+                    HStack(alignment: .center, spacing: 20) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(verbatim: q.title).font(V3.sans(16, weight: .medium)).foregroundStyle(ROC.ink).lineHeight(16, 22).lineLimit(1)
+                            Text(verbatim: [MockPracticeResult.scoreText(before: q.previousScore, after: q.score), q.line].compactMap { $0 }.joined(separator: " · "))
+                                .font(V3.sans(14)).foregroundStyle(ROC.mute).lineHeight(14, 20).lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(verbatim: MockRV.reachLine(q)).font(V3.sans(14)).foregroundStyle(q.weak ? ROC.low : ROC.sub).lineHeight(14, 20).fixedSize()
+                        Button("查看详情 ›") { open(q.id) }.buttonStyle(MockLinkStyle(size: 14, color: ROC.blue)).fixedSize()
+                    }
+                    .padding(.vertical, 10).frame(minHeight: 64)
+                }
+            }
+            .padding(.top, 4)
+            HStack(spacing: 12) {
+                Spacer(minLength: 0)
+                switch MockPracticeResult.footer(weak: weak.count) {
+                case .retryWeak(let count):
+                    Button(action: full) {
+                        HStack(spacing: 6) {
+                            Text("完整模拟").font(V3.sans(14, weight: .medium)).foregroundStyle(ROC.ink)
+                            Text(verbatim: "\(MockPracticeResult.fullMinutes) 分钟").font(V3.sans(13)).foregroundStyle(ROC.mute)
+                        }
+                        .padding(.horizontal, 18).frame(height: 36)
+                        .background(.white, in: Capsule()).overlay(Capsule().strokeBorder(Color(hex: 0xE7E5E4))).contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    Button(MockPracticeResult.retryTitle(count)) { practice(weak) }.buttonStyle(MockPillStyle(height: 44, padding: 24, size: 14))
+                case .fullOnly:
+                    Button("完整模拟 · \(MockPracticeResult.fullMinutes) 分钟", action: full).buttonStyle(MockPillStyle(height: 44, padding: 24, size: 14))
+                }
+            }
+            .padding(.top, 36)
+        }
+        .accessibilityElement(children: .contain).accessibilityLabel("这次练的几处")
     }
 
     private var questionCard: some View {

@@ -79,31 +79,41 @@ struct MockReportV2: View {
         let hasRecording = { (q: MockRV.Question) in !deleted && q.turns.contains(where: \.hasRecording) }
         let canEdit = { (q: MockRV.Question) in !deleted && q.turns.contains(where: \.editable) }
         let anyRecording = detail.text("answer_mode") == "voice" && view.questions.contains(where: hasRecording)
+        // 练这几处 / 练这一处（首页、报告里开的专项练习）：结果页按 Figma 10.23a / 10.23b
+        let layout = MockPracticeResult.layout(detail, count: view.questions.count)
+        let application = detail.display("job_application_id").nonEmptyValue
+        let opened = question.flatMap { id in view.questions.firstIndex { $0.id == id } } ?? (layout == .single && !view.questions.isEmpty ? 0 : nil)
         if reading.on {
             MockReviewRecord(view: view, initial: reading.at, playing: playing, play: deleted ? nil : { toggle($0, detail) },
                              open: { id in reading = (nil, false); question = id },
                              restart: { restart(detail.display("job_application_id").nonEmptyValue) }) {
                 MockBackCrumb(label: view.title) { reading = (nil, false) }
             }
-        } else if let question, let index = view.questions.firstIndex(where: { $0.id == question }) {
+        } else if let index = opened {
             let current = view.questions[index]
+            let single = layout == .single
             MockQuestionDetail(question: current, total: view.questions.count, prev: view.questions[safe: index - 1], next: view.questions[safe: index + 1],
                                open: { self.question = $0 }, practice: { start([$0], detail, view) }, record: { reading = ($0.id, true) },
                                judge: current.level != nil ? { judging = $0 } : nil,
                                edit: canEdit(current) ? { editing = $0 } : nil,
                                play: hasRecording(current) ? { toggle($0, detail) } : nil,
-                               playing: playing == current.id) {
-                MockBackCrumb(label: view.title) { self.question = nil }
+                               playing: playing == current.id, single: single) {
+                // 练这一处没有总览可回，面包屑直接回模拟面试首页
+                if single { MockBackCrumb(label: "模拟面试", action: home) } else { MockBackCrumb(label: view.title) { self.question = nil } }
             }
             .id(current.id)
         } else {
-            MockReviewOverview(view: view, open: { question = $0 }, practice: { start($0, detail, view) }) {
-                MockBackCrumb(label: "全部记录", action: records)
+            MockReviewOverview(view: view, open: { question = $0 }, practice: { start($0, detail, view) },
+                               full: layout == .set ? { restart(application) } : nil) {
+                if layout == .set { MockBackCrumb(label: "模拟面试", action: home) } else { MockBackCrumb(label: "全部记录", action: records) }
             } actions: {
-                if focus.isEmpty {
-                    Button(busy ? "正在准备…" : "再练一次") { Task { await repeatSession() } }.buttonStyle(MockLinkStyle(size: 13, color: ROC.sub)).fontWeight(.medium).disabled(busy)
+                // 练这几处的结果右上不放按钮（Web `actions={practiceSet ? null : …}`）
+                if layout != .set {
+                    if focus.isEmpty {
+                        Button(busy ? "正在准备…" : "再练一次") { Task { await repeatSession() } }.buttonStyle(MockLinkStyle(size: 13, color: ROC.sub)).fontWeight(.medium).disabled(busy)
+                    }
+                    Button("完整面试记录") { reading = (nil, true) }.buttonStyle(MockLinkStyle(size: 13, color: ROC.sub)).fontWeight(.medium)
                 }
-                Button("完整面试记录") { reading = (nil, true) }.buttonStyle(MockLinkStyle(size: 13, color: ROC.sub)).fontWeight(.medium)
             } memory: {
                 RRMemorySection(mockID: detail.display("id"), pastCount: view.pastCount) { target in
                     practice(PracticeFocus(kind: target.text("kind").nonEmptyValue ?? "topic", ref: target.text("ref"), label: target.text("label")))

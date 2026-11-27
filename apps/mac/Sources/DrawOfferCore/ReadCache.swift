@@ -14,10 +14,11 @@ public enum ReadCache {
     static let configPaths: Set<String> = ["/api/billing/feature-prices", "/api/mock-interviews/speech-capability",
                                            "/api/plugin-releases/current", "/api/resume-templates"]
 
-    /// 服务端支持 ETag/304 的读：`/api/resumes` 与 `/api/resumes/{数字 id}`，不带查询参数。
+    /// 服务端支持 ETag/304 的读：`/api/resumes`、`/api/resumes/{数字 id}` 与岗位广场筛选项 `/api/job-pool/filters`（约 700 KB，
+    /// 按岗位池数据版本出 ETag），都不带查询参数。
     public static func validates(path: String, query: [String: String]) -> Bool {
         guard query.isEmpty else { return false }
-        if path == "/api/resumes" { return true }
+        if path == "/api/resumes" || path == "/api/job-pool/filters" { return true }
         let prefix = "/api/resumes/"
         guard path.hasPrefix(prefix) else { return false }
         let id = path.dropFirst(prefix.count)

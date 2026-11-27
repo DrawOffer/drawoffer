@@ -119,22 +119,51 @@ struct SFArt {
     }
 }
 
-/// 一件图形：画板 480×500，外框高 470 - top。
+/// 回看通过的一轮时盖在纸上的邮戳（07N · 07）：由页面统一给出，各图形只定位置。
+private struct CareerFigureStampKey: EnvironmentKey { static let defaultValue: CareerJourneyStamp? = nil }
+extension EnvironmentValues {
+    var careerFigureStamp: CareerJourneyStamp? {
+        get { self[CareerFigureStampKey.self] }
+        set { self[CareerFigureStampKey.self] = newValue }
+    }
+}
+
+/// 一件图形：画板 480×500，外框高 470 - top。stampAt：邮戳在画板上的位置，默认压在纸的右上角。
 struct SFFigure<Overlay: View>: View {
     let top: CGFloat
     let label: String
+    var stampAt = CGPoint(x: 318, y: 36)
     let draw: (SFArt) -> Void
     @ViewBuilder var overlay: () -> Overlay
+    @Environment(\.careerFigureStamp) private var stamp
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             Canvas { context, _ in draw(SFArt(context: context)) }.frame(width: 480, height: 500).allowsHitTesting(false)
             overlay()
+            if let stamp { SFStamp(stamp: stamp).offset(x: stampAt.x, y: stampAt.y) }
         }
         .frame(width: 480, height: 500, alignment: .topLeading)
         .offset(y: -top)
         .frame(width: 480, height: 470 - top, alignment: .topLeading)
         .accessibilityElement(children: .contain).accessibilityLabel(label)
+    }
+}
+
+/// `.sf-stamp`：92×92，两圈圆，-12°，不透明度 .62，和投递信封上的邮戳同款。
+struct SFStamp: View {
+    let stamp: CareerJourneyStamp
+    var body: some View {
+        ZStack {
+            Circle().inset(by: 1).stroke(SF.ink, lineWidth: 1.5)
+            Circle().inset(by: 7).stroke(SF.ink, lineWidth: 0.8)
+            VStack(spacing: 0) {
+                Text(stamp.label).font(V3.sans(17, weight: .medium)).frame(height: 24)
+                Text(stamp.date).font(V3.sans(11)).frame(height: 15)
+            }.foregroundStyle(SF.ink)
+        }
+        .frame(width: 92, height: 92).rotationEffect(.degrees(-12)).opacity(0.62)
+        .allowsHitTesting(false).accessibilityElement(children: .ignore).accessibilityLabel("\(stamp.label) \(stamp.date)")
     }
 }
 
@@ -302,7 +331,7 @@ struct ResumeFigure: View {
 
     var body: some View {
         if let sketch {
-            SFFigure(top: 54, label: label, draw: { art in
+            SFFigure(top: 54, label: label, stampAt: CGPoint(x: 296, y: 372), draw: { art in
                 art.sheet()
                 art.clip(SF.blue)
                 art.draw(SFArt.circle(340, 140, 24), fill: .color(Color(hex: 0xE7E5DF)))
@@ -518,7 +547,7 @@ struct DayFigure: View {
     var body: some View {
         let parts = Beijing.calendar.dateComponents([.month, .day], from: day)
         let beside = !topics.isEmpty
-        SFFigure(top: 130, label: "\(parts.month ?? 0) 月 \(parts.day ?? 0) 日", draw: { art in art.calendarPad(ribbon: ribbon) }) {
+        SFFigure(top: 130, label: "\(parts.month ?? 0) 月 \(parts.day ?? 0) 日", stampAt: CGPoint(x: 330, y: 150), draw: { art in art.calendarPad(ribbon: ribbon) }) {
             text("\(parts.month ?? 0) 月", x: 84, y: 195, size: 16, lineHeight: 22, weight: .medium, color: SF.sub, beside: beside)
             text("\(parts.day ?? 0)", x: 77, y: 196, size: 122, lineHeight: 175, serif: true, beside: beside)
             text([CareerDeckFormat.weekday(day), time].compactMap { $0 }.joined(separator: " "), x: 84, y: 395, size: 17, lineHeight: 23, weight: .medium, beside: beside)
@@ -686,6 +715,48 @@ struct QuestionsFigure: View {
                 SFRow(text: item.title, x: 140, y: 157 + CGFloat(index) * 40, w: 190,
                       color: item.mark == .waiting ? Color(hex: 0xB9B8B2) : item.mark == .open ? SF.sub : SF.ink, action: item.open)
             }
+        }
+    }
+}
+
+// MARK: - 回看有记录、没复盘的一轮（07N · 07）：不放铅笔，每题下面写一行你怎么答的
+
+struct PastQuestionsFigure: View {
+    let title: String
+    let count: String
+    let items: [(id: String, title: String, answer: String?, open: (() -> Void)?)]
+    var onMore: (() -> Void)?
+    var body: some View {
+        let rows = Array(items.prefix(3))
+        SFFigure(top: 54, label: "面试中问到", draw: { art in
+            art.sheet()
+            for index in rows.indices { art.draw(SFArt.circle(123, 190 + CGFloat(index) * 84, 4), fill: .color(SF.ink)) }
+        }) {
+            PaperHead(title: title, count: count)
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, item in
+                AnswerRow(title: item.title, answer: item.answer.map { "你答：\($0)" } ?? "没记下怎么答的", action: item.open)
+                    .offset(x: 142, y: 177 + CGFloat(index) * 84)
+            }
+            if items.count > 3, let onMore {
+                CareerJourneyTextButton(title: "还有 \(items.count - 3) 题", color: SF.mute, action: onMore).offset(x: 142, y: 434)
+            }
+        }
+    }
+
+    /// `.sf-weak.sf-answer`：题目 17 号一行，下面「你答：…」最多两行。
+    private struct AnswerRow: View {
+        let title: String
+        let answer: String
+        let action: (() -> Void)?
+        @State private var hover = false
+        var body: some View {
+            Button { action?() } label: {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(title).font(V3.sans(17, weight: .medium)).foregroundStyle(SF.ink).underline(hover).lineLimit(1).truncationMode(.tail).frame(height: 24)
+                    Text(answer).font(V3.sans(13)).foregroundStyle(SF.mute).lineHeight(13, 18).lineLimit(2).truncationMode(.tail)
+                        .fixedSize(horizontal: false, vertical: true)
+                }.frame(width: 224, alignment: .leading).contentShape(Rectangle())
+            }.buttonStyle(.plain).onHover { hover = $0 }.help(title).disabled(action == nil)
         }
     }
 }

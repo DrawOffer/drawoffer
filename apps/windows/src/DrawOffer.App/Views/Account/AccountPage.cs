@@ -108,7 +108,7 @@ public sealed class AccountView : UserControl
     {
         var path = User.Text("avatar_url");
         if (path.Length == 0) { _avatar = null; return; }
-        if (path.StartsWith("/api/auth/default-avatar", StringComparison.Ordinal)) { _avatar = new BitmapImage(new Uri("ms-appx:///Assets/Branding/default-avatar.png")); return; }
+        if (DrawOffer.Core.Models.User.IsDefaultAvatar(path)) { _avatar = new BitmapImage(new Uri("ms-appx:///Assets/Branding/default-avatar.png")); return; }
         if (App.Session.Api is not HttpApiClient client) return;
         try { _avatar = await Files.BitmapAsync(await client.Coordinator.AccountAvatarAsync(path)); } catch { _avatar = null; }
     }

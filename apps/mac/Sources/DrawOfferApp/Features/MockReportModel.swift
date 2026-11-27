@@ -44,6 +44,9 @@ enum MockRV {
         var highlight: String?
         var advice: String?
         var reEvaluated: Int
+        /// 这题的起点层（score_basis.start_depth）；核心要点全没说到时分数封顶，写「还没达到起点」
+        var start: Int? = nil
+        var belowStart = false
         /// 重练同一道题时，上次那题的分
         var previousScore: Int? = nil
         /// 这道题考什么
@@ -104,6 +107,12 @@ enum MockRV {
         guard let level = q.level else { return "没记下回答" }
         let at = level <= 0 ? "没到「了解」" : "答到「\(levelLabel(level))」"
         return q.outcome == .reached || asReached ? at : "\(at) · 要到「\(levelLabel(q.expected))」"
+    }
+
+    /// 每道题右边、单题分数下面的一句：达到「熟悉」，要求「掌握」（Web `reachLine`）
+    static func reachLine(_ q: Question) -> String {
+        MockPracticeResult.reachLine(layered: q.layered, level: q.level, reached: q.outcome == .reached, expected: q.expected,
+                                     start: q.start, belowStart: q.belowStart, outcome: outcomeText(q))
     }
 
     static func gaps(_ q: Question) -> [String] { q.signals.filter { $0.state != "hit" }.map(\.label) }
@@ -219,7 +228,10 @@ enum MockRV {
         let stats = MockMap.stats(detail)
         let follows = (detail["questions"]?.items ?? []).filter { $0.text("kind") == "follow_up" }.count
         let role = detail.text("job_title").nonEmptyValue ?? detail.text("target_role").nonEmptyValue
-        let meta = [role, "模拟", type, follows > 0 ? "追问 \(follows) 次" : nil, monthDay(date)].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        // 练这几处 / 练这一处（Figma 10.23a / 10.23b）：标题下面写练了几处、日期、题数和时长
+        let meta = MockPracticeResult.isPractice(detail)
+            ? MockPracticeResult.meta(count: rounds.count, day: monthDay(date), minutes: stats.minutes)
+            : [role, "模拟", type, follows > 0 ? "追问 \(follows) 次" : nil, monthDay(date)].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
         let score = report["total_score"]?.numberValue.map { Int($0.rounded()) }
         let verdict = report["verdict"]?.text("level").nonEmptyValue
         let metrics = report["voice_metrics"].flatMap { $0 == .null ? nil : $0 }
@@ -268,9 +280,11 @@ enum MockRV {
         let weak = outcome == .missed || outcome == .oneShort
         let sequence = round.main["sequence_no"]?.integer ?? 0
         let expression = evaluation?["expression"].flatMap { $0 == .null ? nil : $0 }
+        let basis = evaluation?["score_basis"].flatMap { $0 == .null ? nil : $0 }
+        let belowStart = basis?["capped"]?.bool == true && userDepth == nil
         return Question(
             id: round.main.display("id"), no: no, ref: "\(sequence)", title: round.topic, outcome: outcome,
-            level: userDepth ?? aiLevel, aiLevel: aiLevel, expected: expected,
+            level: belowStart ? 0 : userDepth ?? aiLevel, aiLevel: aiLevel, expected: expected,
             score: evaluation?["score"]?.numberValue.map { Int($0.rounded()) },
             follows: max(0, round.turns.count - 1),
             line: weak ? weakness ?? highlight : highlight ?? weakness,
@@ -289,6 +303,7 @@ enum MockRV {
             highlight: highlight,
             advice: (report["actions"]?.items ?? []).first { $0.text("kind") == "practice" && ($0["question_refs"]?.items ?? []).contains { $0.integer == sequence } }?.text("detail").nonEmptyValue,
             reEvaluated: round.main["re_evaluate_count"]?.integer ?? 3,
+            start: basis?["start_depth"]?.integer, belowStart: belowStart,
             intent: evaluation?.text("intent").nonEmptyValue,
             delivery: [sentence(highlight), expression?.text("verdict") != "hit" ? sentence(expression?.text("note")) : nil, speed(round, report)].compactMap { $0 }.joined().nonEmptyValue,
             slips: (evaluation?["error_details"]?.items ?? []).map { Slip(quote: $0.text("evidence").nonEmptyValue, description: $0.text("description"), correction: $0.text("correction").nonEmptyValue) },

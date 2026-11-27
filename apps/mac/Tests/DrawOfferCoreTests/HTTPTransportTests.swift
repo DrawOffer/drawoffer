@@ -153,6 +153,11 @@ private final class HTTPFixture: @unchecked Sendable {
     #expect(fixture.requests[1].contains("POST /api/job-applications/1/stages"))
     #expect(fixture.requests[0].contains("cursor=a%26b"))
     #expect(HTTPCookieStorage.shared.cookies?.contains { $0.name == "transport-fixture" } != true)
+    // kind / id 只给复盘上下文用：别的路径带上会在本地拒绝，不发请求
+    await #expect(throws: APIError.invalidResponse) {
+        try await transport.career(path: "/api/job-applications", method: "GET", query: ["id": "1"], body: nil, access: "fixture-access")
+    }
+    #expect(fixture.requests.count == 3)
 }
 
 

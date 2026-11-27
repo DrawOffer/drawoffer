@@ -2,7 +2,7 @@ import AppKit
 import DrawOfferCore
 import SwiftUI
 
-/// 投递详情各块的画法（Figma 07N · 03–06，Web `progress/journey.tsx` + `journey.css`）。
+/// 投递详情各块的画法（Figma 07N · 03–07，Web `progress/journey.tsx` + `journey.css`）。
 /// 文案与状态在 Core `CareerJourney`；右侧图形在 `CareerStageFigures`；数据、弹窗和跳转在 `CareerApplicationDetailView`。
 enum CareerJourneyStyle {
     static let ink = Color(hex: 0x1D1D1B)
@@ -78,6 +78,7 @@ struct CareerJourneyHero: View {
         case .turn: return JS.blue
         case .rest: return JS.rest
         case .plain: return JS.ink
+        case .warn: return JS.orange
         }
     }
 }
@@ -129,13 +130,17 @@ struct CareerJourneyTimeline: View {
     let pick: (String) -> Void
     /// 「更新进度 ›」：能往下走、且左边没有按钮在做这件事时才有。
     var onAdvance: (() -> Void)?
+    /// 回看某一轮时：左上角写「正在回看 · X」，右上角「回到现在 ›」占「更新进度」的位置（07N · 07）。
+    var onBackToNow: (() -> Void)?
 
     var body: some View {
+        let viewing = onBackToNow == nil ? nil : timeline.nodes.first { $0.stationID != nil && $0.stationID == picked }?.label
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 16) {
-                Text(timeline.head).foregroundStyle(JS.sub)
+                Text(viewing.map { "正在回看 · \($0)" } ?? timeline.head).foregroundStyle(JS.sub)
                 Spacer(minLength: 0)
-                if let onAdvance { AdvanceLink(action: onAdvance) }
+                if viewing != nil, let onBackToNow { HeadLink(title: "回到现在", action: onBackToNow) }
+                else if let onAdvance { HeadLink(title: "更新进度", action: onAdvance) }
             }
             .font(V3.sans(13)).frame(height: 16)
             GeometryReader { geometry in
@@ -199,12 +204,13 @@ struct CareerJourneyTimeline: View {
         .allowsHitTesting(false)
     }
 
-    private struct AdvanceLink: View {
+    private struct HeadLink: View {
+        let title: String
         let action: () -> Void
         @State private var hover = false
         var body: some View {
             Button(action: action) {
-                HStack(spacing: 4) { Text("更新进度").underline(hover); Text("›") }
+                HStack(spacing: 4) { Text(title).underline(hover); Text("›") }
                     .font(V3.sans(13, weight: .medium)).foregroundStyle(JS.ink).padding(.vertical, 8).contentShape(Rectangle())
             }.buttonStyle(.plain).onHover { hover = $0 }.padding(.vertical, -8)
         }
@@ -265,7 +271,10 @@ private struct CareerJourneyNodeView: View {
 
     @ViewBuilder private var dot: some View {
         if picked {
-            Circle().fill(JS.ink).frame(width: 12, height: 12).background(Circle().fill(JS.ink.opacity(0.12)).padding(-5))
+            // 正在回看的那一轮：黑点外套一圈白、再套一圈黑环
+            Circle().fill(JS.ink).frame(width: 12, height: 12)
+                .background(Circle().fill(.white).padding(-4))
+                .background(Circle().fill(JS.ink).padding(-5.5))
         } else if todayDot {
             Circle().fill(JS.blue).frame(width: 10, height: 10).background(Circle().fill(JS.blue.opacity(0.16)).padding(-7))
         } else {

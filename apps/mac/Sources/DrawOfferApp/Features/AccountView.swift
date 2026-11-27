@@ -175,7 +175,7 @@ struct AccountView: View {
     private func loadAvatar() async {
         let path = user.text("avatar_url")
         guard !path.isEmpty else { avatar = nil; return }
-        if path.hasPrefix("/api/auth/default-avatar") { avatar = Bundle.module.url(forResource: "AppIcon", withExtension: "png").flatMap(NSImage.init(contentsOf:)); return }
+        if User.isDefaultAvatar(path) { avatar = Bundle.module.url(forResource: "AppIcon", withExtension: "png").flatMap(NSImage.init(contentsOf:)); return }
         avatar = (try? await session.api.accountAvatar(path: path)).flatMap(NSImage.init(data:))
     }
 

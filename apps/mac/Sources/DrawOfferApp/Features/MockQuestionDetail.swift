@@ -21,6 +21,8 @@ struct MockQuestionDetail<Crumb: View>: View {
     var edit: ((MockRV.Question) -> Void)?
     var play: ((MockRV.Question) -> Void)?
     var playing = false
+    /// 练这一处练完直接看这一题（Figma 10.23b）：右上是「再练一次」，不翻题
+    var single = false
     @ViewBuilder var crumb: () -> Crumb
     @State private var active: String?
 
@@ -36,11 +38,13 @@ struct MockQuestionDetail<Crumb: View>: View {
                     HStack(spacing: 24) {
                         crumb()
                         Spacer(minLength: 0)
-                        HStack(spacing: 14) {
-                            Button("‹ 上一题") { if let prev { open(prev.id) } }.disabled(prev == nil)
-                            Text(verbatim: "\(question.no) / \(total)").font(V3.number(12.5, weight: .regular)).foregroundStyle(RQC.faint)
-                            Button("下一题 ›") { if let next { open(next.id) } }.disabled(next == nil)
-                        }.buttonStyle(MockLinkStyle(size: 13, color: RQC.sub)).fontWeight(.medium)
+                        if !single {
+                            HStack(spacing: 14) {
+                                Button("‹ 上一题") { if let prev { open(prev.id) } }.disabled(prev == nil)
+                                Text(verbatim: "\(question.no) / \(total)").font(V3.number(12.5, weight: .regular)).foregroundStyle(RQC.faint)
+                                Button("下一题 ›") { if let next { open(next.id) } }.disabled(next == nil)
+                            }.buttonStyle(MockLinkStyle(size: 13, color: RQC.sub)).fontWeight(.medium)
+                        }
                     }
                     .frame(height: 20)
                     head(meta).padding(.top, 38)
@@ -90,7 +94,7 @@ struct MockQuestionDetail<Crumb: View>: View {
                     }.padding(.top, 4)
                 }
                 Spacer(minLength: 0)
-                Button("练这一处") { practice(question) }.buttonStyle(MockPillStyle(kind: .ghost, height: 38, padding: 19)).padding(.top, 2)
+                Button(MockPracticeResult.practiceButton(single: single)) { practice(question) }.buttonStyle(MockPillStyle(kind: .ghost, height: 38, padding: 19)).padding(.top, 2)
             }
             Text(verbatim: meta.joined(separator: " · ")).font(V3.sans(12.5)).foregroundStyle(RQC.faint).lineHeight(12.5, 20).padding(.top, 6)
             if let line = question.line {
