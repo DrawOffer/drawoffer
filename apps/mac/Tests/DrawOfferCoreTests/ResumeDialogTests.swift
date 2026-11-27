@@ -53,13 +53,13 @@ private func template(_ id: String, _ useCases: [String]) throws -> ResumeTempla
 @Test func resumeOrbTalksAboutTheUnitUnderTheCursor() {
     let idle = ResumeOrb.dialogue(unitID: nil, unitLabel: nil)
     #expect(idle.say == "想改哪儿？点纸上任意一段，我就去那一段。")
-    #expect(idle.actions == [.pickUnit, .layout])
-    #expect(idle.accent == .pickUnit)
+    #expect(idle.actions == [.deepenAll, .layout])
+    #expect(idle.accent == .deepenAll)
     let unit = ResumeOrb.dialogue(unitID: "e_1", unitLabel: "项目经历 · 分布式任务调度平台")
     #expect(unit.say == "想改「分布式任务调度平台」的话，我先看看这段，再问你几句当时的情况。")
     #expect(unit.actions.map(\.label) == ["改这一段", "智能排版"])
     #expect(unit.note == "改好会先写在纸上，你看过再换上。")
-    #expect(ResumeOrb.dialogue(unitID: "e_1", unitLabel: "  ").actions.first == .pickUnit)
+    #expect(ResumeOrb.dialogue(unitID: "e_1", unitLabel: "  ").actions.first == .deepenAll)
     #expect(ResumeOrb.compactUnitName("实习经历 · 一家名字非常非常长的虚构科技公司") == "一家名字非常非常长的虚构…")
     #expect(ResumeOrb.shortLabel("  示例   科技 ") == "示例 科技")
 }

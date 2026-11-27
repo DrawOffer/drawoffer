@@ -79,20 +79,8 @@ public enum MockPrep {
         return picks > 0 ? "题目还在准备，已挑好 \(min(picks, count)) / \(count) 道" : "题目还在准备"
     }
 
-    public static let phrase = "我准备好了，可以开始了"
+    /// 检查设备时试听的那句面试官的话。设备检测只看麦克风有没有收到声音，不再照读一句（Web #1563）。
     public static let interviewerLine = "你好，我们开始吧。"
-
-    /// 请读的那句：按顺序对上认出来的字；标点在读到第一个字之后算对上。
-    public static func phraseHits(_ heard: String) -> [Bool] {
-        let spoken = Array(heard.filter { !$0.isWhitespace })
-        var cursor = 0
-        return phrase.map { char in
-            let punct = "，。,.".contains(char)
-            guard !punct, let at = spoken[min(cursor, spoken.count)...].firstIndex(of: char) else { return punct && cursor > 0 }
-            cursor = at + 1
-            return true
-        }
-    }
 
     /// 至少答过一题（不算开场自我介绍）才有复盘（Web `hasAnswers`）。
     public static func hasAnswers(_ detail: JSONValue) -> Bool {
@@ -127,6 +115,10 @@ public enum MockPrep {
         /// 题卡来源点的颜色（十六进制）
         public var dot: String
     }
+
+    /// 读简历时还不知道经历叫什么：先画三段没名字的经历（各两行）和一个知识来源（三行），题目回来后换成真实来源（Web `READING_SOURCES`）
+    public static let readingSources: [Source] = (0..<3).map { _ in Source(name: "", know: false, nodes: Array(repeating: .init(text: "", state: "new"), count: 2)) }
+        + [Source(name: "", know: true, nodes: Array(repeating: .init(text: "", state: "new"), count: 3))]
 
     private static let tagDot = ["retest": "E05A47", "probe": "3F6FD8", "focus": "3F6FD8", "practice": "A8A29E", "job": "7FA98F", "basics": "A8A29E", "resume": "EAB34B", "competency": "A8A29E"]
 

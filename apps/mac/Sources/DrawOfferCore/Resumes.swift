@@ -23,10 +23,14 @@ public enum ResumeRequest {
         if parts.count == 3 { return ["GET", "PUT", "DELETE"].contains(method) }
         if parts.count == 5, parts[3] == "assets" { return method == "DELETE" && !parts[4].isEmpty && parts[4].count <= 255 }
         if parts.count == 5, parts[3] == "guide" { return method == "POST" && ["writes", "skills:compose", "experience:compose", "profile:compose", "materials:compose", "portrait:fill", "answer:extract"].contains(parts[4]) }
+        let id = { (value: String) in !value.isEmpty && value.count <= 64 && value.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") } }
         if parts.count == 7, parts[3] == "section-reviews", parts[5] == "items" {
-            let id = { (value: String) in !value.isEmpty && value.count <= 64 && value.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") } }
             return method == "PATCH" && id(parts[4]) && id(parts[6])
         }
+        // 小绘段旁对话从头来（Web `restartEditorChat`；后端尚未对桌面开放，403 按普通失败显示）
+        if parts.count == 5, parts[3] == "editor-chat" { return parts[4] == "restart" && method == "POST" }
+        // 换上以后记标记、同步经历复习稿（Web `experienceApplied`；后端尚未对桌面开放）
+        if parts.count == 6, parts[3] == "experience" { return id(parts[4]) && parts[5] == "applied" && method == "POST" }
         guard parts.count == 4 else { return false }
         if parts[3] == "copy" || parts[3] == "apply-template" || parts[3] == "assets" { return method == "POST" }
         if parts[3] == "share" { return ["GET", "POST", "PATCH", "DELETE"].contains(method) }
@@ -36,6 +40,8 @@ public enum ResumeRequest {
         // 智能排版（review:layout，后端已对桌面开放）
         if ["section-review:analyze", "section-review:rewrite", "review:layout"].contains(parts[3]) { return method == "POST" }
         if parts[3] == "section-reviews" { return method == "GET" }
+        // 小绘段旁对话（Web `getEditorChat`，`?entry_id=` 走 query；后端尚未对桌面开放）
+        if parts[3] == "editor-chat" { return method == "GET" }
         return false
     }
 

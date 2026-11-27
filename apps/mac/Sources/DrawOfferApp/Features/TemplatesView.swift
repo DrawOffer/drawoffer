@@ -63,7 +63,9 @@ struct TemplatesView: View {
                             .buttonStyle(V3ButtonStyle(kind: .ghost, height: 28)).disabled(loading)
                     }
                 } else if !ready {
-                    V3Loading("正在加载简历模板…").font(V3.sans(13)).frame(maxWidth: .infinity, minHeight: 250)
+                    // Web：工具条照常显示（数量写「–」），下方画模板网格骨架（SkeletonGrid）
+                    toolbar
+                    V3SkeletonTemplateGrid().padding(.top, 24)
                 } else if templates.isEmpty {
                     // 79:2375 ③ 当前没有可用模板
                     TemplatesBlank(title: "当前没有可用模板", message: "模板启用后会显示在这里，你仍可以从已有简历继续编辑。", art: { TemplatesNoneArt() }) {
@@ -102,34 +104,43 @@ struct TemplatesView: View {
     /// 页头：11px 眉题「TEMPLATES · N 套」、28px 衬线标题、13px 说明。
     private var head: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("TEMPLATES · \(ready ? "\(templates.count) 套" : "–")").font(V3.sans(11)).foregroundStyle(TemplatesStyle.hint).frame(height: 14)
+            HStack(spacing: 0) {
+                Text("TEMPLATES · ")
+                // Web：数量没到时是一条 16 宽的文字占位，失败时写「–」
+                if ready { Text("\(templates.count)") } else if loadError == nil { V3LoadingText(width: 16, size: 11) } else { Text("–") }
+                Text(" 套")
+            }.font(V3.sans(11)).foregroundStyle(TemplatesStyle.hint).frame(height: 14)
             Text("简历模板").font(V3.serif(28)).foregroundStyle(V3.txt).frame(height: 40).padding(.top, 12)
             Text("浏览当前可用版式，选择后填写简历名称并进入编辑器。").font(V3.sans(13)).foregroundStyle(V3.sub).lineLimit(1)
                 .frame(height: 16).padding(.top, 2)
         }
     }
 
+    /// 工具条：距说明 29、高 29；左摘要与清除筛选，右排序说明与筛选 PopUpButton。加载中数量写「–」。
+    private var toolbar: some View {
+        HStack(spacing: 0) {
+            Text("找到 \(ready ? "\(filtered.count)" : "–") 套模板").font(V3.sans(12)).foregroundStyle(V3.sub)
+            if filterCount > 0 {
+                Button("清除筛选") { selectedStyles = []; selectedUses = [] }.buttonStyle(.plain)
+                    .font(V3.sans(12, weight: .medium)).foregroundStyle(V3.txt).padding(.leading, 23)
+            }
+            Spacer()
+            Menu {
+                Picker("排序", selection: $byPopularity) {
+                    Text("按热度排序").tag(true)
+                    Text("按展示顺序").tag(false)
+                }.pickerStyle(.inline).labelsHidden()
+            } label: {
+                Text(byPopularity ? "按热度排序" : "按展示顺序").font(V3.sans(12)).foregroundStyle(TemplatesStyle.hint)
+            }
+            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().padding(.trailing, 16).accessibilityLabel("模板排序")
+            TemplateFilter(styles: $selectedStyles, uses: $selectedUses)
+        }.frame(height: 29).padding(.top, 29)
+    }
+
     private var grid: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // 工具条：距说明 29、高 29；左摘要与清除筛选，右排序说明与筛选 PopUpButton
-            HStack(spacing: 0) {
-                Text("找到 \(filtered.count) 套模板").font(V3.sans(12)).foregroundStyle(V3.sub)
-                if filterCount > 0 {
-                    Button("清除筛选") { selectedStyles = []; selectedUses = [] }.buttonStyle(.plain)
-                        .font(V3.sans(12, weight: .medium)).foregroundStyle(V3.txt).padding(.leading, 23)
-                }
-                Spacer()
-                Menu {
-                    Picker("排序", selection: $byPopularity) {
-                        Text("按热度排序").tag(true)
-                        Text("按展示顺序").tag(false)
-                    }.pickerStyle(.inline).labelsHidden()
-                } label: {
-                    Text(byPopularity ? "按热度排序" : "按展示顺序").font(V3.sans(12)).foregroundStyle(TemplatesStyle.hint)
-                }
-                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize().padding(.trailing, 16).accessibilityLabel("模板排序")
-                TemplateFilter(styles: $selectedStyles, uses: $selectedUses)
-            }.frame(height: 29).padding(.top, 29)
+            toolbar
             if filtered.isEmpty {
                 // 79:2375 ② 没有符合条件的模板
                 TemplatesBlank(title: "没有符合条件的模板", message: emptyMessage, art: { TemplatesFilterArt(count: filterCount) }) {

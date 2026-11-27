@@ -32,6 +32,10 @@ struct JobsBoardView: View {
     @State private var logos: [String: NSImage] = [:]
     @State private var pendingLogos = Set<String>()
     @State private var loading = false
+    /// 已经读到过哪个账号的看板：之后刷新时保留现有内容，只有首次加载才画骨架（Web `loading && !hasLoadedData`）。
+    @State private var loadedAccount: String?
+    /// 本周面试数（`/api/interview-overview`）还在读：只让页头副标题与统计画占位，看板照常显示（Web `metricsPending`）。
+    @State private var metricsPending = false
     @State private var failure: String?
     @State private var filterOpen = false
     @State private var stagesOpen = false
@@ -85,15 +89,18 @@ struct JobsBoardView: View {
             } else {
                 VStack(alignment: .leading, spacing: 0) {
                     // 01 · 岗位看板页头：CAREER · 本周，衬线标题，一行进度；右侧白色「已有面试安排」+ 唯一黑按钮「导入岗位」
-                    V3PageHead(eyebrow: ["CAREER", "本周"], title: "岗位看板", subtitle: subtitle, subtitleHeight: 20) {
+                    V3PageHead(eyebrow: ["CAREER", "本周"], title: "岗位看板", subtitle: subtitle, subtitleHeight: 20,
+                               subtitleLoading: statsPending ? 260 : nil) {
                         Button { open("arranged") } label: {
                             HStack(spacing: 6) { Image(systemName: "calendar").font(.system(size: 11)); Text("已有面试安排") }
                         }.buttonStyle(V3ButtonStyle(kind: .ghost)).help("本周 " + weekLabel)
                         Button("导入岗位") { open("import") }.buttonStyle(V3ButtonStyle(kind: .dark, width: 100))
                     }
                     statistics.padding(.top, 29)
-                    if loading {
-                        V3Loading("正在加载求职数据…").font(V3.sans(13)).frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if loading && loadedAccount != account {
+                        // Web 10.3：首次加载时页头与统计保留、工具栏照常显示，下方画看板骨架（SkeletonBoard）
+                        controls.padding(.top, 20).padding(.bottom, 18)
+                        V3SkeletonBoard()
                     } else if let failure {
                         VStack(spacing: 16) {
                             Text(failure).font(V3.sans(13)).foregroundStyle(V3.red)
@@ -146,7 +153,7 @@ struct JobsBoardView: View {
             }
         }
         .onChange(of: account) { _, _ in
-            applications = []; sessions = []; overview = .null; logos = [:]; pendingLogos = []; query = ""; hidden = []; order = []; action = nil; selected = nil; notice = nil
+            applications = []; sessions = []; overview = .null; loadedAccount = nil; logos = [:]; pendingLogos = []; query = ""; hidden = []; order = []; action = nil; selected = nil; notice = nil
         }
     }
 
@@ -167,9 +174,12 @@ struct JobsBoardView: View {
         return sessions.filter { $0.text("status") != "cancelled" && (CareerApplication.date($0.text("start_at")).map { $0 >= weekStart && $0 < end } ?? false) }.count
     }
     private var pendingOffers: Int { applications.filter { $0.raw.text("current_stage_type") == "offer" && $0.raw.text("offer_status") == "received" && $0.raw.text("status") == "active" }.count }
+    /// Web `statsPending`：数据还在读时，副标题与四项统计画占位。
+    private var statsPending: Bool { !account.isEmpty && (loading || metricsPending) }
+    /// Web `ApplicationsHeader`：「N 场面试」，有待回复的 Offer 再接「 · N 个 Offer 待回复」。
     private var subtitle: String {
-        guard !account.isEmpty, !loading else { return "登录后查看你的求职进程" }
-        return "\(activeCount) 个进行中 · \(weeklyInterviews) 场面试" + (pendingOffers > 0 ? " · \(pendingOffers) 个 Offer 待回复" : "")
+        guard !account.isEmpty else { return "登录后查看你的求职进程" }
+        return "\(weeklyInterviews) 场面试" + (pendingOffers > 0 ? " · \(pendingOffers) 个 Offer 待回复" : "")
     }
     private var statistics: some View {
         // Web `summarizeApplicationFunnel`：已投递为基数；进过面试 / HR / Offer 阶段算进面，到了 Offer 算拿到 Offer
@@ -187,15 +197,22 @@ struct JobsBoardView: View {
         return HStack(spacing: 0) {
             ForEach(Array(values.enumerated()), id: \.offset) { index, item in
                 // 02.1 提案 E：22 号数字，比率 10.5 号跟在数量旁（间距 8）；标签 11 号；分隔线 40 高、从数字顶部下移 4.5
-                VStack(alignment: .leading, spacing: 5.5) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(item.1).font(V3.number(22)).foregroundStyle(V3.txt)
-                        if let rate = item.2 {
-                            (Text(rate.0 + " ").foregroundStyle(V3.fnt) + Text(rate.1).font(V3.number(10.5, weight: .semibold)).foregroundStyle(V3.txt))
-                                .font(V3.sans(10.5, weight: .medium))
+                Group {
+                    if statsPending {
+                        // Web：数字与标签一起换成 40×22 + 64×11 两条占位
+                        VStack(alignment: .leading, spacing: 8) { V3Skeleton(width: 40, height: 22, radius: 5); V3Skeleton(width: 64, height: 11) }
+                    } else {
+                        VStack(alignment: .leading, spacing: 5.5) {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text(item.1).font(V3.number(22)).foregroundStyle(V3.txt)
+                                if let rate = item.2 {
+                                    (Text(rate.0 + " ").foregroundStyle(V3.fnt) + Text(rate.1).font(V3.number(10.5, weight: .semibold)).foregroundStyle(V3.txt))
+                                        .font(V3.sans(10.5, weight: .medium))
+                                }
+                            }.frame(height: 27)
+                            Text(item.0).font(V3.sans(11)).foregroundStyle(V3.fnt)
                         }
-                    }.frame(height: 27)
-                    Text(item.0).font(V3.sans(11)).foregroundStyle(V3.fnt)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading).padding(.leading, index == 0 ? 0 : 20)
                 .overlay(alignment: .topLeading) { if index > 0 { Rectangle().fill(V3.line).frame(width: 1, height: 40).padding(.top, 4.5) } }
@@ -572,27 +589,22 @@ struct JobsBoardView: View {
     private func load() async {
         guard !account.isEmpty else { loading = false; failure = nil; return }
         loading = true; failure = nil; logos = [:]; pendingLogos = []
+        let api = session.api
+        // Web `ApplicationsHeader`：本周面试数（overview）单独读、不挡看板；读不到就按本地排期计数。已有旧数字时先留着，到了再原地换
+        metricsPending = overview == .null
+        async let metrics = try? api.careerRequest(path: "/api/interview-overview", method: "GET", query: ["timezone": Beijing.identifier], body: nil)
         do {
-            var result: [CareerApplication] = []; var cursor = ""; var seen = Set<String>()
-            repeat {
-                var query = ["scope": "all", "limit": "200"]; if !cursor.isEmpty { query["cursor"] = cursor }
-                let page = try await session.api.careerRequest(path: "/api/job-applications", method: "GET", query: query, body: nil)
-                try Task.checkCancellation()
-                result += (page["items"]?.items ?? []).map { CareerApplication($0) }
-                cursor = page.text("next_cursor")
-                if !cursor.isEmpty && !seen.insert(cursor).inserted { throw APIError.invalidResponse }
-            } while !cursor.isEmpty
-            let metrics = try await session.api.careerRequest(path: "/api/interview-overview", method: "GET", query: ["timezone": Beijing.identifier], body: nil)
-            var arrangements: [JSONValue] = []; cursor = ""; seen = []
-            repeat {
-                var params = ["limit": "500", "include_archived": "true"]; if !cursor.isEmpty { params["cursor"] = cursor }
-                let page = try await session.api.careerRequest(path: "/api/interview-sessions", method: "GET", query: params, body: nil)
-                try Task.checkCancellation(); arrangements += page["items"]?.items ?? []
-                cursor = page.text("next_cursor")
-                if !cursor.isEmpty && !seen.insert(cursor).inserted { throw APIError.invalidResponse }
-            } while !cursor.isEmpty
+            // Web `loadData`：求职进程与排期两张分页表一起读（`Promise.all`），每张表内部按 cursor 一页接一页
+            async let listed = ConcurrentLoad.pages(base: ["scope": "all", "limit": "200"]) {
+                try await api.careerRequest(path: "/api/job-applications", method: "GET", query: $0, body: nil)
+            }
+            async let listedSessions = ConcurrentLoad.pages(base: ["limit": "500", "include_archived": "true"]) {
+                try await api.careerRequest(path: "/api/interview-sessions", method: "GET", query: $0, body: nil)
+            }
+            let result = try await listed.map { CareerApplication($0) }
+            let arrangements = try await listedSessions
             try Task.checkCancellation()
-            applications = result.map { $0.includingSessions(arrangements) }; sessions = arrangements; overview = metrics
+            applications = result.map { $0.includingSessions(arrangements) }; sessions = arrangements; loadedAccount = account
             if let target = openApplication.wrappedValue {
                 selected = applications.first { $0.id == target }; openApplication.wrappedValue = nil
                 materialsTarget = selected == nil ? nil : openMaterials.wrappedValue; openMaterials.wrappedValue = nil
@@ -603,6 +615,10 @@ struct JobsBoardView: View {
         catch APIError.unauthorized { session.reportAuthenticationFailure(); failure = "登录已失效，请重新登录。" }
         catch { failure = "岗位加载失败，请检查服务连接后重试。" }
         loading = false
+        let value = await metrics
+        guard !Task.isCancelled else { return }
+        if let value { overview = value }
+        metricsPending = false
     }
 }
 

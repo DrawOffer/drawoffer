@@ -32,7 +32,7 @@ struct ResumeLineChat: View {
         case loading(said: String)
         case reply(said: String, reply: String, note: String, changes: [Change])
         case applied(before: JSONValue)
-        case failed(said: String, instruction: String, message: String)
+        case failed(said: String, instruction: String, message: String, credit: Bool)
     }
 
     /// 纸面上要显示什么：正在改的几条高亮，改好的直接显示在纸上。
@@ -42,6 +42,7 @@ struct ResumeLineChat: View {
     }
 
     @Environment(SessionStore.self) private var session
+    @Environment(WorkspaceRouter.self) private var router: WorkspaceRouter?
     let resumeID: String
     @Binding var target: Target
     /// 纸面当前正文：拆上下文、核对写回都以它为准。
@@ -61,6 +62,8 @@ struct ResumeLineChat: View {
     @State private var lastText: String?
     @State private var task: Task<Void, Never>?
     @State private var notice: String?
+    /// 连着没改成的次数：第二次换一句“现在有点忙”（a667ae1ba）。
+    @State private var failures = 0
 
     private static let polish = "润色一下：先看这句话想表达什么、哪里写得单薄，在原句基础上补充让它更饱满的内容（具体做法、起的作用、带来的结果），站在 HR 筛简历的角度更有表现力、更容易通过筛选，可以写得有力；不改变原意，补出来的说法标出来请我核实。"
     private static let star = "按 STAR 法则重写这一句：一句带过背景和要解决的问题，重点写我采取的行动和做法，最后落到具体的结果。目标是让简历通过筛选：结果要写成具体数字（比例、数量、时长、覆盖范围等），原句没有就直接补上有说服力的数字，可以写得有力，补出来的说法标出来请我核实，不留空位。"
@@ -139,10 +142,13 @@ struct ResumeLineChat: View {
             ResumeTalkChips(items: (nextLine.map { line in [("接着改下一条", { next(line) })] } ?? [])
                             + [("撤销", { write(before); phase = .ask; notice = nil }), ("先这样", close)])
             input("或者直接说想怎么改")
-        case .failed(let said, let instruction, let message):
+        case .failed(let said, let instruction, let message, let credit):
+            // 分区 C · G / H：不弹窗，白板说一句原因 + 能做的动作；纸面不动
             ResumeTalkUser(text: said, faded: true)
             ResumeTalkAssistant(text: message)
-            ResumeTalkChips(items: [("再试一次", { send(instruction, shown: said) }), ("不用了", dismiss)])
+            ResumeTalkChips(items: [credit ? ("去充值", { router?.jump(.plans) }) : ("再试一次", { send(instruction, shown: said) }),
+                                    ("先不改了", { phase = .ask })])
+            input("或者换个说法")
         }
     }
 
@@ -239,9 +245,18 @@ struct ResumeLineChat: View {
             else if let range = target.selection { body["selection"] = .object(["start": .number(Double(range.lowerBound)), "end": .number(Double(range.upperBound))]) }
             request = ("section-review:rewrite", .object(body))
         }
+        // H：等了一分钟还没回来，就当没改成
+        let api = session.api
         task = Task {
             do {
-                let response = try await session.api.careerRequest(path: "/api/resumes/\(resumeID)/\(request.path)", method: "POST", query: [:], body: request.body)
+                let response = try await withThrowingTaskGroup(of: JSONValue?.self) { group in
+                    group.addTask { try await api.careerRequest(path: "/api/resumes/\(resumeID)/\(request.path)", method: "POST", query: [:], body: request.body) }
+                    group.addTask { try await Task.sleep(for: .seconds(60)); return nil }
+                    defer { group.cancelAll() }
+                    // 先回来的是计时：当没改成
+                    guard let first = try await group.next(), let result = first else { throw APIError.invalidResponse }
+                    return result
+                }
                 guard !Task.isCancelled, lineIDs == target.lineIDs else { return }
                 let reply = response.text("reply"), note = response.text("note")
                 let changes: [Change]
@@ -262,12 +277,15 @@ struct ResumeLineChat: View {
                     JSONValue.object(["role": .string("user"), "text": .string(Self.clip(instruction))]),
                     JSONValue.object(["role": .string("ai"), "text": .string(Self.clip(([reply] + changes.map(\.text)).filter { !$0.isEmpty }.joined(separator: "\n")))]),
                 ]).filter { !$0.text("text").isEmpty }.suffix(12))
+                failures = 0
                 phase = .reply(said: shown, reply: reply, note: note, changes: changes)
             } catch {
                 guard !Task.isCancelled else { return }
                 if case APIError.unauthorized = error { session.reportAuthenticationFailure() }
-                let credit = ResumeCheck.errorMessage(error).credit
-                phase = .failed(said: shown, instruction: instruction, message: credit ? "积分不足，充值后再试" : "这次没改成，稍后再试一次")
+                let credit = ResumeEditorChat.lineFailure(error, failures: 0).credit
+                failures = credit ? 0 : failures + 1
+                let failure = ResumeEditorChat.lineFailure(error, failures: failures)
+                phase = .failed(said: shown, instruction: instruction, message: failure.text, credit: failure.credit)
             }
         }
     }

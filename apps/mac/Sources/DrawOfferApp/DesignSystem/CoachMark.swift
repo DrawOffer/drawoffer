@@ -40,11 +40,6 @@ struct CoachMarkKey: PreferenceKey {
     }
 }
 
-private struct CoachSizeKey: PreferenceKey {
-    static var defaultValue: CGSize { .zero }
-    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
-}
-
 private struct CoachExternalHostKey: EnvironmentKey {
     static var defaultValue: Bool { false }
 }
@@ -116,7 +111,8 @@ struct CoachMarkLayer: View {
             path.addRect(bounds)
             path.addRoundedRect(in: hole, cornerSize: CGSize(width: entry.corner, height: entry.corner))
         }
-        let size = cardSize
+        // 还没量到尺寸时按常见的两行浮层估一个，先摆出来；量到后再精确定位（以前量到之前整张隐藏，量不到就只剩蒙层）
+        let size = cardSize == .zero ? CGSize(width: 380, height: 118) : cardSize
         let fitsBelow = hole.maxY + Self.gap + size.height <= bounds.maxY - Self.edge
         let fitsAbove = hole.minY - Self.gap - size.height >= Self.edge
         let below = fitsBelow || !fitsAbove
@@ -133,14 +129,12 @@ struct CoachMarkLayer: View {
                 .accessibilityHidden(true)
             card(entry, below: below, arrow: arrow)
                 .fixedSize()
-                .background(GeometryReader { g in Color.clear.preference(key: CoachSizeKey.self, value: g.size) })
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { cardSize = $0 }
                 .offset(x: x, y: y)
-                .opacity(size == .zero ? 0 : 1)
             // Esc 关闭
             Button("") { entry.onClose() }.keyboardShortcut(.cancelAction).opacity(0).frame(width: 0, height: 0)
         }
         .frame(width: bounds.width, height: bounds.height, alignment: .topLeading)
-        .onPreferenceChange(CoachSizeKey.self) { cardSize = $0 }
     }
 
     /// 浮层卡片：宽 hug 内容，圆角 14，白底 + #E7E5DE 描边；左边 28 的山茶花，右边文字 14 / 行距 23，下面 33 高胶囊按钮与文字左对齐。
@@ -237,12 +231,15 @@ final class CoachGuide {
         guard let client = api as? HTTPAPIClient else { enabled = true; ready = true; checkedAt = Date(); return }
         fetching = true
         defer { fetching = false; ready = true }
-        var request = URLRequest(url: client.origin.appending(path: "/api/auth/capabilities"), cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 8)
-        request.httpMethod = "GET"
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200,
-                  let flag = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["onboarding_enabled"] as? Bool else { enabled = false; return }
+            // 走客户端自己的连接池（以前用 URLSession.shared，首屏要多一次 TLS 握手）；仍是 8 秒读不到就当关闭
+            let value = try await withThrowingTaskGroup(of: JSONValue?.self) { group in
+                group.addTask { try await client.authCapabilities() }
+                group.addTask { try await Task.sleep(for: .seconds(8)); return nil }
+                defer { group.cancelAll() }
+                return try await group.next() ?? nil
+            }
+            guard case .bool(let flag)? = value?["onboarding_enabled"] else { enabled = false; return }
             enabled = flag
             checkedAt = Date()
         } catch {

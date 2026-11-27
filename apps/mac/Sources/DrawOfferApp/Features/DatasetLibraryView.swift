@@ -408,7 +408,8 @@ struct DatasetLibraryView: View {
             CareerApplicationDetailView(application:CareerApplication(project.application),api:session.api,back:{ view = "home"; tab = "jobs"; Task { await loadJobs(background:true) } },
                                         perform:{ _,app in router?.jump(.application(app.id)) },libraryMaterials:true,openDataset:{ go("ds:" + $0) }).id(id)
         } else if jobState == "loading" {
-            V3Loading("正在加载项目…").frame(maxWidth:.infinity,maxHeight:.infinity)
+            // Web `DatasetsPage` viewKind === "job"：求职进程还在读时是 4 行列表骨架（SkeletonRows），不是统一加载动画
+            V3Page(top:52) { V3SkeletonRows(rows:4,label:"正在加载项目…") }
         } else {
             VStack(spacing:16) {
                 Text(jobState == "failed" ? "求职进程加载失败" : "这个求职进程不存在或已删除").font(V3.sans(17,weight:.medium)).foregroundStyle(V3.txt)

@@ -724,24 +724,26 @@ struct CareerApplicationDetailView: View {
 
     private func load() async {
         loading = true; error = nil; now = Date()
+        let api = self.api, id = application.id
         do {
-            let detail = try await api.careerRequest(path: "/api/job-applications/\(application.id)", method: "GET", query: [:], body: nil)
-            var all: [JSONValue] = []; var cursor = ""; var seen = Set<String>()
-            repeat {
-                var query = ["application_id": application.id, "limit": "500", "include_archived": "true"]; if !cursor.isEmpty { query["cursor"] = cursor }
-                let page = try await api.careerRequest(path: "/api/interview-sessions", method: "GET", query: query, body: nil)
-                all += page["items"]?.items ?? []; cursor = page.text("next_cursor")
-                if !cursor.isEmpty && !seen.insert(cursor).inserted { throw APIError.invalidResponse }
-            } while !cursor.isEmpty
+            // Web `loadData`（投递详情）：单条进程与它的排期一起读（`Promise.all`），排期内部按 cursor 一页接一页
+            async let record = api.careerRequest(path: "/api/job-applications/\(id)", method: "GET", query: [:], body: nil)
+            async let listed = ConcurrentLoad.pages(base: ["application_id": id, "limit": "500", "include_archived": "true"]) {
+                try await api.careerRequest(path: "/api/interview-sessions", method: "GET", query: $0, body: nil)
+            }
+            let detail = try await record
+            let all = try await listed
             try Task.checkCancellation()
             let app = detail["application"] ?? .null
             current = app; sessions = all
-            var loaded: [String: JSONValue] = [:]
-            for session in all where session.text("status") != "cancelled" {
-                if let detail = try? await api.careerRequest(path: "/api/interview-sessions/\(session.text("id"))", method: "GET", query: [:], body: nil) { loaded[session.text("id")] = detail }
+            // Web `ProgressDeckPage.loadDetails`：各场详情一起读，单场读不到只是少这一场；岗位描述与它们同时读
+            let jobID = app.text("job_description_id")
+            async let job: JSONValue? = jobID.isEmpty ? nil : try? await api.careerRequest(path: "/api/job-descriptions/\(jobID)", method: "GET", query: [:], body: nil)
+            let loaded = await ConcurrentLoad.each(all.filter { $0.text("status") != "cancelled" }.map { $0.text("id") }) {
+                try await api.careerRequest(path: "/api/interview-sessions/\($0)", method: "GET", query: [:], body: nil)
             }
             details = loaded
-            if !app.text("job_description_id").isEmpty, let job = try? await api.careerRequest(path: "/api/job-descriptions/\(app.text("job_description_id"))", method: "GET", query: [:], body: nil) {
+            if let job = await job {
                 jobDescription = job["job_description"]?.text("description").nonEmptyOr("暂无岗位描述")
             }
         } catch is CancellationError { return }

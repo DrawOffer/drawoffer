@@ -1137,17 +1137,21 @@ struct AssistantChatView: View {
         processes = [:]; live = AssistantProcessSnapshot(); editingIndex = nil; floating = nil
         queue = []; ratings = [:]; ratingOpen = nil; ratingThanks = nil; jobMissing = nil
         let api = self.api
+        // 就绪状态、当前模型、模型列表与这条对话的内容互不依赖：一起读（Web 各自独立加载）；
+        // 应用顺序不变——先按列表定默认模型，再由对话里选过的模型覆盖
         async let readiness = try? api.careerRequest(path: "/api/agent/readiness", method: "GET", query: [:], body: nil)
         async let model = try? api.careerRequest(path: "/api/agent/model", method: "GET", query: [:], body: nil)
+        async let modelList = try? api.careerRequest(path: "/api/agent/models", method: "GET", query: [:], body: nil)
+        async let conversation = Self.conversation(api: api, id: sessionID)
         let (readyValue, modelValue) = await (readiness, model)
         if case .bool(let flag) = readyValue?["ready"] { ready = flag } else { ready = readyValue == nil ? nil : false }
         modelName = modelValue?["model"]?.text("name").nilIfEmpty
-        if let list = try? await api.careerRequest(path: "/api/agent/models", method: "GET", query: [:], body: nil) {
+        if let list = await modelList {
             models = list["models"]?.items ?? []
             modelID = (sessionID == nil ? initialModelID : nil) ?? list["defaultModelId"]?.stringValue ?? modelValue?["model"]?.text("id").nilIfEmpty
         }
         if let sessionID {
-            await reload(sessionID)
+            await reload(sessionID, prefetched: await conversation)
             if let active = try? await api.careerRequest(path: "/api/agent/sessions/\(sessionID)/active-run", method: "GET", query: [:], body: nil),
                let run = active["run"]?.text("run_id"), !run.isEmpty {
                 await stream(path: "/api/agent/runs/\(run)/events", method: "GET", body: nil, sessionID: sessionID)
@@ -1166,9 +1170,18 @@ struct AssistantChatView: View {
         await loadContexts()
     }
 
-    private func reload(_ id: String) async {
+    private static func conversation(api: any APIClient, id: String?) async -> Result<JSONValue, any Error>? {
+        guard let id else { return nil }
+        do { return .success(try await api.careerRequest(path: "/api/agent/sessions/\(id)", method: "GET", query: [:], body: nil)) }
+        catch { return .failure(error) }
+    }
+
+    /// `prefetched`：打开对话时已经和其他读取一起发出的 `GET /api/agent/sessions/{id}` 结果（成功或失败都照常处理）。
+    private func reload(_ id: String, prefetched: Result<JSONValue, any Error>? = nil) async {
         do {
-            let result = try await api.careerRequest(path: "/api/agent/sessions/\(id)", method: "GET", query: [:], body: nil)
+            let result: JSONValue
+            if let prefetched { result = try prefetched.get() }
+            else { result = try await api.careerRequest(path: "/api/agent/sessions/\(id)", method: "GET", query: [:], body: nil) }
             guard currentID == id else { return }
             messages = result["session"]?["messages"]?.items ?? []
             title = result["session"]?.text("title").nilIfEmpty ?? "新对话"
