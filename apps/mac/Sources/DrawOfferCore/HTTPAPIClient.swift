@@ -253,7 +253,7 @@ final class DesktopTransport: DesktopRequesting {
     }
 
     func career(path: String, method: String, query: [String: String], body: JSONValue?, access: String?) async throws -> JSONValue {
-        guard CareerRequest.allowed(path: path, method: method), !query.keys.contains(where: { !["scope", "cursor", "limit", "week_start", "timezone", "application_id", "include_archived", "v", "job_application_id", "resume_id", "status", "folder_id", "confirm_contents", "start_at", "end_at", "type", "q", "prefix", "session_id", "include_history", "keyword", "company_ids", "city", "job_category", "recruitment_type", "job_id", "page", "page_size", "sort", "industry", "direction", "published_within", "exclude_joined", "intent", "seed"].contains($0) }) else { throw APIError.invalidResponse }
+        guard CareerRequest.allowed(path: path, method: method), !query.keys.contains(where: { !(path == "/api/mock-interviews/review-context" && ["kind", "id"].contains($0)) && !["scope", "cursor", "limit", "week_start", "timezone", "application_id", "include_archived", "v", "job_application_id", "resume_id", "status", "folder_id", "confirm_contents", "start_at", "end_at", "type", "q", "prefix", "session_id", "include_history", "keyword", "company_ids", "city", "job_category", "recruitment_type", "job_id", "page", "page_size", "sort", "industry", "direction", "published_within", "exclude_joined", "intent", "seed"].contains($0) }) else { throw APIError.invalidResponse }
         var url = URLComponents(url: origin.appending(path: path), resolvingAgainstBaseURL: false)!
         url.queryItems = JobPool.queryItems(query)
         var request = URLRequest(url: url.url!)
@@ -373,7 +373,7 @@ final class DesktopTransport: DesktopRequesting {
         }
     }
 
-    /// 简历列表与详情的条件读：服务端按版本列算弱 ETag，没变时回 304 不带正文。
+    /// 条件读（简历列表与详情、岗位广场筛选项）：服务端算 ETag，没变时回 304 不带正文。
     func validated(path: String, query: [String: String], etag: String?, access: String?) async throws -> (value: JSONValue?, etag: String?) {
         guard ReadCache.validates(path: path, query: query) else {
             return (try await career(path: path, method: "GET", query: query, body: nil, access: access), nil)

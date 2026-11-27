@@ -18,6 +18,14 @@ public struct User: Codable, Equatable, Sendable {
         case isAdmin = "is_admin"
         case avatarURL = "avatar_url"
     }
+
+    /// 默认头像：本机 `/api/auth/default-avatar`，或服务端复制到公共 OSS 的 `…/static/default-avatar-{内容指纹}.png`。
+    /// 两种都用随包图标显示，不经桌面会话下载（OSS 地址不在可信源内）。
+    public static func isDefaultAvatar(_ path: String) -> Bool {
+        if path.hasPrefix("/api/auth/default-avatar") { return true }
+        guard let url = URL(string: path), url.scheme == "https", url.query == nil else { return false }
+        return url.path.range(of: "/static/default-avatar-[0-9a-f]{16}\\.png$", options: .regularExpression) != nil
+    }
 }
 
 /// 简历模板。`data` / `style` / `layout_plan` 是后端契约（contracts/resume/*.schema.json）里的深层结构，

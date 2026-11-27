@@ -364,7 +364,7 @@ public sealed class UserAvatar : BorderControl
     async Task LoadAsync(string? path)
     {
         if (string.IsNullOrEmpty(path)) return;
-        if (path.StartsWith("/api/auth/default-avatar", StringComparison.Ordinal))
+        if (Core.Models.User.IsDefaultAvatar(path))
         {
             Child = new Image { Source = new BitmapImage(new Uri("ms-appx:///Assets/Branding/default-avatar.png")), Stretch = Stretch.UniformToFill };
             return;

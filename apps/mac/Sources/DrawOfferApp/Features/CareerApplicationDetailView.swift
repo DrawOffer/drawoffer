@@ -137,7 +137,7 @@ struct CareerApplicationDetailView: View {
     }
 
     /// 投递详情（Figma 07N · 03–06）：返回栏，中间左边「现在该做什么」、右边这一步的那件东西，各自按外轮廓居中在同一条中线上，
-    /// 正好在页头和时间线中间；底部全程时间线。点时间线上过去的节点回看那一轮，Esc 或「回到…」回到现在。
+    /// 正好在页头和时间线中间；底部全程时间线。点时间线上过去的节点回看那一轮（07N · 07），Esc 或时间线右上角「回到现在」回到现在。
     private var progressPage: some View {
         let deck = CareerDeck(application: raw, sessions: sessions, now: now)
         let current = deck.current ?? deck.stations[deck.stations.count - 1]
@@ -164,6 +164,7 @@ struct CareerApplicationDetailView: View {
                     let hero = CareerJourneyHero(job: item.company + " · " + item.title, step: step, compact: compact, disabled: busy || loading,
                                                  act: { journeyAction($0, shown: shown, session: shownSession) })
                     let figure = figureView(step, deck: deck, shown: shown, session: shownSession, detail: shownDetail)
+                        .environment(\.careerFigureStamp, step.stamp)
                         .scaleEffect(compact ? 0.8333 : 1, anchor: .topLeading)
                     Group {
                         if width > 840 {
@@ -180,7 +181,8 @@ struct CareerApplicationDetailView: View {
                     Spacer(minLength: 44)
                     CareerJourneyTimeline(timeline: timeline, picked: viewing ? shown.id : nil,
                                           pick: { key in withAnimation(.easeOut(duration: 0.2)) { viewKey = key == current.id ? nil : key } },
-                                          onAdvance: CareerJourney.canAdvance(deck, viewing: viewing) && !advancing ? { if !busy { perform("advance", item) } } : nil)
+                                          onAdvance: CareerJourney.canAdvance(deck, viewing: viewing) && !advancing ? { if !busy { perform("advance", item) } } : nil,
+                                          onBackToNow: viewing ? { journeyAction(.backToNow, shown: shown, session: shownSession) } : nil)
                 }
                 .frame(width: width, alignment: .leading)
                 .frame(minHeight: max(0, geometry.size.height - 90), alignment: .top)
@@ -382,6 +384,10 @@ struct CareerApplicationDetailView: View {
             QuestionsFigure(title: shown.short, count: "\(paper.total) 题", items: paper.rows.map { row in
                 SFPaperItem(id: row.id, title: row.title, mark: .open, open: { act(.openRecord) })
             }, tone: step.figure == .questions ? .blue : .orange)
+        case .questionsPast:
+            let paper = paper(session, detail)
+            PastQuestionsFigure(title: shown.short, count: "\(CareerDeckFormat.monthDay(CareerJourney.stationDay(shown))) · \(paper.total) 题",
+                                items: paper.rows.map { row in (row.id, row.title, row.answer, { act(.openRecord) }) }, onMore: { act(.openRecord) })
         case .reviewing:
             let rows = CareerJourney.progressQuestions(session)
             let paper = paper(session, detail)
@@ -445,7 +451,9 @@ struct CareerApplicationDetailView: View {
     private var matchKey: String {
         let state = shownState
         guard needsMatch(state.deck, shown: state.shown, viewing: state.viewing), let resumeID else { return "" }
-        return [raw.text("job_description_id"), resumeID, state.shown.kind == .apply ? "doc" : ""].joined(separator: ":")
+        // 回看筛选也画投的那份简历（07N · 07 稿；Web 目前只在投递这一步取简历正文，取不到时画空白简历）
+        let doc = state.shown.kind == .apply || (state.viewing && state.shown.kind == .screening)
+        return [raw.text("job_description_id"), resumeID, doc ? "doc" : ""].joined(separator: ":")
     }
 
     private func loadMatch() async {

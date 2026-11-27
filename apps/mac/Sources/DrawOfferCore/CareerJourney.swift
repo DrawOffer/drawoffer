@@ -1,8 +1,9 @@
 import Foundation
 
 /// 投递详情（Figma 07N · 03–06，Web `features/interviews/progress/journey.tsx`）的文案与状态：
-/// 左边只说现在该做什么——岗位、两行衬线大标题（第二行蓝＝轮到你，灰＝在等或已过去）、一句说明、一排按钮（一黑一白）；
-/// 右边只放这一步的那件东西（状态图形）；底部是全程时间线。这里只算文案、选图形和排时间线，画法在 App。
+/// 左边只说现在该做什么——岗位、两行衬线大标题（第二行蓝＝轮到你，灰＝在等或已过去，橙＝没答好或出错）、一句说明、一排按钮（一黑一白）；
+/// 右边只放这一步的那件东西（状态图形）；底部是全程时间线。点过去的节点回看那一轮（07N · 07）：标题第一行写这一轮的结论、
+/// 第二行写留下了什么，通过的一轮右边那张纸盖「通过」邮戳，「回到现在」在时间线右上角。这里只算文案、选图形和排时间线，画法在 App。
 public enum CareerJourneyAction: String, Sendable {
     case recordApplied, openSource, advance, schedule, reschedule, enter, openPlace, copyPlace, mock, practiceWeak
     case upload, paste, pickLibrary, retryTranscription, generateReview, openReview, openRecord
@@ -18,7 +19,7 @@ public struct CareerJourneyButton: Sendable, Equatable {
 /// 右边那件东西（Figma 07N · 03「左右布局与状态图形」，24 个状态一件）。
 public enum CareerJourneyFigure: String, Sendable {
     case resume, resumeBlank, sent, askDay, writtenDue, writtenList, day, dayPast, clock
-    case recordEmpty, recordRunning, recordFailed, questions, reviewing, reviewFailed, review, wait
+    case recordEmpty, recordRunning, recordFailed, questions, questionsPast, reviewing, reviewFailed, review, wait
     case oral, offerBlank, offer, offerAccepted, offerDeclined, archive, archiveOpen
 }
 
@@ -27,8 +28,8 @@ public struct CareerJourneyStep: Sendable {
     public let stage: String
     /// 大标题的两行。
     public let title: [String]
-    /// 第二行的颜色：轮到你做、在等或已经过去、好消息（和第一行同色）。
-    public enum Tone: Sendable { case turn, rest, plain }
+    /// 第二行的颜色：轮到你做、在等或已经过去、好消息（和第一行同色）、没答好或出错。
+    public enum Tone: Sendable { case turn, rest, plain, warn }
     public let tone: Tone
     public let desc: String?
     public let primary: CareerJourneyButton?
@@ -36,6 +37,14 @@ public struct CareerJourneyStep: Sendable {
     /// 不常用的几项放进右上角 ⋯。
     public let more: [CareerJourneyButton]
     public let figure: CareerJourneyFigure
+    /// 回看通过的一轮：右边那张纸上盖的邮戳。
+    public var stamp: CareerJourneyStamp? = nil
+}
+
+/// 回看通过的一轮时盖在纸上的邮戳（07N · 07）：「通过」+ 日期。
+public struct CareerJourneyStamp: Sendable, Equatable {
+    public let label: String
+    public let date: String
 }
 
 /// 这一场去哪儿：现场是地点，其他是会议或作答链接。
@@ -383,12 +392,10 @@ public enum CareerJourney {
                             detail: JSONValue?, previous: CareerStation?, reviewCost: String?, match: JobMatch? = nil, memoryTopics: Int = 0) -> CareerJourneyStep {
         typealias B = CareerJourneyButton
         func make(_ stage: String, _ title: [String], _ tone: CareerJourneyStep.Tone, _ desc: String?, primary: B? = nil, secondary: B? = nil,
-                  more: [B] = [], _ figure: CareerJourneyFigure) -> CareerJourneyStep {
-            CareerJourneyStep(stage: stage, title: title, tone: tone, desc: desc, primary: primary, secondary: secondary, more: more, figure: figure)
+                  more: [B] = [], _ figure: CareerJourneyFigure, stamp: CareerJourneyStamp? = nil) -> CareerJourneyStep {
+            CareerJourneyStep(stage: stage, title: title, tone: tone, desc: desc, primary: primary, secondary: secondary, more: more, figure: figure, stamp: stamp)
         }
         let advance = B(.advance, "更新进度")
-        let current = deck.current ?? deck.stations[deck.stations.count - 1]
-        let backToNow = B(.backToNow, "回到" + (deck.pending ? "待投递" : current.short))
         let session = live(station.session)
         let place = session.flatMap(placeOf)
         let copyPlace = place.map { [B(.copyPlace, $0.onsite ? "复制地点" : "复制链接")] } ?? []
@@ -433,7 +440,7 @@ public enum CareerJourney {
         if station.kind == .apply {
             let channel = CareerDeck.source(app)
             return make("投递 · \(md(station.start))", [md(station.start), channel.map { "在\($0)投出去" } ?? "投出去"], .rest,
-                        resumeTitle.isEmpty ? nil : "投的是「\(resumeTitle)」。", primary: seeResume, secondary: backToNow, resumeID != nil ? .resume : .resumeBlank)
+                        resumeTitle.isEmpty ? nil : "投的是「\(resumeTitle)」。", primary: seeResume, resumeID != nil ? .resume : .resumeBlank)
         }
 
         if station.kind == .screening {
@@ -444,9 +451,12 @@ public enum CareerJourney {
                             noResume ? "还没记投的是哪份简历，补上之后复盘会更准。" : coverageDesc(match) ?? "收到笔试或面试通知，回来记一笔。",
                             primary: advance, secondary: noResume ? B(.pickResume, "选一份简历") : seeResume, noResume ? .resumeBlank : .sent)
             }
+            // 回看：第一行是结论，第二行是多久有了回音；通过的盖邮戳
             let failed = station.result == "rejected"
-            return make("筛选 · " + (failed ? "没通过" : "已通过"), ["简历筛选", failed ? "没通过" : "通过了"], .rest,
-                        station.end.map { "投出去 \(CareerDeckFormat.dayCount(station.start, $0)) 天后出结果。" }, primary: seeResume, secondary: backToNow, .sent)
+            let waited = station.end.map { CareerDeckFormat.dayCount(station.start, $0) } ?? 0
+            return make("筛选 · " + (failed ? "没通过" : "已通过"), [failed ? "简历筛选没通过" : "简历筛选通过了", waited > 0 ? "\(waited) 天后有了回音" : "当天就有了回音"], .rest,
+                        resumeTitle.isEmpty ? nil : "投的是「\(resumeTitle)」这份简历。", primary: seeResume, resumeID != nil ? .resume : .sent,
+                        stamp: failed ? nil : CareerJourneyStamp(label: "通过", date: md(station.end ?? station.start)))
         }
 
         if station.kind == .oc {
@@ -455,7 +465,7 @@ public enum CareerJourney {
                 return make("口头 Offer", ["口头 Offer 有了", "等正式的"], .rest, "收到正式 Offer 后在这里记下，薪资和答复截止都放在一起。",
                             primary: B(.recordOffer, "记录正式 Offer"), .oral)
             }
-            return make("口头 Offer · \(md(at))", ["拿到了", "口头 Offer"], .rest, "\(md(at)) 沟通，之后转成了正式 Offer。", secondary: backToNow, .oral)
+            return make("口头 Offer · \(md(at))", ["拿到了", "口头 Offer"], .rest, "\(md(at)) 沟通，之后转成了正式 Offer。", .oral)
         }
 
         if station.kind == .offer {
@@ -523,7 +533,9 @@ public enum CareerJourney {
         if let session {
             let record = recordState(session, detail)
             let rejected = station.result == "rejected"
-            let pastTitle = [station.short, rejected ? "没通过" : "通过了"]
+            // 回看：第一行是这一轮的结论，第二行写留下了什么；通过的一轮右边盖邮戳
+            let verdict = spaced(station.short) + (rejected ? "没通过" : "通过了")
+            let stamp = rejected ? nil : CareerJourneyStamp(label: "通过", date: md(stationDay(station)))
             let pastStage = "\(station.short) · \(md(stationDay(station))) · " + (rejected ? "没通过" : "已通过")
             if written {
                 let questions = detail?["session"]?["written_questions"]?.items ?? session["written_questions"]?.items ?? []
@@ -536,7 +548,8 @@ public enum CareerJourney {
                     return make("\(station.short) · 等结果", ["\(spaced(station.short))做完了", "等结果"], .rest, desc,
                                 primary: advance, secondary: see ?? add, more: see != nil ? [add] : [], .writtenList)
                 }
-                return make(pastStage, pastTitle, .rest, questions.isEmpty ? nil : desc, primary: see, secondary: backToNow, more: [add], .writtenList)
+                return make(pastStage, [verdict, questions.isEmpty ? "没记题目" : wrong > 0 ? "\(wrong) 道没做对" : "记了 \(questions.count) 道题"], wrong > 0 ? .warn : .rest,
+                            questions.isEmpty ? desc : nil, primary: see ?? add, more: see != nil ? [add] : [], .writtenList, stamp: stamp)
             }
             let reviewed = session.text("review_status") != "failed" && session.text("review_status") != "generating" && CareerDeck.hasReview(session)
             let judged = reviewed ? reviewedQuestions(session) : []
@@ -583,23 +596,32 @@ public enum CareerJourney {
             }
             // 回看过去的一轮
             if session.text("review_status") == "generating" {
-                return make(pastStage, pastTitle, .rest, "正在逐题复盘，好了这里会更新。", secondary: backToNow, more: recordMore, .reviewing)
+                return make(pastStage, [verdict, "正在复盘"], .rest, "好了这里会更新，可以先去做别的。", secondary: ready != nil ? seeRecord : nil, .reviewing, stamp: stamp)
             }
             if reviewed {
-                return make(pastStage, judged.isEmpty ? pastTitle : [spaced(station.short) + pastTitle[1], missed > 0 ? "\(missed) 题没答到位" : "都答到位了"], .rest,
-                            reviewHeadline(session).detail, primary: B(.openReview, "查看复盘"), secondary: backToNow, more: recordMore, .review)
+                let seeReview = B(.openReview, "查看复盘")
+                if missed > 0 {
+                    return make(pastStage, [verdict, "\(missed) 题没答到位"], .warn, "下一轮前把这几题再练一遍。",
+                                primary: practice, secondary: seeReview, more: recordMore, .review, stamp: stamp)
+                }
+                return make(pastStage, [verdict, judged.isEmpty ? "复盘过了" : "都答到位了"], .rest, reviewHeadline(session).detail,
+                            primary: seeReview, more: recordMore, .review, stamp: stamp)
             }
             switch record {
             case .ready(let count, _):
-                return make(pastStage, pastTitle, .rest, "记了 \(count) 道题，还没复盘。", primary: seeRecord, secondary: backToNow, .questions)
+                let failed = session.text("review_status") == "failed"
+                return make(pastStage, [verdict, "记了 \(count) 道题"], .rest,
+                            failed ? "复盘没生成，记录都还在，再试一次就行。" : "还没复盘。复盘会逐题标出哪里没答好。",
+                            primary: B(.generateReview, failed ? "再试一次" : ["复盘这一轮", reviewCost].compactMap { $0 }.joined(separator: " · ")),
+                            secondary: seeRecord, .questionsPast, stamp: stamp)
             case .transcribing:
-                return make(pastStage, pastTitle, .rest, "录音正在转成文字，好了会按题拆开。", secondary: backToNow, more: [replace], .recordRunning)
+                return make(pastStage, [verdict, "录音正在整理"], .rest, "好了会按题拆开，可以先去做别的。", more: [replace], .recordRunning, stamp: stamp)
             case .failed:
-                return make(pastStage, pastTitle, .rest, "这一轮的录音没转成功。", primary: B(.retryTranscription, "重新转写"), secondary: backToNow,
-                            more: [replace, paste, library], .recordFailed)
+                return make(pastStage, [verdict, "录音没转成功"], .warn, "还不行的话，换一份录音，或者直接粘贴文字。", primary: B(.retryTranscription, "重新转写"),
+                            secondary: paste, more: [replace, library], .recordFailed, stamp: stamp)
             case .none:
-                return make(pastStage, pastTitle, .rest, "这一轮还没有面试记录，现在补也来得及。", primary: B(.upload, "上传录音"), secondary: backToNow,
-                            more: [paste, library], .recordEmpty)
+                return make(pastStage, [verdict, "这一轮没留记录"], .rest, "现在补也来得及，录音或文字稿都行。", primary: B(.upload, "上传录音"),
+                            secondary: paste, more: [library], .recordEmpty, stamp: stamp)
             }
         }
 
@@ -607,8 +629,8 @@ public enum CareerJourney {
             return make("\(station.short) · 等结果", [station.short, "在等结果"], .rest, "收到通知后，回来记一笔。", primary: advance, .wait)
         }
         let failed = station.result == "rejected"
-        return make("\(station.short) · " + (failed ? "没通过" : "已通过"), [station.short, failed ? "没通过" : "通过了"], .rest, "这一轮没有记下时间。",
-                    secondary: backToNow, .dayPast)
+        return make("\(station.short) · " + (failed ? "没通过" : "已通过"), [spaced(station.short) + (failed ? "没通过" : "通过了"), "没记下时间"], .rest, nil, .dayPast,
+                    stamp: failed ? nil : CareerJourneyStamp(label: "通过", date: md(stationDay(station))))
     }
 
     /// 还能往下走的阶段：筛选、笔试、面试。待投递、口头和正式 Offer 有各自的按钮。
@@ -625,19 +647,23 @@ public enum CareerJourney {
         public let title: String
         /// 这题在完整记录里的位置，用来打开记录。
         public let position: Int
+        /// 记录里这一题你怎么答的（回看时写在题目下面），没记为 nil。
+        public var answer: String? = nil
     }
 
     /// 有记录的一轮按考点列题；考点还没整理好时先按题列。反问不算考点。
     public static func paperRows(_ questions: [RecordQuestion], groups: [JSONValue]?) -> [PaperRow] {
         let mains = questions.enumerated().filter { $0.element.reply == nil && $0.element.question.trimmingCharacters(in: .whitespaces).range(of: "^反问[：:]", options: .regularExpression) == nil }
         func title(_ position: Int, _ question: String) -> String { question.trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyValue ?? "第 \(position + 1) 题" }
-        guard let groups else { return mains.map { PaperRow(id: String($0.offset), title: title($0.offset, $0.element.question), position: $0.offset) } }
+        func answer(_ question: RecordQuestion) -> String? { question.answer.trimmingCharacters(in: .whitespacesAndNewlines).nonEmptyValue }
+        guard let groups else { return mains.map { PaperRow(id: String($0.offset), title: title($0.offset, $0.element.question), position: $0.offset, answer: answer($0.element)) } }
         return groups.compactMap { group in
             let first = (group["questions"]?.items ?? []).compactMap { $0.numberValue.map { Int($0) } }
                 .lazy.compactMap { $0 >= 1 && $0 <= mains.count ? mains[$0 - 1] : nil }.first
             guard let first else { return nil }
             let topic = group.text("topic").trimmingCharacters(in: .whitespacesAndNewlines)
-            return PaperRow(id: "\(group.text("topic"))-\(first.offset)", title: topic.nonEmptyValue ?? title(first.offset, first.element.question), position: first.offset)
+            return PaperRow(id: "\(group.text("topic"))-\(first.offset)", title: topic.nonEmptyValue ?? title(first.offset, first.element.question), position: first.offset,
+                            answer: answer(first.element))
         }
     }
 

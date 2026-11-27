@@ -365,7 +365,7 @@ struct MenuRowStyle: ButtonStyle {
     }
 }
 
-/// 头像：默认头像（`/api/auth/default-avatar`）用随包的羽毛 Logo，私有头像经桌面会话下载。
+/// 头像：默认头像（本机或公共 OSS 地址，见 `User.isDefaultAvatar`）用随包的羽毛 Logo，私有头像经桌面会话下载。
 struct UserAvatar: View {
     @Environment(SessionStore.self) private var session
     let user: User
@@ -386,7 +386,7 @@ struct UserAvatar: View {
 
     private func load() async {
         guard let path = user.avatarURL, !path.isEmpty else { image = nil; return }
-        if path.hasPrefix("/api/auth/default-avatar") {
+        if User.isDefaultAvatar(path) {
             image = Bundle.module.url(forResource: "AppIcon", withExtension: "png").flatMap(NSImage.init(contentsOf:))
             return
         }

@@ -86,4 +86,14 @@ public class CoreTests
         var titles = WorkspaceSections.Sidebar.Select(section => section.Title());
         Assert.Equal(["首页", "我的简历", "简历模板", "投递看板", "面试日程", "模拟面试", "岗位广场", "资料库"], titles);
     }
+
+    [Fact]
+    public void DefaultAvatarRecognizesLocalAndPublicOssAddresses()
+    {
+        Assert.True(User.IsDefaultAvatar("/api/auth/default-avatar?v=2"));
+        Assert.True(User.IsDefaultAvatar("https://media.example.com/assets/media/static/default-avatar-0123456789abcdef.png"));
+        Assert.False(User.IsDefaultAvatar("http://media.example.com/static/default-avatar-0123456789abcdef.png"));
+        Assert.False(User.IsDefaultAvatar("https://media.example.com/static/default-avatar-0123456789abcdef.png?x=1"));
+        Assert.False(User.IsDefaultAvatar("/api/account/avatar/7"));
+    }
 }

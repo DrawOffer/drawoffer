@@ -161,6 +161,9 @@ private actor CountingTransport: DesktopRequesting {
     #expect(await transport.conditional.suffix(2) == [nil, "W/\"r2\""])
     #expect(ReadCache.validates(path: "/api/resumes/12/guide", query: [:]) == false)
     #expect(ReadCache.validates(path: "/api/resumes", query: ["limit": "1"]) == false)
+    // 岗位广场筛选项同样带 ETag；带查询参数的岗位列表不带
+    #expect(ReadCache.validates(path: "/api/job-pool/filters", query: [:]))
+    #expect(ReadCache.validates(path: "/api/job-pool", query: [:]) == false)
 }
 
 @Test func writesOnlyDropTheReadsTheyAffect() async throws {

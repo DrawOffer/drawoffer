@@ -127,3 +127,11 @@ private actor DelayedIdentityAPI: APIClient {
     let hidden = try shapeTemplate(key: "muse-code-cn", avatar: "hide")
     #expect(hidden.previewRequest().data["identity"]?["avatar"] == hidden.renderRequest().data["identity"]?["avatar"])
 }
+
+@Test func defaultAvatarRecognizesLocalAndPublicOSSAddresses() {
+    #expect(User.isDefaultAvatar("/api/auth/default-avatar?v=2"))
+    #expect(User.isDefaultAvatar("https://media.example.com/assets/media/static/default-avatar-0123456789abcdef.png"))
+    #expect(!User.isDefaultAvatar("http://media.example.com/static/default-avatar-0123456789abcdef.png"))
+    #expect(!User.isDefaultAvatar("https://media.example.com/static/default-avatar-0123456789abcdef.png?x=1"))
+    #expect(!User.isDefaultAvatar("/api/account/avatar/7"))
+}
